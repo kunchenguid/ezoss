@@ -1,0 +1,5 @@
+/bin/
+/dist/
+/docs/.astro/
+/docs/node_modules/
+/docs/dist/

@@ -1,0 +1,81 @@
+GO ?= go
+GOFMT ?= gofmt
+BINARY ?= ezoss
+CMD_DIR := ./cmd/ezoss
+DIST_DIR ?= ./dist
+VERSION ?= dev
+# UMAMI_WEBSITE_ID is the Umami site UUID baked into release builds. When set,
+# the binary emits telemetry to UMAMI_HOST (or cloud.umami.is by default).
+# Leave unset for local builds; users can also override at runtime via the
+# EZOSS_UMAMI_WEBSITE_ID env var, which takes precedence over the build-time
+# default.
+UMAMI_WEBSITE_ID ?=
+LDFLAGS := -X github.com/kunchenguid/ezoss/internal/buildinfo.Version=$(VERSION) \
+           -X github.com/kunchenguid/ezoss/internal/buildinfo.TelemetryWebsiteID=$(UMAMI_WEBSITE_ID)
+PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
+
+.PHONY: build dist demo docs-build install test lint fmt fmt-check
+
+build:
+	$(GO) build -ldflags "$(LDFLAGS)" -o ./bin/$(BINARY) $(CMD_DIR)
+
+dist: build
+	@rm -rf $(DIST_DIR)
+	@mkdir -p $(DIST_DIR)
+	@set -e; \
+	for platform in $(PLATFORMS); do \
+		goos=$${platform%/*}; \
+		goarch=$${platform#*/}; \
+		stage_name="$(BINARY)-$(VERSION)-$${goos}-$${goarch}"; \
+		stage_path="$(DIST_DIR)/$$stage_name"; \
+		binary_name="$(BINARY)"; \
+		if [ "$$goos" = "windows" ]; then binary_name="$(BINARY).exe"; fi; \
+		rm -rf "$$stage_path"; \
+		mkdir -p "$$stage_path"; \
+		GOOS=$$goos GOARCH=$$goarch $(GO) build -ldflags "$(LDFLAGS)" -o "$$stage_path/$$binary_name" $(CMD_DIR); \
+		cp LICENSE README.md "$$stage_path/"; \
+		if [ "$$goos" = "windows" ]; then \
+			(cd $(DIST_DIR) && zip -q -r "$$stage_name.zip" "$$stage_name"); \
+		else \
+			tar -C $(DIST_DIR) -czf "$(DIST_DIR)/$$stage_name.tar.gz" "$$stage_name"; \
+		fi; \
+		rm -rf "$$stage_path"; \
+	done
+	@set -e; \
+	checksum_cmd=""; \
+	if command -v shasum >/dev/null 2>&1; then \
+		checksum_cmd="shasum -a 256"; \
+	elif command -v sha256sum >/dev/null 2>&1; then \
+		checksum_cmd="sha256sum"; \
+	else \
+		echo "error: required checksum tool not found (need shasum or sha256sum)" >&2; \
+		exit 1; \
+	fi; \
+	cd $(DIST_DIR) && $$checksum_cmd *.tar.gz *.zip > checksums.txt
+
+demo: build
+	vhs demo.tape
+
+docs-build:
+	npm --prefix ./docs ci
+	npm --prefix ./docs run build
+
+install: build
+	$(GO) install -ldflags "$(LDFLAGS)" $(CMD_DIR)
+	@if [ "$${EZOSS_SKIP_DAEMON:-}" != "1" ]; then \
+		install_bin="$$($(GO) env GOBIN)"; \
+		if [ -z "$$install_bin" ]; then install_bin="$$($(GO) env GOPATH)/bin"; fi; \
+		"$$install_bin/$(BINARY)" daemon restart >/dev/null 2>&1 || true; \
+	fi
+
+test:
+	$(GO) test ./...
+
+lint:
+	$(GO) vet ./...
+
+fmt:
+	$(GO) fmt ./...
+
+fmt-check:
+	@test -z "$$($(GOFMT) -l $$(git ls-files '*.go'))"

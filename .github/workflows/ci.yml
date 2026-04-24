@@ -1,0 +1,333 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check formatting
+        run: make fmt-check
+
+      - name: Vet
+        run: make lint
+
+      - name: Test
+        run: make test
+
+      - name: Build
+        run: make build
+
+      - name: Built binary version smoke check
+        run: |
+          version_output=$(./bin/ezoss --version)
+          printf '%s\n' "$version_output"
+          printf '%s\n' "$version_output" | grep "dev"
+
+      - name: macOS packaged archive smoke check
+        if: matrix.os == 'macos-latest'
+        run: |
+          rm -rf dist/macos-smoke
+          make dist VERSION=test-ci
+          go_arch=$(go env GOARCH)
+          archive="dist/ezoss-test-ci-darwin-$go_arch.tar.gz"
+          mkdir -p dist/macos-smoke
+          tar -xzf "$archive" -C dist/macos-smoke
+          version_output=$("dist/macos-smoke/ezoss-test-ci-darwin-$go_arch/ezoss" --version)
+          printf '%s\n' "$version_output"
+          printf '%s\n' "$version_output" | grep "test-ci"
+
+      - name: Shell installer help
+        run: sh ./install.sh --help
+
+      - name: Shell installer end-to-end smoke check
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          version='v1.2.3'
+          go build -ldflags "-X github.com/kunchenguid/ezoss/internal/buildinfo.Version=$version" -o ./bin/ezoss ./cmd/ezoss
+          release_root="$PWD/dist/install-fixture-unix"
+          api_dir="$release_root/repos/fixture/repo/releases"
+          download_dir="$release_root/fixture/repo/releases/download/$version"
+          archive_root="$download_dir/ezoss-$version-linux-amd64"
+          archive_path="$download_dir/ezoss-$version-linux-amd64.tar.gz"
+          checksums_path="$download_dir/checksums.txt"
+          latest_release_path="$api_dir/latest"
+          bin_dir="$PWD/dist/install-smoke-bin-unix"
+          rm -rf "$release_root" "$bin_dir"
+          mkdir -p "$api_dir" "$archive_root" "$bin_dir"
+          printf '{"tag_name":"v1.2.3"}' > "$latest_release_path"
+          cp ./bin/ezoss "$archive_root/ezoss"
+          cp ./LICENSE "$archive_root/LICENSE"
+          cp ./README.md "$archive_root/README.md"
+          tar -czf "$archive_path" -C "$download_dir" "ezoss-$version-linux-amd64"
+          checksum_cmd=""
+          if command -v shasum >/dev/null 2>&1; then
+            checksum_cmd="shasum -a 256"
+          elif command -v sha256sum >/dev/null 2>&1; then
+            checksum_cmd="sha256sum"
+          else
+            echo "required checksum tool not found (need shasum or sha256sum)" >&2
+            exit 1
+          fi
+          checksum=$($checksum_cmd "$archive_path" | cut -d' ' -f1)
+          printf '%s  ezoss-%s-linux-amd64.tar.gz\n' "$checksum" "$version" > "$checksums_path"
+          python3 -m http.server 8766 --bind 127.0.0.1 --directory "$release_root" >/tmp/ezoss-install-smoke.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          sleep 2
+          OWNER=fixture \
+          REPO=repo \
+          GITHUB_API_BASE=http://127.0.0.1:8766 \
+          GITHUB_DOWNLOAD_BASE=http://127.0.0.1:8766 \
+          sh ./install.sh --bin-dir "$bin_dir"
+          version_output=$("$bin_dir/ezoss" --version)
+          printf '%s\n' "$version_output"
+          printf '%s\n' "$version_output" | grep "$version"
+          kill "$server_pid"
+          trap - EXIT
+
+      - name: Build docs
+        if: matrix.os == 'ubuntu-latest'
+        run: make docs-build
+
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        shell: pwsh
+        run: |
+          $files = git ls-files '*.go'
+          $fmtOutput = if ($files) { gofmt -l $files } else { @() }
+          if ($fmtOutput) {
+            $fmtOutput
+            throw 'gofmt would change tracked Go files'
+          }
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build ./cmd/ezoss
+
+      - name: Windows built binary version smoke check
+        shell: pwsh
+        run: |
+          $versionOutput = .\ezoss.exe --version
+          if ($versionOutput -notmatch 'dev') {
+            throw "built binary version output '$versionOutput' did not contain dev"
+          }
+
+      - name: PowerShell installer help
+        run: pwsh -NoProfile -File ./install.ps1 -Help
+
+      - name: PowerShell installer end-to-end smoke check
+        shell: pwsh
+        run: |
+          $version = 'v1.2.3'
+          go build -ldflags "-X github.com/kunchenguid/ezoss/internal/buildinfo.Version=$version" -o ezoss.exe ./cmd/ezoss
+          $releaseRoot = Join-Path $PWD 'dist/install-fixture'
+          $apiDir = Join-Path $releaseRoot 'repos/fixture/repo/releases'
+          $downloadDir = Join-Path $releaseRoot 'fixture/repo/releases/download/v1.2.3'
+          $archiveRoot = Join-Path $downloadDir "ezoss-$version-windows-amd64"
+          $archivePath = Join-Path $downloadDir "ezoss-$version-windows-amd64.zip"
+          $checksumsPath = Join-Path $downloadDir 'checksums.txt'
+          $latestReleasePath = Join-Path $apiDir 'latest'
+          $binDir = Join-Path $PWD 'dist/install-smoke-bin'
+          Remove-Item -Path $releaseRoot, $binDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $apiDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $archiveRoot | Out-Null
+          Set-Content -Path $latestReleasePath -Value '{"tag_name":"v1.2.3"}'
+          Copy-Item .\ezoss.exe (Join-Path $archiveRoot 'ezoss.exe')
+          Copy-Item .\LICENSE (Join-Path $archiveRoot 'LICENSE')
+          Copy-Item .\README.md (Join-Path $archiveRoot 'README.md')
+          Compress-Archive -Path $archiveRoot -DestinationPath $archivePath -Force
+          $checksum = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLowerInvariant()
+          Set-Content -Path $checksumsPath -Value "$checksum  ezoss-$version-windows-amd64.zip"
+          $server = Start-ThreadJob -ScriptBlock {
+            param($root)
+            python -m http.server 8765 --bind 127.0.0.1 --directory $root
+          } -ArgumentList $releaseRoot
+          try {
+            Start-Sleep -Seconds 2
+            $env:OWNER = 'fixture'
+            $env:REPO = 'repo'
+            $env:GITHUB_API_BASE = 'http://127.0.0.1:8765'
+            $env:GITHUB_DOWNLOAD_BASE = 'http://127.0.0.1:8765'
+            pwsh -NoProfile -File ./install.ps1 -BinDir $binDir
+            $versionOutput = & (Join-Path $binDir 'ezoss.exe') --version
+            if ($versionOutput -notmatch [regex]::Escape($version)) {
+              throw "installed binary version output '$versionOutput' did not contain $version"
+            }
+          } finally {
+            Remove-Item Env:OWNER -ErrorAction SilentlyContinue
+            Remove-Item Env:REPO -ErrorAction SilentlyContinue
+            Remove-Item Env:GITHUB_API_BASE -ErrorAction SilentlyContinue
+            Remove-Item Env:GITHUB_DOWNLOAD_BASE -ErrorAction SilentlyContinue
+            Stop-Job $server -ErrorAction SilentlyContinue
+            Remove-Job $server -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Windows packaged binary smoke check
+        shell: pwsh
+        run: |
+          go build -ldflags "-X github.com/kunchenguid/ezoss/internal/buildinfo.Version=test-ci" -o ezoss.exe ./cmd/ezoss
+          $archiveRoot = Join-Path $PWD 'dist/smoke-windows/ezoss-test-ci-windows-amd64'
+          Remove-Item -Path $archiveRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $archiveRoot | Out-Null
+          Copy-Item .\ezoss.exe (Join-Path $archiveRoot 'ezoss.exe')
+          Copy-Item .\LICENSE (Join-Path $archiveRoot 'LICENSE')
+          Copy-Item .\README.md (Join-Path $archiveRoot 'README.md')
+          $zipPath = Join-Path $PWD 'dist/ezoss-test-ci-windows-amd64.zip'
+          Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path $archiveRoot -DestinationPath $zipPath -Force
+          $extractRoot = Join-Path $PWD 'dist/smoke-windows-extracted'
+          Remove-Item -Path $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+          $versionOutput = & (Join-Path $extractRoot 'ezoss-test-ci-windows-amd64/ezoss.exe') --version
+          if ($versionOutput -notmatch 'test-ci') {
+            throw "packaged binary version output '$versionOutput' did not contain test-ci"
+          }
+
+  dist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build release archives
+        run: make dist VERSION=test-ci
+
+      - name: Verify dist artifacts
+        run: |
+          test -f dist/ezoss-test-ci-darwin-amd64.tar.gz
+          test -f dist/ezoss-test-ci-darwin-arm64.tar.gz
+          test -f dist/ezoss-test-ci-linux-amd64.tar.gz
+          test -f dist/ezoss-test-ci-linux-arm64.tar.gz
+          test -f dist/ezoss-test-ci-windows-amd64.zip
+          test -f dist/ezoss-test-ci-windows-arm64.zip
+          test -f dist/checksums.txt
+          grep 'ezoss-test-ci-darwin-amd64.tar.gz' dist/checksums.txt
+          grep 'ezoss-test-ci-darwin-arm64.tar.gz' dist/checksums.txt
+          grep 'ezoss-test-ci-linux-amd64.tar.gz' dist/checksums.txt
+          grep 'ezoss-test-ci-linux-arm64.tar.gz' dist/checksums.txt
+          grep 'ezoss-test-ci-windows-amd64.zip' dist/checksums.txt
+          grep 'ezoss-test-ci-windows-arm64.zip' dist/checksums.txt
+          actual_cmd=""
+          if command -v shasum >/dev/null 2>&1; then
+            actual_cmd="shasum -a 256"
+          elif command -v sha256sum >/dev/null 2>&1; then
+            actual_cmd="sha256sum"
+          else
+            echo "required checksum tool not found (need shasum or sha256sum)" >&2
+            exit 1
+          fi
+          while read -r checksum filename; do
+            [ -n "$checksum" ] || continue
+            actual=$($actual_cmd "dist/$filename" | cut -d' ' -f1)
+            if [ "$actual" != "$checksum" ]; then
+              echo "checksum mismatch for $filename: expected $checksum got $actual" >&2
+              exit 1
+            fi
+          done < dist/checksums.txt
+          for archive in \
+            dist/ezoss-test-ci-darwin-amd64.tar.gz \
+            dist/ezoss-test-ci-darwin-arm64.tar.gz \
+            dist/ezoss-test-ci-linux-amd64.tar.gz \
+            dist/ezoss-test-ci-linux-arm64.tar.gz; do
+            dir=$(basename "$archive" .tar.gz)
+            tar -tzf "$archive" | grep "$dir/LICENSE"
+            tar -tzf "$archive" | grep "$dir/README.md"
+            tar -tzf "$archive" | grep "$dir/ezoss"
+          done
+          python - <<'PY'
+          import zipfile
+
+          expected_archives = {
+              'dist/ezoss-test-ci-windows-amd64.zip': {
+                  'ezoss-test-ci-windows-amd64/LICENSE',
+                  'ezoss-test-ci-windows-amd64/README.md',
+                  'ezoss-test-ci-windows-amd64/ezoss.exe',
+              },
+              'dist/ezoss-test-ci-windows-arm64.zip': {
+                  'ezoss-test-ci-windows-arm64/LICENSE',
+                  'ezoss-test-ci-windows-arm64/README.md',
+                  'ezoss-test-ci-windows-arm64/ezoss.exe',
+              },
+          }
+
+          for archive_path, expected in expected_archives.items():
+              with zipfile.ZipFile(archive_path) as archive:
+                  names = set(archive.namelist())
+
+              missing = sorted(expected - names)
+              if missing:
+                  raise SystemExit(f'missing windows archive entries in {archive_path}: {missing}')
+          PY
+          rm -rf dist/smoke-ci
+          mkdir -p dist/smoke-ci
+          tar -xzf dist/ezoss-test-ci-linux-amd64.tar.gz -C dist/smoke-ci
+          version_output=$(./dist/smoke-ci/ezoss-test-ci-linux-amd64/ezoss --version)
+          printf '%s\n' "$version_output"
+          printf '%s\n' "$version_output" | grep "test-ci"
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build docs site
+        run: make docs-build

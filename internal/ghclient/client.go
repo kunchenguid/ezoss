@@ -1,0 +1,675 @@
+package ghclient
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
+)
+
+const triagedLabel = "ezoss/triaged"
+
+var retryAfterPattern = regexp.MustCompile(`(?i)retry after\s+([^.,;\n]+)`)
+var retryAfterWordPartPattern = regexp.MustCompile(`(?i)(\d+)\s*(hours?|hrs?|hr|minutes?|mins?|min|seconds?|secs?|sec)`)
+
+type Runner interface {
+	Run(ctx context.Context, args ...string) ([]byte, error)
+}
+
+type Client struct {
+	runner Runner
+}
+
+type RateLimitError struct {
+	Message    string
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	if e == nil {
+		return "github rate limit exceeded"
+	}
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("github rate limit exceeded (retry after %s): %s", e.RetryAfter, e.Message)
+	}
+	return fmt.Sprintf("github rate limit exceeded: %s", e.Message)
+}
+
+type Item struct {
+	Repo      string
+	Kind      sharedtypes.ItemKind
+	Number    int
+	Title     string
+	Body      string
+	Author    string
+	State     sharedtypes.ItemState
+	IsDraft   bool
+	Labels    []string
+	URL       string
+	UpdatedAt time.Time
+}
+
+type commandRunner struct{}
+
+type listItem struct {
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	Author    *ghAuthor `json:"author"`
+	State     string    `json:"state"`
+	IsDraft   bool      `json:"isDraft"`
+	Labels    []ghLabel `json:"labels"`
+	URL       string    `json:"url"`
+	UpdatedAt string    `json:"updatedAt"`
+}
+
+type ghAuthor struct {
+	Login string `json:"login"`
+}
+
+type ghLabel struct {
+	Name string `json:"name"`
+}
+
+func New(runner Runner) *Client {
+	if runner == nil {
+		runner = commandRunner{}
+	}
+	return &Client{runner: runner}
+}
+
+func (c *Client) ListNeedingTriage(ctx context.Context, repo string) ([]Item, error) {
+	return c.listFilteredItems(ctx, repo, "-label:"+triagedLabel, "open")
+}
+
+// ListTriaged returns items with the triaged label. When sinceUpdated is
+// non-zero the search is bounded by `updated:>=<sinceUpdated>` and pulls
+// items in any state (including closed) so callers can reconcile local state
+// with GitHub. When sinceUpdated is zero the call is restricted to open
+// items - this avoids dragging in unbounded historical closed items on the
+// first refresh after a daemon restart.
+func (c *Client) ListTriaged(ctx context.Context, repo string, sinceUpdated time.Time) ([]Item, error) {
+	search := "label:" + triagedLabel
+	state := "open"
+	if !sinceUpdated.IsZero() {
+		search += " updated:>=" + sinceUpdated.UTC().Format(time.RFC3339)
+		state = "all"
+	}
+	return c.listFilteredItems(ctx, repo, search, state)
+}
+
+func (c *Client) listFilteredItems(ctx context.Context, repo string, search string, state string) ([]Item, error) {
+	issues, err := c.listItems(ctx, repo, sharedtypes.ItemKindIssue, search, state)
+	if err != nil {
+		return nil, err
+	}
+	prs, err := c.listItems(ctx, repo, sharedtypes.ItemKindPR, search, state)
+	if err != nil {
+		return nil, err
+	}
+	items := append(issues, prs...)
+	filtered := items[:0]
+	for _, item := range items {
+		if item.IsDraft || isWIPTitle(item.Title) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, nil
+}
+
+func (c *Client) GetItem(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int) (Item, error) {
+	resource, err := kindResource(kind)
+	if err != nil {
+		return Item{}, err
+	}
+
+	stdout, err := c.runner.Run(ctx,
+		resource, "view", fmt.Sprintf("%d", number),
+		"--repo", repo,
+		"--json", jsonFieldsFor(kind),
+	)
+	if err != nil {
+		return Item{}, fmt.Errorf("gh %s view %s#%d: %w", resource, repo, number, classifyError(err))
+	}
+
+	var raw listItem
+	if err := json.Unmarshal(stdout, &raw); err != nil {
+		return Item{}, fmt.Errorf("decode gh %s view %s#%d: %w", resource, repo, number, err)
+	}
+
+	item, err := toItem(repo, kind, raw)
+	if err != nil {
+		return Item{}, fmt.Errorf("parse gh %s view %s#%d: %w", resource, repo, number, err)
+	}
+	return item, nil
+}
+
+func (c *Client) EditLabels(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int, add []string, remove []string) error {
+	resource, err := kindResource(kind)
+	if err != nil {
+		return err
+	}
+	if len(add) == 0 && len(remove) == 0 {
+		return nil
+	}
+
+	if len(add) > 0 {
+		if err := c.runAddLabels(ctx, resource, repo, number, add); err != nil {
+			return err
+		}
+	}
+
+	// Removes go one label per call so that a single label that's not on
+	// the item (or doesn't exist in the repo at all) doesn't take down the
+	// whole batch. The desired end state - label absent - is already true
+	// in that case, so we treat the gh-CLI "'<label>' not found" error as
+	// success and continue with the remaining removes.
+	for _, label := range remove {
+		args := []string{resource, "edit", strconv.Itoa(number), "--repo", repo, "--remove-label", label}
+		if _, err := c.runner.Run(ctx, args...); err != nil {
+			if isLabelNotFoundError(err, label) {
+				continue
+			}
+			return fmt.Errorf("gh %s edit %s#%d: %w", resource, repo, number, classifyError(err))
+		}
+	}
+	return nil
+}
+
+// runAddLabels issues a bulk --add-label call. If gh reports that a label
+// in the ezoss/* namespace doesn't exist in the repo, the client creates
+// it on the fly and retries - ezoss owns that namespace per the design
+// intent ("ezoss/triaged is always managed automatically"). Labels outside
+// the namespace are not auto-created; missing user labels surface as
+// errors so the user can decide how to handle them.
+func (c *Client) runAddLabels(ctx context.Context, resource, repo string, number int, add []string) error {
+	args := []string{resource, "edit", strconv.Itoa(number), "--repo", repo, "--add-label", strings.Join(add, ",")}
+	// Cap at len(add) retries so we can never loop more than once per
+	// distinct label even if gh keeps reporting a different missing one.
+	for attempt := 0; attempt <= len(add); attempt++ {
+		_, err := c.runner.Run(ctx, args...)
+		if err == nil {
+			return nil
+		}
+		label, ok := extractLabelNotFoundName(err)
+		if !ok || !isManagedLabel(label) {
+			return fmt.Errorf("gh %s edit %s#%d: %w", resource, repo, number, classifyError(err))
+		}
+		if createErr := c.createManagedLabel(ctx, repo, label); createErr != nil {
+			return fmt.Errorf("gh %s edit %s#%d: create missing label %q: %w", resource, repo, number, label, classifyError(createErr))
+		}
+	}
+	return fmt.Errorf("gh %s edit %s#%d: gave up after auto-creating labels", resource, repo, number)
+}
+
+func (c *Client) createManagedLabel(ctx context.Context, repo, label string) error {
+	args := []string{"label", "create", label, "--repo", repo, "--description", "Managed by ezoss"}
+	if _, err := c.runner.Run(ctx, args...); err != nil {
+		// A concurrent ezoss run (or a manual create) may have raced us
+		// to create the label. That's fine - the label exists, which is
+		// what we wanted.
+		if isLabelAlreadyExistsError(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func isManagedLabel(label string) bool {
+	return strings.HasPrefix(label, "ezoss/")
+}
+
+func isLabelNotFoundError(err error, label string) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "'"+label+"' not found")
+}
+
+func isLabelAlreadyExistsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already exists")
+}
+
+// extractLabelNotFoundName parses the gh-CLI error format `'<label>' not
+// found` and returns the quoted label. Returns ok=false if the error
+// doesn't match that shape so the caller surfaces it unchanged.
+func extractLabelNotFoundName(err error) (string, bool) {
+	msg := err.Error()
+	start := strings.Index(msg, "'")
+	if start < 0 {
+		return "", false
+	}
+	rest := msg[start+1:]
+	end := strings.Index(rest, "'")
+	if end < 0 {
+		return "", false
+	}
+	if !strings.Contains(rest[end+1:], "not found") {
+		return "", false
+	}
+	return rest[:end], true
+}
+
+func (c *Client) Comment(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int, body string) error {
+	resource, err := kindResource(kind)
+	if err != nil {
+		return err
+	}
+	if _, err := c.runner.Run(ctx, resource, "comment", strconv.Itoa(number), "--repo", repo, "--body", body); err != nil {
+		return fmt.Errorf("gh %s comment %s#%d: %w", resource, repo, number, classifyError(err))
+	}
+	return nil
+}
+
+func (c *Client) Close(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int, comment string) error {
+	resource, err := kindResource(kind)
+	if err != nil {
+		return err
+	}
+	args := []string{resource, "close", strconv.Itoa(number), "--repo", repo}
+	if comment != "" {
+		args = append(args, "--comment", comment)
+	}
+	if _, err := c.runner.Run(ctx, args...); err != nil {
+		return fmt.Errorf("gh %s close %s#%d: %w", resource, repo, number, classifyError(err))
+	}
+	return nil
+}
+
+func (c *Client) RequestChanges(ctx context.Context, repo string, number int, body string) error {
+	if _, err := c.runner.Run(ctx, "pr", "review", strconv.Itoa(number), "--repo", repo, "--request-changes", "--body", body); err != nil {
+		return fmt.Errorf("gh pr review %s#%d: %w", repo, number, classifyError(err))
+	}
+	return nil
+}
+
+// RepoMergeOptions reports which merge methods the repo's GitHub settings
+// allow. The three flags map to the per-repo "Allow merge commits / Allow
+// squash merging / Allow rebase merging" toggles.
+type RepoMergeOptions struct {
+	Merge  bool
+	Squash bool
+	Rebase bool
+}
+
+// RepoMergeOptions queries `gh api repos/{repo}` and extracts the three
+// merge-method toggles. Useful for picking a merge method that the repo
+// will actually accept before invoking `gh pr merge`.
+func (c *Client) RepoMergeOptions(ctx context.Context, repo string) (RepoMergeOptions, error) {
+	stdout, err := c.runner.Run(ctx, "api", "repos/"+repo)
+	if err != nil {
+		return RepoMergeOptions{}, fmt.Errorf("gh api repos/%s: %w", repo, classifyError(err))
+	}
+	var raw struct {
+		AllowMergeCommit bool `json:"allow_merge_commit"`
+		AllowSquashMerge bool `json:"allow_squash_merge"`
+		AllowRebaseMerge bool `json:"allow_rebase_merge"`
+	}
+	if err := json.Unmarshal(stdout, &raw); err != nil {
+		return RepoMergeOptions{}, fmt.Errorf("decode repos/%s merge options: %w", repo, err)
+	}
+	return RepoMergeOptions{
+		Merge:  raw.AllowMergeCommit,
+		Squash: raw.AllowSquashMerge,
+		Rebase: raw.AllowRebaseMerge,
+	}, nil
+}
+
+// Merge merges the PR using the requested method when the repo allows it,
+// otherwise falls back through squash > rebase > merge (the order most
+// users prefer when their first choice is unavailable). Returns the
+// method that was actually used so the caller can surface a notice when
+// the chosen method differs from the requested one.
+func (c *Client) Merge(ctx context.Context, repo string, number int, requested string) (string, error) {
+	options, err := c.RepoMergeOptions(ctx, repo)
+	if err != nil {
+		return "", fmt.Errorf("read repo merge options for %s: %w", repo, err)
+	}
+	chosen := pickMergeMethod(requested, options)
+	if chosen == "" {
+		return "", fmt.Errorf("gh pr merge %s#%d: repo allows no merge methods (check repo settings -> Pull Requests -> Allow merge commits/squash/rebase)", repo, number)
+	}
+	flag := mergeMethodFlag(chosen)
+	if _, err := c.runner.Run(ctx, "pr", "merge", strconv.Itoa(number), "--repo", repo, flag); err != nil {
+		return chosen, fmt.Errorf("gh pr merge %s#%d: %w", repo, number, classifyError(err))
+	}
+	return chosen, nil
+}
+
+// pickMergeMethod returns the requested method if the repo allows it.
+// Otherwise it falls back through squash > rebase > merge - the order
+// reflects what most modern repos prefer when "merge" is disabled. Returns
+// "" if no method is allowed.
+func pickMergeMethod(requested string, options RepoMergeOptions) string {
+	switch strings.ToLower(strings.TrimSpace(requested)) {
+	case "squash":
+		if options.Squash {
+			return "squash"
+		}
+	case "rebase":
+		if options.Rebase {
+			return "rebase"
+		}
+	case "merge", "":
+		if options.Merge {
+			return "merge"
+		}
+	}
+	if options.Squash {
+		return "squash"
+	}
+	if options.Rebase {
+		return "rebase"
+	}
+	if options.Merge {
+		return "merge"
+	}
+	return ""
+}
+
+type RepoVisibility string
+
+const (
+	RepoVisibilityAll    RepoVisibility = ""
+	RepoVisibilityPublic RepoVisibility = "public"
+)
+
+// ListOwnedRepos returns repos owned by the authenticated user as
+// "owner/name" strings. Pass RepoVisibilityPublic to filter to public
+// repos only. Forks and archived repos are excluded.
+func (c *Client) ListOwnedRepos(ctx context.Context, visibility RepoVisibility) ([]string, error) {
+	args := []string{
+		"repo", "list",
+		"--limit", "200",
+		"--no-archived",
+		"--source",
+		"--json", "nameWithOwner",
+	}
+	if visibility == RepoVisibilityPublic {
+		args = append(args, "--visibility", "public")
+	}
+
+	stdout, err := c.runner.Run(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("gh repo list: %w", classifyError(err))
+	}
+
+	var raw []struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	}
+	if err := json.Unmarshal(stdout, &raw); err != nil {
+		return nil, fmt.Errorf("decode gh repo list: %w", err)
+	}
+
+	repos := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		name := strings.TrimSpace(entry.NameWithOwner)
+		if name == "" {
+			continue
+		}
+		repos = append(repos, name)
+	}
+	return repos, nil
+}
+
+// ListStarredRepos returns repos the authenticated user has starred as
+// "owner/name" strings. Uses the GitHub REST endpoint via `gh api` because
+// `gh repo list` does not expose starred repos.
+func (c *Client) ListStarredRepos(ctx context.Context) ([]string, error) {
+	stdout, err := c.runner.Run(ctx,
+		"api", "user/starred",
+		"--paginate",
+		"--jq", "[.[] | .full_name]",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh api user/starred: %w", classifyError(err))
+	}
+
+	// `gh api --paginate` concatenates one JSON document per page, separated
+	// by newlines. With `--jq '[...]'` each page yields one bracketed array.
+	repos := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, chunk := range strings.Split(strings.TrimSpace(string(stdout)), "\n") {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		var page []string
+		if err := json.Unmarshal([]byte(chunk), &page); err != nil {
+			return nil, fmt.Errorf("decode gh api user/starred page: %w", err)
+		}
+		for _, name := range page {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			repos = append(repos, name)
+		}
+	}
+	return repos, nil
+}
+
+func mergeMethodFlag(method string) string {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "squash":
+		return "--squash"
+	case "rebase":
+		return "--rebase"
+	default:
+		return "--merge"
+	}
+}
+
+func (c *Client) listItems(ctx context.Context, repo string, kind sharedtypes.ItemKind, search string, state string) ([]Item, error) {
+	resource, err := kindResource(kind)
+	if err != nil {
+		return nil, err
+	}
+
+	stdout, err := c.runner.Run(ctx,
+		resource, "list",
+		"--repo", repo,
+		"--state", state,
+		"--limit", "100",
+		"--search", search,
+		"--json", jsonFieldsFor(kind),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh %s list %s: %w", resource, repo, classifyError(err))
+	}
+
+	var raw []listItem
+	if err := json.Unmarshal(stdout, &raw); err != nil {
+		return nil, fmt.Errorf("decode gh %s list %s: %w", resource, repo, err)
+	}
+
+	items := make([]Item, 0, len(raw))
+	for _, entry := range raw {
+		item, err := toItem(repo, kind, entry)
+		if err != nil {
+			return nil, fmt.Errorf("parse gh %s list %s #%d: %w", resource, repo, entry.Number, err)
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func toItem(repo string, kind sharedtypes.ItemKind, raw listItem) (Item, error) {
+	updatedAt, err := time.Parse(time.RFC3339, raw.UpdatedAt)
+	if err != nil {
+		return Item{}, fmt.Errorf("updatedAt: %w", err)
+	}
+
+	state, err := parseState(raw.State)
+	if err != nil {
+		return Item{}, err
+	}
+
+	item := Item{
+		Repo:      repo,
+		Kind:      kind,
+		Number:    raw.Number,
+		Title:     raw.Title,
+		Body:      raw.Body,
+		State:     state,
+		IsDraft:   raw.IsDraft,
+		URL:       raw.URL,
+		UpdatedAt: updatedAt,
+	}
+	if raw.Author != nil {
+		item.Author = raw.Author.Login
+	}
+	if len(raw.Labels) > 0 {
+		item.Labels = make([]string, 0, len(raw.Labels))
+		for _, label := range raw.Labels {
+			item.Labels = append(item.Labels, label.Name)
+		}
+	}
+	return item, nil
+}
+
+func parseState(value string) (sharedtypes.ItemState, error) {
+	switch strings.ToLower(value) {
+	case "open":
+		return sharedtypes.ItemStateOpen, nil
+	case "closed":
+		return sharedtypes.ItemStateClosed, nil
+	case "merged":
+		return sharedtypes.ItemStateMerged, nil
+	default:
+		return "", fmt.Errorf("unsupported state %q", value)
+	}
+}
+
+func jsonFieldsFor(kind sharedtypes.ItemKind) string {
+	if kind == sharedtypes.ItemKindPR {
+		return "number,title,body,author,state,isDraft,labels,updatedAt,url"
+	}
+	return "number,title,body,author,state,labels,updatedAt,url"
+}
+
+func kindResource(kind sharedtypes.ItemKind) (string, error) {
+	switch kind {
+	case sharedtypes.ItemKindIssue:
+		return "issue", nil
+	case sharedtypes.ItemKindPR:
+		return "pr", nil
+	default:
+		return "", fmt.Errorf("unsupported item kind %q", kind)
+	}
+}
+
+func isWIPTitle(title string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(title))
+	return strings.HasPrefix(normalized, "wip:") || strings.HasPrefix(normalized, "[wip]") || strings.HasPrefix(normalized, "[draft]")
+}
+
+func (commandRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	stdout, err := cmd.Output()
+	if err == nil {
+		return stdout, nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		stderr := strings.TrimSpace(string(exitErr.Stderr))
+		if stderr != "" {
+			return nil, errors.New(stderr)
+		}
+	}
+
+	return nil, err
+}
+
+func classifyError(err error) error {
+	message := strings.TrimSpace(err.Error())
+	if !strings.Contains(strings.ToLower(message), "rate limit") {
+		return err
+	}
+
+	return &RateLimitError{
+		Message:    message,
+		RetryAfter: parseRetryAfter(message),
+	}
+}
+
+func parseRetryAfter(message string) time.Duration {
+	matches := retryAfterPattern.FindStringSubmatch(message)
+	if len(matches) != 2 {
+		return 0
+	}
+
+	retryAfterText := strings.TrimSpace(strings.ToLower(matches[1]))
+	retryAfter, err := time.ParseDuration(retryAfterText)
+	if err != nil {
+		return parseRetryAfterWords(retryAfterText)
+	}
+	return retryAfter
+}
+
+func parseRetryAfterWords(value string) time.Duration {
+	matches := retryAfterWordPartPattern.FindAllStringSubmatch(value, -1)
+	if len(matches) == 0 {
+		return 0
+	}
+
+	var total time.Duration
+	consumed := strings.Builder{}
+	for _, match := range matches {
+		if len(match) != 3 {
+			return 0
+		}
+
+		quantity, err := strconv.Atoi(match[1])
+		if err != nil {
+			return 0
+		}
+
+		unitDuration, ok := retryAfterUnitDuration(match[2])
+		if !ok {
+			return 0
+		}
+
+		total += time.Duration(quantity) * unitDuration
+		consumed.WriteString(match[0])
+	}
+
+	remainder := retryAfterWordPartPattern.ReplaceAllString(value, "")
+	remainder = strings.ReplaceAll(remainder, "and", "")
+	remainder = strings.TrimSpace(remainder)
+	if remainder != "" {
+		return 0
+	}
+
+	return total
+}
+
+func retryAfterUnitDuration(value string) (time.Duration, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "hour", "hours", "hr", "hrs":
+		return time.Hour, true
+	case "minute", "minutes", "min", "mins":
+		return time.Minute, true
+	case "second", "seconds", "sec", "secs":
+		return time.Second, true
+	default:
+		return 0, false
+	}
+}

@@ -1,0 +1,1816 @@
+package tui
+
+import (
+	"fmt"
+	"os/exec"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
+	"github.com/muesli/termenv"
+)
+
+const (
+	ansiRed         = "1"
+	ansiGreen       = "2"
+	ansiYellow      = "3"
+	ansiBlue        = "4"
+	ansiCyan        = "6"
+	ansiBrightBlack = "8"
+)
+
+func init() {
+	lipgloss.SetColorProfile(termenv.ANSI)
+}
+
+// EntryOption is one self-contained resolution the agent proposed. An
+// Entry has at least one option; the agent is encouraged to surface
+// multiple options whenever there are multiple reasonable next steps.
+// The user cycles between options and approves/edits/skips one of them.
+type EntryOption struct {
+	ID                     string
+	StateChange            sharedtypes.StateChange
+	OriginalStateChange    sharedtypes.StateChange
+	ProposedLabels         []string
+	OriginalProposedLabels []string
+	Confidence             sharedtypes.Confidence
+	Rationale              string
+	DraftComment           string
+	OriginalDraftComment   string
+	Followups              []string
+	WaitingOn              sharedtypes.WaitingOn
+}
+
+func (o EntryOption) Edited() bool {
+	if o.DraftComment != o.OriginalDraftComment {
+		return true
+	}
+	if o.StateChange != o.OriginalStateChange {
+		return true
+	}
+	if len(o.ProposedLabels) != len(o.OriginalProposedLabels) {
+		return true
+	}
+	for i := range o.ProposedLabels {
+		if o.ProposedLabels[i] != o.OriginalProposedLabels[i] {
+			return true
+		}
+	}
+	return false
+}
+
+type Entry struct {
+	RecommendationID string
+	RepoID           string
+	Number           int
+	Kind             sharedtypes.ItemKind
+	Unconfigured     bool
+	Title            string
+	URL              string
+	TokensIn         int
+	TokensOut        int
+	AgeLabel         string
+	SelectionMarker  string
+	ApprovalError    string
+
+	Options      []EntryOption
+	ActiveOption int
+
+	// Mirror of the active option for render convenience. Always kept
+	// in sync via SyncActive(); CommitEdits() writes mirror back to
+	// Options[ActiveOption].
+	OptionID               string
+	StateChange            sharedtypes.StateChange
+	OriginalStateChange    sharedtypes.StateChange
+	ProposedLabels         []string
+	OriginalProposedLabels []string
+	Confidence             sharedtypes.Confidence
+	Rationale              string
+	DraftComment           string
+	OriginalDraftComment   string
+	Followups              []string
+	WaitingOn              sharedtypes.WaitingOn
+}
+
+// SyncActive copies the ActiveOption's fields onto the Entry's mirror
+// fields. Callers should invoke this after constructing an Entry or
+// changing ActiveOption.
+func (e *Entry) SyncActive() {
+	if e.ActiveOption < 0 || e.ActiveOption >= len(e.Options) {
+		return
+	}
+	o := e.Options[e.ActiveOption]
+	e.OptionID = o.ID
+	e.StateChange = o.StateChange
+	e.OriginalStateChange = o.OriginalStateChange
+	e.ProposedLabels = append([]string(nil), o.ProposedLabels...)
+	e.OriginalProposedLabels = append([]string(nil), o.OriginalProposedLabels...)
+	e.Confidence = o.Confidence
+	e.Rationale = o.Rationale
+	e.DraftComment = o.DraftComment
+	e.OriginalDraftComment = o.OriginalDraftComment
+	e.Followups = append([]string(nil), o.Followups...)
+	e.WaitingOn = o.WaitingOn
+}
+
+// CommitEdits writes the mirrored editable fields back to the active
+// option so cycling away and back retains in-progress edits.
+func (e *Entry) CommitEdits() {
+	if e.ActiveOption < 0 || e.ActiveOption >= len(e.Options) {
+		return
+	}
+	o := &e.Options[e.ActiveOption]
+	o.StateChange = e.StateChange
+	o.ProposedLabels = append([]string(nil), e.ProposedLabels...)
+	o.DraftComment = e.DraftComment
+}
+
+func (e Entry) Edited() bool {
+	if e.ActiveOption >= 0 && e.ActiveOption < len(e.Options) {
+		return e.Options[e.ActiveOption].Edited()
+	}
+	// Legacy fallback: when callers haven't populated Options, fall
+	// back to comparing the mirrored fields directly. Production code
+	// always populates Options via loadInboxEntries.
+	if e.DraftComment != e.OriginalDraftComment {
+		return true
+	}
+	if e.StateChange != e.OriginalStateChange {
+		return true
+	}
+	if len(e.ProposedLabels) != len(e.OriginalProposedLabels) {
+		return true
+	}
+	for i := range e.ProposedLabels {
+		if e.ProposedLabels[i] != e.OriginalProposedLabels[i] {
+			return true
+		}
+	}
+	return false
+}
+
+type ModelActions struct {
+	Approve func([]Entry) error
+	Dismiss func([]Entry) error
+	// Edit performs an in-process update of the entry. Suitable for test
+	// stubs and other synchronous edits that don't need raw terminal
+	// access. For external editors (e.g. $EDITOR), use EditExec instead -
+	// it routes the cmd through tea.ExecProcess so bubbletea releases the
+	// alt screen during the edit and restores it on exit.
+	Edit func(Entry) (Entry, error)
+	// EditExec launches an external command (typically $EDITOR) via
+	// tea.ExecProcess. The terminal is released for the duration of the
+	// cmd, then restored, then finish is invoked with any cmd error to
+	// produce the updated entry. Takes precedence over Edit when set.
+	EditExec      func(Entry) (cmd *exec.Cmd, finish func(execErr error) (Entry, error), err error)
+	InitialStatus string
+	Notify        <-chan struct{}
+	Reload        func() ([]Entry, error)
+	Rerun         func([]Entry) ([]Entry, error)
+}
+
+type Model struct {
+	entries  []Entry
+	cursor   int
+	width    int
+	height   int
+	approve  func([]Entry) error
+	dismiss  func([]Entry) error
+	edit     func(Entry) (Entry, error)
+	editExec func(Entry) (*exec.Cmd, func(error) (Entry, error), error)
+	notify   <-chan struct{}
+	reload   func() ([]Entry, error)
+	rerun    func([]Entry) ([]Entry, error)
+	showHelp bool
+	quitting bool
+
+	// Async-action state. Approve/skip/rerun run in a goroutine via tea.Cmd
+	// so the event loop stays responsive; until the goroutine reports back
+	// via actionFinishedMsg, the entry is "pending" and conflicting key
+	// presses on the same entry are blocked with a warning in the log.
+	pendingActions map[string]pendingAction
+	logEntries     []logEntry
+	logSeq         int
+	spinnerFrame   int
+	// quitArmed is set to true when the user pressed q while actions were
+	// in flight. The next q quits; any other key disarms.
+	quitArmed bool
+}
+
+// pendingAction tracks a verb that's running in the background for one
+// recommendation. The TUI uses this to: (1) animate a spinner, (2) refuse
+// a duplicate keystroke for the same entry, (3) drive the log panel.
+type pendingAction struct {
+	verb      string
+	startedAt time.Time
+}
+
+// logEntry is one row in the rolling log panel under the card. Pending
+// rows show a spinner and elapsed time; done/failed rows are static.
+type logEntry struct {
+	id               int
+	state            logState
+	verb             string
+	recommendationID string
+	repoID           string
+	number           int
+	startedAt        time.Time
+	finishedAt       time.Time
+	err              error
+	note             string // free-form text used by logStateInfo
+}
+
+type logState int
+
+const (
+	logStatePending logState = iota
+	logStateDone
+	logStateFailed
+	logStateInfo // transient warnings, e.g., "still skipping #9 - wait"
+)
+
+const (
+	maxLogEntries     = 6
+	maxLogPanelLines  = 5
+	spinnerTickPeriod = 80 * time.Millisecond
+)
+
+// spinnerFrames is the braille rotation used while an action is in flight.
+// Falls back gracefully to a single dot if the terminal can't render it.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// asyncVerbForms maps the internal action verb to its present-participle
+// and past forms for use in log lines and the action-bar morph. Keep this
+// aligned with the keys understood by Update (a/s/r).
+var asyncVerbForms = map[string]struct {
+	ing string
+	ed  string
+}{
+	"approve": {"approving", "approved"},
+	"skip":    {"skipping", "skipped"},
+	"rerun":   {"rerunning", "reran"},
+}
+
+type refreshTickMsg struct{}
+
+type notifyReloadMsg struct{}
+
+type reloadedEntriesMsg struct {
+	Entries []Entry
+	Err     error
+}
+
+// editFinishedMsg is emitted by tea.ExecProcess after an external editor
+// exits. The entry is matched by recommendationID rather than cursor index
+// because reloads during the edit may have shifted the queue.
+type editFinishedMsg struct {
+	recommendationID string
+	finish           func(error) (Entry, error)
+	execErr          error
+}
+
+// actionFinishedMsg is delivered when an async approve/skip/rerun
+// completes. The entry is matched by recommendationID so reloads or
+// reorderings during the action don't clobber the wrong row.
+type actionFinishedMsg struct {
+	verb             string
+	recommendationID string
+	err              error
+	updatedEntries   []Entry // non-nil for rerun; replaces the entry in-place on success
+}
+
+// spinnerTickMsg drives spinner animation while at least one action is
+// pending. The handler advances the frame and reschedules itself; once
+// pendingActions is empty, ticks stop.
+type spinnerTickMsg struct{}
+
+const refreshInterval = 5 * time.Second
+
+func NewModel(entries []Entry) Model {
+	return Model{entries: append([]Entry(nil), entries...), width: 100}
+}
+
+func NewModelWithActions(entries []Entry, actions ModelActions) Model {
+	m := NewModel(entries)
+	m.approve = actions.Approve
+	m.dismiss = actions.Dismiss
+	m.edit = actions.Edit
+	m.editExec = actions.EditExec
+	if initial := strings.TrimSpace(actions.InitialStatus); initial != "" {
+		m.pushLog(logEntry{state: logStateInfo, note: initial})
+	}
+	m.notify = actions.Notify
+	m.reload = actions.Reload
+	m.rerun = actions.Rerun
+	return m
+}
+
+func NewModelWithDismiss(entries []Entry, dismiss func([]Entry) error) Model {
+	return NewModelWithActions(entries, ModelActions{Dismiss: dismiss})
+}
+
+func Run(entries []Entry) error {
+	p := tea.NewProgram(NewModel(entries), tea.WithAltScreen())
+	_, err := p.Run()
+	return err
+}
+
+func RunWithDismiss(entries []Entry, dismiss func([]Entry) error) error {
+	p := tea.NewProgram(NewModelWithDismiss(entries, dismiss), tea.WithAltScreen())
+	_, err := p.Run()
+	return err
+}
+
+func RunWithActions(entries []Entry, actions ModelActions) error {
+	p := tea.NewProgram(NewModelWithActions(entries, actions), tea.WithAltScreen())
+	_, err := p.Run()
+	return err
+}
+
+func (m Model) Init() tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 2)
+	if m.reload != nil {
+		cmds = append(cmds, scheduleRefresh())
+	}
+	if m.notify != nil {
+		cmds = append(cmds, waitForNotification(m.notify))
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case refreshTickMsg:
+		if m.reload == nil {
+			return m, nil
+		}
+		return m, tea.Batch(runReload(m.reload), scheduleRefresh())
+	case notifyReloadMsg:
+		if m.reload == nil {
+			return m, waitForNotification(m.notify)
+		}
+		return m, tea.Batch(runReload(m.reload), waitForNotification(m.notify))
+	case reloadedEntriesMsg:
+		if msg.Err != nil {
+			m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("refresh failed: %v", msg.Err)})
+			return m, nil
+		}
+		m.applyReload(msg.Entries)
+		return m, nil
+	case editFinishedMsg:
+		m.applyEditFinished(msg)
+		return m, nil
+	case actionFinishedMsg:
+		m.applyActionFinished(msg)
+		return m, nil
+	case spinnerTickMsg:
+		m.spinnerFrame++
+		if len(m.pendingActions) > 0 {
+			return m, scheduleSpinnerTick()
+		}
+		return m, nil
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+	case tea.KeyMsg:
+		key := msg.String()
+		// Any non-q key disarms the quit-confirm latch.
+		if key != "q" && key != "ctrl+c" {
+			m.quitArmed = false
+		}
+		switch key {
+		case "q", "ctrl+c":
+			if len(m.pendingActions) > 0 && !m.quitArmed && key != "ctrl+c" {
+				m.quitArmed = true
+				m.pushLog(logEntry{
+					state: logStateInfo,
+					note:  "quit while actions pending - press q again to confirm",
+				})
+				return m, nil
+			}
+			m.quitting = true
+			return m, tea.Quit
+		case "?":
+			m.showHelp = !m.showHelp
+		case "a":
+			if cmd := m.approveCurrent(); cmd != nil {
+				return m, withSpinner(cmd, m.kickSpinnerIfPending())
+			}
+		case "e":
+			if cmd := m.editCurrent(); cmd != nil {
+				return m, cmd
+			}
+		case "r":
+			if cmd := m.rerunCurrent(); cmd != nil {
+				return m, withSpinner(cmd, m.kickSpinnerIfPending())
+			}
+		case "s":
+			if cmd := m.dismissCurrent(); cmd != nil {
+				return m, withSpinner(cmd, m.kickSpinnerIfPending())
+			}
+		case "j", "n", "down":
+			if m.cursor < len(m.entries)-1 {
+				m.cursor++
+			}
+		case "k", "p", "up":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "tab":
+			m.cycleOption(1)
+		case "shift+tab":
+			m.cycleOption(-1)
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			m.jumpToOption(int(key[0] - '1'))
+		}
+	}
+	return m, nil
+}
+
+// currentEntries returns the cursor's entry as a single-element slice (and
+// its index), used to drive approve/skip/rerun actions on the focused item.
+func (m *Model) currentEntries() ([]Entry, []int) {
+	if len(m.entries) == 0 {
+		return nil, nil
+	}
+	return []Entry{m.entries[m.cursor]}, []int{m.cursor}
+}
+
+// cycleOption shifts the cursor entry's active option by delta, wrapping
+// at the ends, and re-syncs the entry's mirrored fields.
+func (m *Model) cycleOption(delta int) {
+	if len(m.entries) == 0 {
+		return
+	}
+	entry := &m.entries[m.cursor]
+	if len(entry.Options) <= 1 {
+		return
+	}
+	entry.CommitEdits()
+	idx := entry.ActiveOption + delta
+	n := len(entry.Options)
+	idx = ((idx % n) + n) % n
+	entry.ActiveOption = idx
+	entry.SyncActive()
+}
+
+// jumpToOption switches the cursor entry's active option to idx (0-based).
+// Out-of-range indices are ignored.
+func (m *Model) jumpToOption(idx int) {
+	if len(m.entries) == 0 {
+		return
+	}
+	entry := &m.entries[m.cursor]
+	if idx < 0 || idx >= len(entry.Options) {
+		return
+	}
+	if idx == entry.ActiveOption {
+		return
+	}
+	entry.CommitEdits()
+	entry.ActiveOption = idx
+	entry.SyncActive()
+}
+
+func (m *Model) approveCurrent() tea.Cmd {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	m.entries[m.cursor].CommitEdits()
+	entry := m.entries[m.cursor]
+	if cmd, blocked := m.guardConflict(entry, "approve"); blocked {
+		return cmd
+	}
+	if m.approve == nil {
+		// No async work to schedule; mirror the old synchronous path so
+		// tests that don't wire Approve still see the immediate state.
+		m.removeEntries([]int{m.cursor})
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("approved %s #%d", entry.RepoID, entry.Number)})
+		return nil
+	}
+	return m.startAction(entry, "approve", func() tea.Msg {
+		return actionFinishedMsg{
+			verb:             "approve",
+			recommendationID: entry.RecommendationID,
+			err:              m.approve([]Entry{entry}),
+		}
+	})
+}
+
+func (m *Model) editCurrent() tea.Cmd {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	entry := m.entries[m.cursor]
+	if cmd, blocked := m.guardConflict(entry, "edit"); blocked {
+		return cmd
+	}
+	if m.editExec != nil {
+		recommendationID := m.entries[m.cursor].RecommendationID
+		cmd, finish, err := m.editExec(m.entries[m.cursor])
+		if err != nil {
+			m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edit failed: %v", err)})
+			return nil
+		}
+		// EditExec is the bubbletea-friendly path: ExecProcess releases
+		// the alt screen for the editor and restores it on exit, so the
+		// terminal isn't left half-redrawn when the user returns.
+		return tea.ExecProcess(cmd, func(execErr error) tea.Msg {
+			return editFinishedMsg{recommendationID: recommendationID, finish: finish, execErr: execErr}
+		})
+	}
+	if m.edit == nil {
+		m.pushLog(logEntry{state: logStateInfo, note: "edit unavailable"})
+		return nil
+	}
+	updated, err := m.edit(m.entries[m.cursor])
+	if err != nil {
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edit failed: %v", err)})
+		return nil
+	}
+	updated.CommitEdits()
+	m.entries[m.cursor] = updated
+	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
+	return nil
+}
+
+// guardConflict reports whether an action on entry should be refused
+// because something is already pending for that recommendation. When
+// blocked it pushes an info entry into the log and returns (nil, true);
+// callers should bail out without scheduling work. The verb parameter is
+// the requested action - kept for symmetry with the start path even though
+// it's not in the warning text.
+func (m *Model) guardConflict(entry Entry, _ string) (tea.Cmd, bool) {
+	pending, ok := m.pendingActions[entry.RecommendationID]
+	if !ok {
+		return nil, false
+	}
+	m.pushLog(logEntry{
+		state: logStateInfo,
+		note:  fmt.Sprintf("still %s %s #%d - wait for it to finish", verbIng(pending.verb), entry.RepoID, entry.Number),
+	})
+	return nil, true
+}
+
+// startAction registers a pending entry and returns the bare action cmd
+// (which runs the user-supplied work in a goroutine and emits
+// actionFinishedMsg). Spinner ticking is kicked off by the caller via
+// kickSpinnerIfPending - keeping it out of this Cmd avoids tying tests to
+// tea.Tick's real wall-clock delay.
+func (m *Model) startAction(entry Entry, verb string, run func() tea.Msg) tea.Cmd {
+	if m.pendingActions == nil {
+		m.pendingActions = make(map[string]pendingAction)
+	}
+	now := time.Now()
+	m.pendingActions[entry.RecommendationID] = pendingAction{verb: verb, startedAt: now}
+	m.pushLog(logEntry{
+		state:            logStatePending,
+		verb:             verb,
+		recommendationID: entry.RecommendationID,
+		repoID:           entry.RepoID,
+		number:           entry.Number,
+		startedAt:        now,
+	})
+	return func() tea.Msg { return run() }
+}
+
+// kickSpinnerIfPending returns a fresh spinner-tick cmd if at least one
+// action is in flight. The tick handler reschedules itself until pending
+// is empty, so this only needs to fire once per "newly busy" transition.
+func (m *Model) kickSpinnerIfPending() tea.Cmd {
+	if len(m.pendingActions) == 0 {
+		return nil
+	}
+	return scheduleSpinnerTick()
+}
+
+func (m *Model) pushLog(e logEntry) {
+	m.logSeq++
+	e.id = m.logSeq
+	m.logEntries = append(m.logEntries, e)
+	if len(m.logEntries) > maxLogEntries {
+		m.logEntries = m.logEntries[len(m.logEntries)-maxLogEntries:]
+	}
+}
+
+// finishLog flips the most recent matching pending entry to done or failed.
+// Matching by (recommendationID, verb) handles the rare case where two
+// different verbs were attempted on the same item across the queue.
+func (m *Model) finishLog(rid, verb string, err error) {
+	for i := len(m.logEntries) - 1; i >= 0; i-- {
+		e := &m.logEntries[i]
+		if e.state == logStatePending && e.recommendationID == rid && e.verb == verb {
+			e.finishedAt = time.Now()
+			if err != nil {
+				e.state = logStateFailed
+				e.err = err
+			} else {
+				e.state = logStateDone
+			}
+			return
+		}
+	}
+}
+
+func (m *Model) applyActionFinished(msg actionFinishedMsg) {
+	delete(m.pendingActions, msg.recommendationID)
+	m.finishLog(msg.recommendationID, msg.verb, msg.err)
+
+	if msg.err != nil {
+		// finishLog already recorded the failure with the verb/repo/number;
+		// no need to duplicate it elsewhere.
+		return
+	}
+
+	idx := -1
+	for i := range m.entries {
+		if m.entries[i].RecommendationID == msg.recommendationID {
+			idx = i
+			break
+		}
+	}
+	switch msg.verb {
+	case "approve", "skip":
+		if idx >= 0 {
+			m.removeEntries([]int{idx})
+		}
+	case "rerun":
+		if idx >= 0 && len(msg.updatedEntries) > 0 {
+			m.entries[idx] = msg.updatedEntries[0]
+		}
+	}
+}
+
+func verbIng(verb string) string {
+	if v, ok := asyncVerbForms[verb]; ok {
+		return v.ing
+	}
+	return verb
+}
+
+func verbEd(verb string) string {
+	if v, ok := asyncVerbForms[verb]; ok {
+		return v.ed
+	}
+	return verb
+}
+
+func scheduleSpinnerTick() tea.Cmd {
+	return tea.Tick(spinnerTickPeriod, func(time.Time) tea.Msg {
+		return spinnerTickMsg{}
+	})
+}
+
+// withSpinner batches an action cmd with the spinner-kick cmd. If kick is
+// nil (no pending actions), the action cmd is returned as-is so tests can
+// drive it without unwrapping a Batch.
+func withSpinner(action, kick tea.Cmd) tea.Cmd {
+	if kick == nil {
+		return action
+	}
+	return tea.Batch(action, kick)
+}
+
+func (m *Model) applyEditFinished(msg editFinishedMsg) {
+	if msg.finish == nil {
+		return
+	}
+	idx := -1
+	for i := range m.entries {
+		if m.entries[i].RecommendationID == msg.recommendationID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		m.pushLog(logEntry{state: logStateInfo, note: "edit aborted: entry no longer in queue"})
+		return
+	}
+	updated, err := msg.finish(msg.execErr)
+	if err != nil {
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edit failed: %v", err)})
+		return
+	}
+	updated.CommitEdits()
+	m.entries[idx] = updated
+	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
+}
+
+func (m *Model) rerunCurrent() tea.Cmd {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	entry := m.entries[m.cursor]
+	if cmd, blocked := m.guardConflict(entry, "rerun"); blocked {
+		return cmd
+	}
+	if m.rerun == nil {
+		m.pushLog(logEntry{state: logStateInfo, note: "rerun unavailable"})
+		return nil
+	}
+	return m.startAction(entry, "rerun", func() tea.Msg {
+		updated, err := m.rerun([]Entry{entry})
+		return actionFinishedMsg{
+			verb:             "rerun",
+			recommendationID: entry.RecommendationID,
+			err:              err,
+			updatedEntries:   updated,
+		}
+	})
+}
+
+const (
+	responsiveLayoutMinWidth  = 110
+	responsiveLayoutMinHeight = 20
+	responsiveLayoutGap       = 2
+
+	// Rail (left) is the narrower context column; card (right) is the
+	// focal column and always gets the bigger share so the eye lands there.
+	responsiveRailMinWidth  = 40
+	responsiveRailMaxWidth  = 60
+	responsiveCardMinWidth  = 60
+
+	compactHeightThreshold = 24
+	minInboxContentHeight  = 4
+)
+
+// View renders the TUI as a card-focused triage UI:
+//
+//   - The current item's full context (title, status, rationale, draft,
+//     proposed actions) is the focus and lives in a centered card.
+//   - On wide layouts a queue rail sits to the left, grouped by repo with
+//     dimmed repo headings, providing context without stealing focus.
+//   - The Decide bar (a/e/s/r) sits below the card so the actions are
+//     anchored to the item being decided on.
+//   - n/p navigate forward/back through the queue (j/k still work).
+//
+// Single-item decision flow: every action key operates on the cursor's
+// item. There is no batch selection.
+func (m Model) View() string {
+	if m.quitting {
+		return ""
+	}
+	width := m.width
+	if width < 80 {
+		width = 80
+	}
+
+	compact := m.height > 0 && m.height < compactHeightThreshold
+	sectionGap := "\n\n"
+	gapHeight := 2
+	if compact {
+		sectionGap = "\n"
+		gapHeight = 1
+	}
+
+	navBar := metaStyle().Render("j next  k prev      q quit  ? help")
+
+	if len(m.entries) == 0 {
+		empty := renderBox(width, "Inbox", metaStyle().Render("No pending recommendations.\nRun `ezoss daemon start` or `ezoss triage <url>` to populate the queue."))
+		sections := []string{empty}
+		if logPanel := m.renderLogPanel(width); logPanel != "" {
+			sections = append(sections, logPanel)
+		}
+		sections = append(sections, navBar)
+		return strings.Join(sections, sectionGap)
+	}
+
+	useRail := m.width >= responsiveLayoutMinWidth && m.height >= responsiveLayoutMinHeight && !m.showHelp
+
+	logPanel := m.renderLogPanel(width)
+
+	contentBudget := -1
+	if m.height > 0 {
+		fixed := lipgloss.Height(navBar) + gapHeight
+		if m.showHelp {
+			fixed += lipgloss.Height(renderBox(width, "Keyboard shortcuts", m.renderHelp())) + gapHeight
+		}
+		// The log panel is the first thing we'll trim if the terminal is
+		// short - card stays at minInboxContentHeight, log shrinks (or
+		// vanishes) below that.
+		if logPanel != "" {
+			logHeight := lipgloss.Height(logPanel) + gapHeight
+			available := m.height - fixed - (minInboxContentHeight + 2) - gapHeight
+			if available < logHeight {
+				logPanel = m.shrinkLogPanel(width, available)
+				if logPanel == "" {
+					logHeight = 0
+				} else {
+					logHeight = lipgloss.Height(logPanel) + gapHeight
+				}
+			}
+			fixed += logHeight
+		}
+		contentBudget = m.height - fixed
+		if contentBudget < minInboxContentHeight+2 {
+			contentBudget = minInboxContentHeight + 2
+		}
+	}
+
+	var bodySection string
+	if useRail {
+		railWidth, cardWidth := responsiveColumnWidths(width)
+		rail := m.renderQueueRail(railWidth, contentBudget)
+		card := m.renderCard(cardWidth, contentBudget)
+		bodySection = renderResponsiveColumns(rail, card, railWidth, cardWidth, responsiveLayoutGap)
+	} else {
+		bodySection = m.renderCard(width, contentBudget)
+	}
+
+	sections := []string{bodySection}
+	if logPanel != "" {
+		sections = append(sections, logPanel)
+	}
+	if m.showHelp {
+		sections = append(sections, renderBox(width, "Keyboard shortcuts", m.renderHelp()))
+	}
+	sections = append(sections, navBar)
+	return strings.Join(sections, sectionGap)
+}
+
+// renderLogPanel returns a single "Activity" box with the last few log
+// entries (in-flight, completed, failed, info). Pending rows show a
+// braille spinner that advances each tick. Returns empty string if there
+// are no entries to show.
+//
+// Long entries (notably failure errors with embedded gh output) are
+// word-wrapped to fit the panel width so they don't bleed past the box
+// border - the user needs to see the *whole* error to understand what
+// happened.
+func (m Model) renderLogPanel(width int) string {
+	if len(m.logEntries) == 0 {
+		return ""
+	}
+	contentWidth := width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	// Show the last few entries, newest at the bottom (most recent action
+	// gets the most salient position). Take more than maxLogPanelLines
+	// raw entries because each entry may wrap to multiple visual lines;
+	// we'll trim the wrapped output below.
+	visibleCount := len(m.logEntries)
+	if visibleCount > maxLogEntries {
+		visibleCount = maxLogEntries
+	}
+	visible := m.logEntries[len(m.logEntries)-visibleCount:]
+	wrapped := make([]string, 0, len(visible))
+	for _, e := range visible {
+		wrapped = append(wrapped, wrapLines([]string{m.renderLogLine(e)}, contentWidth)...)
+	}
+	if len(wrapped) > maxLogPanelLines {
+		wrapped = wrapped[len(wrapped)-maxLogPanelLines:]
+	}
+	return renderBox(width, "Activity", strings.Join(wrapped, "\n"))
+}
+
+// shrinkLogPanel re-renders the log panel with at most enough content
+// lines to fit in the available vertical budget. Returns empty string if
+// the budget is too small for even the box chrome (top + bottom border +
+// 1 row of content = 3 minimum).
+func (m Model) shrinkLogPanel(width, available int) string {
+	if available < 3 || len(m.logEntries) == 0 {
+		return ""
+	}
+	contentLines := available - 2 // box top + bottom borders
+	if contentLines < 1 {
+		return ""
+	}
+	if contentLines > maxLogPanelLines {
+		contentLines = maxLogPanelLines
+	}
+	contentWidth := width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	// Wrap from the newest entries backward and stop once we have enough
+	// visual lines - older entries fall off the top first.
+	var visualLines []string
+	for i := len(m.logEntries) - 1; i >= 0 && len(visualLines) < contentLines; i-- {
+		entryLines := wrapLines([]string{m.renderLogLine(m.logEntries[i])}, contentWidth)
+		// Prepend in reverse so the final order has oldest first within
+		// the visible window.
+		visualLines = append(entryLines, visualLines...)
+	}
+	if len(visualLines) > contentLines {
+		visualLines = visualLines[len(visualLines)-contentLines:]
+	}
+	return renderBox(width, "Activity", strings.Join(visualLines, "\n"))
+}
+
+func (m Model) renderLogLine(e logEntry) string {
+	switch e.state {
+	case logStatePending:
+		spinner := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+		elapsed := time.Since(e.startedAt).Truncate(time.Second)
+		return fmt.Sprintf("%s %s %s #%d · %s", spinner, verbIng(e.verb), e.repoID, e.number, formatLogElapsed(elapsed))
+	case logStateDone:
+		dur := e.finishedAt.Sub(e.startedAt).Round(100 * time.Millisecond)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiGreen)).Render("✓ ") +
+			fmt.Sprintf("%s %s #%d · %s", verbEd(e.verb), e.repoID, e.number, dur)
+	case logStateFailed:
+		return errorStyle().Render("✗ ") +
+			fmt.Sprintf("%s failed %s #%d: %v", e.verb, e.repoID, e.number, e.err)
+	case logStateInfo:
+		return metaStyle().Render(e.note)
+	}
+	return ""
+}
+
+func formatLogElapsed(d time.Duration) string {
+	if d < time.Second {
+		return "0s"
+	}
+	return d.String()
+}
+
+// renderDecideBar shows the per-item actions in a single bold line. All
+// actions act on the cursor's item; there's no selection to disambiguate.
+// When the active item has multiple options, a "tab switch option" hint
+// is appended so the binding is discoverable from the main view.
+//
+// When the entry has an action in flight, the bar morphs into a
+// spinner+verb so it's obvious that pressing a/s/r/e right now is a
+// no-op until the action completes.
+func renderDecideBar(optionCount int) string {
+	bar := "a approve   e edit draft   s skip   r rerun"
+	if optionCount > 1 {
+		bar += "   tab switch option"
+	}
+	return actionBarStyle().Render(bar)
+}
+
+// renderPendingDecideBar replaces the action keys with a spinner and the
+// active verb so the user sees the in-flight state instead of stale hints.
+func renderPendingDecideBar(verb string, spinnerFrame int, repoID string, number int, startedAt time.Time) string {
+	spinner := spinnerFrames[spinnerFrame%len(spinnerFrames)]
+	elapsed := time.Since(startedAt).Truncate(time.Second)
+	return actionBarStyle().Render(fmt.Sprintf("%s %s %s #%d · %s", spinner, verbIng(verb), repoID, number, formatLogElapsed(elapsed)))
+}
+
+// responsiveColumnWidths splits width into (rail, card). The card is the
+// focal element and always gets the larger share - rail tops out at 40% of
+// the available width so the body content has room to breathe.
+func responsiveColumnWidths(width int) (int, int) {
+	railWidth := width * 2 / 5
+	if railWidth < responsiveRailMinWidth {
+		railWidth = responsiveRailMinWidth
+	}
+	if railWidth > responsiveRailMaxWidth {
+		railWidth = responsiveRailMaxWidth
+	}
+	cardWidth := width - railWidth - responsiveLayoutGap
+	if cardWidth < responsiveCardMinWidth {
+		cardWidth = responsiveCardMinWidth
+		railWidth = width - cardWidth - responsiveLayoutGap
+	}
+	return railWidth, cardWidth
+}
+
+func renderResponsiveColumns(left, right string, leftWidth, rightWidth, gap int) string {
+	if right == "" {
+		return left
+	}
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	maxLines := len(leftLines)
+	if len(rightLines) > maxLines {
+		maxLines = len(rightLines)
+	}
+	leftStyle := lipgloss.NewStyle().Width(leftWidth)
+	rightStyle := lipgloss.NewStyle().Width(rightWidth)
+	gapStr := strings.Repeat(" ", gap)
+	var b strings.Builder
+	for i := 0; i < maxLines; i++ {
+		var ll, rl string
+		if i < len(leftLines) {
+			ll = leftLines[i]
+		}
+		if i < len(rightLines) {
+			rl = rightLines[i]
+		}
+		b.WriteString(leftStyle.Render(ll))
+		b.WriteString(gapStr)
+		b.WriteString(rightStyle.Render(rl))
+		if i < maxLines-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func (m Model) renderHelp() string {
+	return strings.Join([]string{
+		"j / n / down       next item",
+		"k / p / up         previous item",
+		"tab / shift+tab    cycle between alternate recommendations (when present)",
+		"1-9                jump directly to that recommendation option",
+		"a                  approve active option (post comment, apply state change, sync labels)",
+		"e                  edit active option's draft, action, or labels",
+		"s                  skip current item",
+		"r                  rerun the agent on the current item",
+		"?                  toggle this help",
+		"q                  quit",
+	}, "\n")
+}
+
+// truncateToWidth shortens s so that lipgloss.Width(result) <= maxWidth.
+// width <= 0 returns s unchanged. When truncating, an ellipsis "…" is
+// appended to signal the cut.
+func truncateToWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return s
+	}
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	if maxWidth == 1 {
+		return "…"
+	}
+	runes := []rune(s)
+	for len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+		candidate := string(runes) + "…"
+		if lipgloss.Width(candidate) <= maxWidth {
+			return candidate
+		}
+	}
+	return "…"
+}
+
+// formatScrollHint returns a dim-styled scroll indicator suitable for the
+// bottom border of a box. Empty when nothing is hidden.
+func formatScrollHint(above, below int) string {
+	var raw string
+	switch {
+	case above > 0 && below > 0:
+		raw = fmt.Sprintf("↑ %d above  ↓ %d below (j/k)", above, below)
+	case below > 0:
+		raw = fmt.Sprintf("↓ %d more (j/k)", below)
+	case above > 0:
+		raw = fmt.Sprintf("↑ %d more (j/k)", above)
+	default:
+		return ""
+	}
+	return metaStyle().Render(raw)
+}
+
+// entryKindGlyph returns a one-cell-wide colored glyph indicating item kind:
+// green ○ for issues (mirrors GitHub's open-issue icon), cyan ⇡ for PRs
+// (evokes "pull"). Both are width-1 so callers can align around them.
+func entryKindGlyph(kind sharedtypes.ItemKind) string {
+	if kind == sharedtypes.ItemKindPR {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiCyan)).Render("⇡")
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiGreen)).Render("○")
+}
+
+func entryNumberLabel(entry Entry) string {
+	return entryKindGlyph(entry.Kind) + " #" + strconv.Itoa(entry.Number)
+}
+
+// entryNumberLabelPadded right-pads the numeric portion to digitWidth so a
+// list of mixed-width IDs lines up on the trailing column.
+func entryNumberLabelPadded(entry Entry, digitWidth int) string {
+	return entryKindGlyph(entry.Kind) + fmt.Sprintf(" #%-*d", digitWidth, entry.Number)
+}
+
+// pendingGlyph returns a one-cell-wide marker used in the rail in place
+// of the kind glyph while an action is in flight on this item. Static
+// (not animated) so the rail stays calm even when several items are busy.
+func pendingGlyph() string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiYellow)).Render("…")
+}
+
+// entryNumberLabelPaddedWithPending mirrors entryNumberLabelPadded but
+// substitutes pendingGlyph() for the kind glyph when the entry is busy.
+func entryNumberLabelPaddedWithPending(entry Entry, digitWidth int, pending bool) string {
+	glyph := entryKindGlyph(entry.Kind)
+	if pending {
+		glyph = pendingGlyph()
+	}
+	return glyph + fmt.Sprintf(" #%-*d", digitWidth, entry.Number)
+}
+
+// maxNumberDigits returns the digit count of the widest Number in entries
+// (minimum 1) so labels can be padded to a uniform width.
+func maxNumberDigits(entries []Entry) int {
+	max := 1
+	for _, e := range entries {
+		d := len(strconv.Itoa(e.Number))
+		if d > max {
+			max = d
+		}
+	}
+	return max
+}
+
+func (m Model) renderDetails() string {
+	if len(m.entries) == 0 {
+		return metaStyle().Render("Start the daemon or run triage to populate the inbox.")
+	}
+	entry := m.entries[m.cursor]
+
+	var lines []string
+	if approvalError := renderApprovalError(entry.ApprovalError); approvalError != "" {
+		lines = append(lines, approvalError)
+	}
+	if strip := renderStatusStrip(entry); strip != "" {
+		lines = append(lines, strip)
+	}
+
+	if len(lines) > 0 {
+		// Blank line between status strip / approval error and body.
+		lines = append(lines, "")
+	}
+	lines = append(lines,
+		sectionLabel("Rationale"),
+		renderIndentedBlock(emptyFallback(entry.Rationale, "No rationale yet."), "  "),
+		sectionLabel("Draft response"),
+		renderIndentedBlock(emptyFallback(entry.DraftComment, "No draft response."), "  "),
+	)
+	if len(entry.Followups) > 0 {
+		lines = append(lines, sectionLabel("Follow-ups"))
+		for _, followup := range entry.Followups {
+			lines = append(lines, "  - "+followup)
+		}
+	}
+
+	if summary := renderActionSummary(entry); summary != "" {
+		lines = append(lines, "", summary)
+	}
+
+	if footer := renderMetaFooter(entry); footer != "" {
+		lines = append(lines, "", footer)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderActionSummary describes what `a approve` will execute, e.g.
+// "Will: comment + close   labels: bug". The label "Will:" anchors the
+// summary as the proposed action - what the agent recommends and what
+// approve will perform.
+func renderActionSummary(entry Entry) string {
+	verbs := actionVerbs(entry)
+	if len(verbs) == 0 && len(entry.ProposedLabels) == 0 {
+		return sectionLabelStyle().Render("Will:") + " " + metaStyle().Render("mark triaged")
+	}
+	parts := make([]string, 0, 2)
+	if len(verbs) > 0 {
+		parts = append(parts, sectionLabelStyle().Render("Will:")+" "+strings.Join(verbs, " + "))
+	}
+	if len(entry.ProposedLabels) > 0 {
+		parts = append(parts, metaStyle().Render("labels: "+strings.Join(entry.ProposedLabels, ", ")))
+	}
+	return strings.Join(parts, "   ")
+}
+
+func renderStatusStrip(entry Entry) string {
+	parts := make([]string, 0, 3)
+	if conf := strings.TrimSpace(string(entry.Confidence)); conf != "" {
+		parts = append(parts, confidenceStyle(entry.Confidence).Render(conf))
+	}
+	if waiting := strings.TrimSpace(string(entry.WaitingOn)); waiting != "" && entry.WaitingOn != sharedtypes.WaitingOnNone {
+		parts = append(parts, metaStyle().Render("waiting on "+waiting))
+	}
+	if entry.TokensIn > 0 || entry.TokensOut > 0 {
+		parts = append(parts, metaStyle().Render(fmt.Sprintf("%s in / %s out", formatTokens(entry.TokensIn), formatTokens(entry.TokensOut))))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	sep := metaStyle().Render(" · ")
+	return strings.Join(parts, sep)
+}
+
+// renderMetaFooter renders the URL on its own line below the body. Labels
+// live in renderActionSummary so this is just the link to the upstream.
+func renderMetaFooter(entry Entry) string {
+	url := strings.TrimSpace(entry.URL)
+	if url == "" {
+		return ""
+	}
+	return metaStyle().Render(url)
+}
+
+func sectionLabelStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiCyan))
+}
+
+// sectionLabel renders a cyan-bold section header with a trailing colon so
+// the label still reads correctly in monochrome terminals.
+func sectionLabel(name string) string {
+	return sectionLabelStyle().Render(name + ":")
+}
+
+func confidenceStyle(c sharedtypes.Confidence) lipgloss.Style {
+	switch c {
+	case sharedtypes.ConfidenceHigh:
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiGreen))
+	case sharedtypes.ConfidenceMedium:
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiYellow))
+	case sharedtypes.ConfidenceLow:
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
+	}
+	return metaStyle()
+}
+
+// renderCard renders the cursor's item as the focal card: repo · type#N ·
+// age in the title, the title and full body inside, the decide-bar action
+// keys embedded in the bottom border, and proposed action + URL inside.
+// Long content is word-wrapped to box width and clipped vertically; when
+// clipped, a "↓ N more lines" hint joins the bottom-border footer.
+func (m Model) renderCard(width, boxHeight int) string {
+	if len(m.entries) == 0 {
+		return renderBox(width, "Inbox", metaStyle().Render("No pending recommendations."))
+	}
+	entry := m.entries[m.cursor]
+	contentWidth := width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	title := cardTitle(entry)
+
+	var lines []string
+	if approvalError := renderApprovalError(entry.ApprovalError); approvalError != "" {
+		lines = append(lines, approvalError, "")
+	}
+	if heading := strings.TrimSpace(entry.Title); heading != "" {
+		lines = append(lines, sectionLabelStyle().Render(heading), "")
+	}
+	if strip := renderStatusStrip(entry); strip != "" {
+		lines = append(lines, strip, "")
+	}
+	lines = append(lines,
+		sectionLabel("Rationale"),
+		renderIndentedBlock(emptyFallback(entry.Rationale, "No rationale yet."), "  "),
+		sectionLabel("Draft response"),
+		renderIndentedBlock(emptyFallback(entry.DraftComment, "No draft response."), "  "),
+	)
+	if len(entry.Followups) > 0 {
+		lines = append(lines, sectionLabel("Follow-ups"))
+		for _, followup := range entry.Followups {
+			lines = append(lines, "  - "+followup)
+		}
+	}
+	if summary := renderActionSummary(entry); summary != "" {
+		lines = append(lines, "", summary)
+	}
+	if footer := renderMetaFooter(entry); footer != "" {
+		lines = append(lines, footer)
+	}
+
+	actionFooter := renderDecideBar(len(entry.Options))
+	if pending, ok := m.pendingActions[entry.RecommendationID]; ok {
+		actionFooter = renderPendingDecideBar(pending.verb, m.spinnerFrame, entry.RepoID, entry.Number, pending.startedAt)
+	}
+	wrapped := wrapLines(lines, contentWidth)
+	if boxHeight <= 0 {
+		return renderBoxWithFooter(width, title, strings.Join(wrapped, "\n"), actionFooter)
+	}
+	contentHeight := boxHeight - 2
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	if len(wrapped) <= contentHeight {
+		return renderBoxWithFooter(width, title, strings.Join(wrapped, "\n"), actionFooter)
+	}
+	hidden := len(wrapped) - (contentHeight - 1)
+	visible := strings.Join(wrapped[:contentHeight-1], "\n")
+	hint := metaStyle().Render(fmt.Sprintf("↓ %d more lines", hidden))
+	footer := actionFooter + metaStyle().Render("  ·  ") + hint
+	return renderBoxWithFooter(width, title, visible, footer)
+}
+
+// cardTitle composes the card's title-bar string: "repo · ⇡ #42 · 2h · option 1/2".
+// The option indicator is omitted when the recommendation has only one
+// option - the queue position is communicated by the rail's cursor.
+func cardTitle(entry Entry) string {
+	parts := []string{entry.RepoID, entryNumberLabel(entry)}
+	if age := strings.TrimSpace(entry.AgeLabel); age != "" {
+		parts = append(parts, age)
+	}
+	if len(entry.Options) > 1 {
+		parts = append(parts, fmt.Sprintf("option %d/%d", entry.ActiveOption+1, len(entry.Options)))
+	}
+	if entry.Unconfigured {
+		parts = append(parts, "unconfigured")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// renderQueueRail renders the queue grouped by repo, with the cursor's
+// entry highlighted. Repo names appear as dim group headings. The list
+// scrolls so the cursor stays visible; a scroll hint shows in the bottom
+// border when entries are hidden above or below.
+func (m Model) renderQueueRail(width, boxHeight int) string {
+	if len(m.entries) == 0 {
+		return renderBox(width, "Inbox", metaStyle().Render("Empty."))
+	}
+	contentWidth := width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	type railLine struct {
+		text   string
+		anchor bool // group headers are anchors that ideally stay visible
+	}
+
+	digitWidth := maxNumberDigits(m.entries)
+	var allLines []railLine
+	cursorIdx := -1
+	lastRepo := ""
+	for i, entry := range m.entries {
+		if entry.RepoID != lastRepo {
+			allLines = append(allLines, railLine{
+				text:   metaStyle().Render(truncateToWidth(entry.RepoID, contentWidth)),
+				anchor: true,
+			})
+			lastRepo = entry.RepoID
+		}
+		_, isPending := m.pendingActions[entry.RecommendationID]
+		label := entryNumberLabelPaddedWithPending(entry, digitWidth, isPending)
+		marker := "  "
+		text := fmt.Sprintf("%s%s  %s", marker, label, entry.Title)
+		if i == m.cursor {
+			text = fmt.Sprintf("▸ %s  %s", label, entry.Title)
+			text = lipgloss.NewStyle().Bold(true).Render(truncateToWidth(text, contentWidth))
+			cursorIdx = len(allLines)
+		} else {
+			text = truncateToWidth(text, contentWidth)
+		}
+		allLines = append(allLines, railLine{text: text})
+	}
+
+	visible := allLines
+	scrollHint := ""
+	contentHeight := -1
+	if boxHeight > 0 {
+		contentHeight = boxHeight - 2
+		if contentHeight < 1 {
+			contentHeight = 1
+		}
+	}
+	if contentHeight > 0 && len(allLines) > contentHeight && cursorIdx >= 0 {
+		start := cursorIdx - contentHeight/2
+		if start < 0 {
+			start = 0
+		}
+		end := start + contentHeight
+		if end > len(allLines) {
+			end = len(allLines)
+			start = end - contentHeight
+			if start < 0 {
+				start = 0
+			}
+		}
+		visible = allLines[start:end]
+		scrollHint = formatScrollHint(start, len(allLines)-end)
+	}
+
+	bodyLines := make([]string, 0, len(visible))
+	for _, line := range visible {
+		bodyLines = append(bodyLines, line.text)
+	}
+	body := strings.Join(bodyLines, "\n")
+	title := fmt.Sprintf("Inbox · %d of %d", m.cursor+1, len(m.entries))
+	if scrollHint != "" {
+		return renderBoxWithFooter(width, title, body, scrollHint)
+	}
+	return renderBox(width, title, body)
+}
+
+// renderDetailsBox renders the details pane within boxHeight total lines
+// (including borders). boxHeight <= 0 disables clipping. Long lines are
+// word-wrapped to fit the box width so prose stays fully readable; if the
+// wrapped content still exceeds the height budget, the bottom lines are
+// dropped and a "↓ N more lines" hint is shown in the bottom border.
+func (m Model) renderDetailsBox(width, boxHeight int) string {
+	contentWidth := width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	wrapped := wrapLines(strings.Split(m.renderDetails(), "\n"), contentWidth)
+	if boxHeight <= 0 {
+		return renderBox(width, "Details", strings.Join(wrapped, "\n"))
+	}
+	contentHeight := boxHeight - 2
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	if len(wrapped) <= contentHeight {
+		return renderBox(width, "Details", strings.Join(wrapped, "\n"))
+	}
+	hidden := len(wrapped) - (contentHeight - 1)
+	visible := strings.Join(wrapped[:contentHeight-1], "\n")
+	hint := metaStyle().Render(fmt.Sprintf("↓ %d more lines", hidden))
+	return renderBoxWithFooter(width, "Details", visible, hint)
+}
+
+// wrapLines word-wraps each input line to width, preserving any leading
+// whitespace as the continuation indent. Tokens longer than the width
+// (e.g., regex, URLs, long identifiers) are hard-broken at the boundary
+// because the alternative - letting them spill past the box edge - bleeds
+// into adjacent panels and breaks the layout.
+func wrapLines(lines []string, width int) []string {
+	if width <= 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, wrapLine(line, width)...)
+	}
+	return out
+}
+
+func wrapLine(line string, width int) []string {
+	if width <= 0 || lipgloss.Width(line) <= width {
+		return []string{line}
+	}
+	indent := leadingWhitespace(line)
+	body := line[len(indent):]
+	bodyWidth := width - lipgloss.Width(indent)
+	if bodyWidth < 1 {
+		return []string{line}
+	}
+
+	words := strings.Fields(body)
+	if len(words) == 0 {
+		return []string{line}
+	}
+
+	// Pre-split any token that on its own exceeds bodyWidth. Without this,
+	// the greedy fill below would emit the oversized token whole on a line
+	// of its own and bleed past the box edge.
+	expanded := make([]string, 0, len(words))
+	for _, w := range words {
+		if lipgloss.Width(w) > bodyWidth {
+			expanded = append(expanded, hardBreak(w, bodyWidth)...)
+		} else {
+			expanded = append(expanded, w)
+		}
+	}
+
+	var wrapped []string
+	cur := expanded[0]
+	for _, word := range expanded[1:] {
+		if lipgloss.Width(cur)+1+lipgloss.Width(word) <= bodyWidth {
+			cur += " " + word
+		} else {
+			wrapped = append(wrapped, indent+cur)
+			cur = word
+		}
+	}
+	wrapped = append(wrapped, indent+cur)
+	return wrapped
+}
+
+// hardBreak splits s into chunks that each fit within width display
+// columns, measured by lipgloss.Width so wide runes (CJK, emoji) are
+// accounted for. Splitting happens at rune boundaries to avoid cutting a
+// multi-byte character in half.
+func hardBreak(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	var parts []string
+	var cur strings.Builder
+	curW := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if curW+rw > width && cur.Len() > 0 {
+			parts = append(parts, cur.String())
+			cur.Reset()
+			curW = 0
+		}
+		cur.WriteRune(r)
+		curW += rw
+	}
+	if cur.Len() > 0 {
+		parts = append(parts, cur.String())
+	}
+	return parts
+}
+
+func leadingWhitespace(s string) string {
+	for i, r := range s {
+		if r != ' ' && r != '\t' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+func renderIndentedBlock(text string, indent string) string {
+	lines := strings.Split(text, "\n")
+	for i := range lines {
+		lines[i] = indent + lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderBox(width int, title string, body string) string {
+	return renderBoxWithFooter(width, title, body, "")
+}
+
+// renderBoxWithFooter renders content inside a rounded-border box with the
+// title embedded in the top border and an optional hint embedded in the
+// bottom border (e.g., "↓ 3 more (j/k)" for scrollable content).
+func renderBoxWithFooter(width int, title string, body string, footer string) string {
+	if width < 6 {
+		width = 6
+	}
+	border := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBrightBlack))
+	styledTitle := titleStyle().Render(title)
+
+	titleW := lipgloss.Width(styledTitle)
+	fillW := width - 5 - titleW
+	if fillW < 1 {
+		fillW = 1
+	}
+	top := border.Render("╭─ ") + styledTitle + " " + border.Render(strings.Repeat("─", fillW)+"╮")
+
+	contentWidth := width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	rawLines := strings.Split(body, "\n")
+	if len(rawLines) > 0 && rawLines[len(rawLines)-1] == "" {
+		rawLines = rawLines[:len(rawLines)-1]
+	}
+	lines := make([]string, 0, len(rawLines))
+	for _, cl := range rawLines {
+		visW := lipgloss.Width(cl)
+		pad := contentWidth - visW
+		if pad < 0 {
+			pad = 0
+		}
+		lines = append(lines, border.Render("│")+" "+cl+strings.Repeat(" ", pad)+" "+border.Render("│"))
+	}
+
+	return top + "\n" + strings.Join(lines, "\n") + "\n" + renderBottomBorder(width, footer)
+}
+
+// renderBottomBorder renders the closing border with an optional embedded
+// footer string. The footer is rendered as-is (caller pre-styles), so the
+// same primitive supports dim scroll hints and bolder action bars.
+func renderBottomBorder(width int, footer string) string {
+	border := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBrightBlack))
+	if footer == "" {
+		fill := width - 2
+		if fill < 1 {
+			fill = 1
+		}
+		return border.Render("╰" + strings.Repeat("─", fill) + "╯")
+	}
+	rw := lipgloss.Width(footer)
+	maxFooter := width - 7
+	if maxFooter < 1 {
+		maxFooter = 1
+	}
+	if rw > maxFooter {
+		footer = clipStyledToWidth(footer, maxFooter)
+		rw = lipgloss.Width(footer)
+	}
+	trail := width - rw - 6
+	if trail < 1 {
+		trail = 1
+	}
+	return border.Render("╰── ") + footer + " " + border.Render(strings.Repeat("─", trail)+"╯")
+}
+
+// clipStyledToWidth shortens a styled string so its visible width fits.
+// ANSI escapes are kept verbatim; visible runes are dropped from the right
+// until the display width is within budget.
+func clipStyledToWidth(s string, max int) string {
+	if max <= 0 || lipgloss.Width(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+		if lipgloss.Width(string(runes)) <= max {
+			return string(runes)
+		}
+	}
+	return ""
+}
+
+func titleStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiCyan))
+}
+
+func metaStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBrightBlack))
+}
+
+func actionBarStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiBlue))
+}
+
+func errorStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
+}
+
+// actionVerbs returns the human-readable verbs for the recommendation's
+// comment + state change combination, in the order they will be applied.
+func actionVerbs(entry Entry) []string {
+	var verbs []string
+	if strings.TrimSpace(entry.DraftComment) != "" {
+		verbs = append(verbs, "comment")
+	}
+	switch entry.StateChange {
+	case sharedtypes.StateChangeClose:
+		verbs = append(verbs, "close")
+	case sharedtypes.StateChangeMerge:
+		verbs = append(verbs, "merge")
+	case sharedtypes.StateChangeRequestChanges:
+		verbs = append(verbs, "request changes")
+	}
+	return verbs
+}
+
+func emptyFallback(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func renderApprovalError(message string) string {
+	if strings.TrimSpace(message) == "" {
+		return ""
+	}
+	return errorStyle().Render("Last approval failed: " + message)
+}
+
+func formatTokens(count int) string {
+	if count >= 1000 {
+		whole := count / 1000
+		tenth := (count % 1000) / 100
+		return fmt.Sprintf("%d.%dk", whole, tenth)
+	}
+	return fmt.Sprintf("%d", count)
+}
+
+func SortEntries(entries []Entry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].RepoID != entries[j].RepoID {
+			return entries[i].RepoID < entries[j].RepoID
+		}
+		return entries[i].Number < entries[j].Number
+	})
+}
+
+func (m *Model) dismissCurrent() tea.Cmd {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	entry := m.entries[m.cursor]
+	if cmd, blocked := m.guardConflict(entry, "skip"); blocked {
+		return cmd
+	}
+	if m.dismiss == nil {
+		m.removeEntries([]int{m.cursor})
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("skipped %s #%d", entry.RepoID, entry.Number)})
+		return nil
+	}
+	return m.startAction(entry, "skip", func() tea.Msg {
+		return actionFinishedMsg{
+			verb:             "skip",
+			recommendationID: entry.RecommendationID,
+			err:              m.dismiss([]Entry{entry}),
+		}
+	})
+}
+
+func (m *Model) removeEntries(indices []int) {
+	if len(indices) == 0 {
+		return
+	}
+	remove := make(map[int]struct{}, len(indices))
+	for _, index := range indices {
+		remove[index] = struct{}{}
+	}
+	kept := m.entries[:0]
+	for index, entry := range m.entries {
+		if _, ok := remove[index]; ok {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	m.entries = kept
+	if m.cursor >= len(m.entries) && len(m.entries) > 0 {
+		m.cursor = len(m.entries) - 1
+	}
+	if len(m.entries) == 0 {
+		m.cursor = 0
+	}
+}
+
+func scheduleRefresh() tea.Cmd {
+	return tea.Tick(refreshInterval, func(time.Time) tea.Msg {
+		return refreshTickMsg{}
+	})
+}
+
+func waitForNotification(notify <-chan struct{}) tea.Cmd {
+	if notify == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if _, ok := <-notify; !ok {
+			return nil
+		}
+		return notifyReloadMsg{}
+	}
+}
+
+func runReload(reload func() ([]Entry, error)) tea.Cmd {
+	return func() tea.Msg {
+		entries, err := reload()
+		return reloadedEntriesMsg{Entries: entries, Err: err}
+	}
+}
+
+func (m *Model) applyReload(entries []Entry) {
+	currentID := ""
+	if m.cursor >= 0 && m.cursor < len(m.entries) {
+		currentID = m.entries[m.cursor].RecommendationID
+	}
+
+	editedByID := make(map[string]Entry)
+	for _, entry := range m.entries {
+		entry.CommitEdits()
+		if entry.Edited() || entry.ActiveOption > 0 {
+			editedByID[entry.RecommendationID] = entry
+		}
+	}
+
+	m.entries = append(m.entries[:0], entries...)
+	newCursor := 0
+	foundCursor := false
+	for i := range m.entries {
+		if prev, ok := editedByID[m.entries[i].RecommendationID]; ok {
+			// Preserve in-progress edits and active-option selection.
+			// Match options by ID so additions or reorderings on the
+			// server side don't clobber user edits. When the prior
+			// entry had no Options (legacy callers), fall back to the
+			// mirror fields and apply them to the active option.
+			if len(prev.Options) > 0 && len(m.entries[i].Options) > 0 {
+				byID := make(map[string]EntryOption, len(prev.Options))
+				for _, o := range prev.Options {
+					byID[o.ID] = o
+				}
+				for j := range m.entries[i].Options {
+					if p, ok := byID[m.entries[i].Options[j].ID]; ok && p.Edited() {
+						m.entries[i].Options[j].StateChange = p.StateChange
+						m.entries[i].Options[j].ProposedLabels = append([]string(nil), p.ProposedLabels...)
+						m.entries[i].Options[j].DraftComment = p.DraftComment
+					}
+				}
+				if prev.ActiveOption < len(m.entries[i].Options) {
+					m.entries[i].ActiveOption = prev.ActiveOption
+				}
+			}
+			m.entries[i].SyncActive()
+			// Always restore the user's mirror fields when any edit was
+			// in progress - even fields that weren't directly edited
+			// should not be clobbered by a partial server refresh.
+			m.entries[i].StateChange = prev.StateChange
+			m.entries[i].OriginalStateChange = prev.OriginalStateChange
+			m.entries[i].ProposedLabels = append([]string(nil), prev.ProposedLabels...)
+			m.entries[i].OriginalProposedLabels = append([]string(nil), prev.OriginalProposedLabels...)
+			m.entries[i].DraftComment = prev.DraftComment
+			m.entries[i].OriginalDraftComment = prev.OriginalDraftComment
+		}
+		if !foundCursor && currentID != "" && m.entries[i].RecommendationID == currentID {
+			newCursor = i
+			foundCursor = true
+		}
+	}
+
+	if len(m.entries) == 0 {
+		m.cursor = 0
+		return
+	}
+	if foundCursor {
+		m.cursor = newCursor
+		return
+	}
+	if m.cursor >= len(m.entries) {
+		m.cursor = len(m.entries) - 1
+		return
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+}

@@ -1,0 +1,200 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+const quickStart = `$ ezoss init --repo kunchenguid/ezoss --agent auto --merge-method squash
+$ ezoss daemon start --mock
+$ ezoss status
+$ ezoss list
+$ ezoss`;
+
+const configExample = `agent: auto
+poll_interval: 5m
+stale_threshold: 30d
+merge_method: merge
+repos:
+  - kunchenguid/ezoss
+sync_labels:
+  waiting_on: true
+  stale: true`;
+
+const installGo = `go install github.com/kunchenguid/ezoss/cmd/ezoss@latest`;
+const installShell = `curl -fsSL https://raw.githubusercontent.com/kunchenguid/ezoss/main/install.sh | sh`;
+const installPowerShell = `iwr https://raw.githubusercontent.com/kunchenguid/ezoss/main/install.ps1 -useb | iex`;
+const installSource = `git clone https://github.com/kunchenguid/ezoss.git
+cd ezoss
+make build
+./bin/ezoss --version`;
+---
+
+<BaseLayout
+  title="ezoss docs"
+  description="Docs for ezoss, the maintainer-side GitHub triage orchestrator."
+>
+  <section class="hero">
+    <p class="eyebrow">ezoss docs</p>
+    <div class="hero-copy">
+      <h1>Run your open source inbox like a review queue, not a background tax.</h1>
+      <p>
+        <code>ezoss</code> polls GitHub for untriaged issues and PRs, asks your coding
+        agent for a structured recommendation, stores the private draft locally, and lets you
+        approve, edit, skip, or rerun from a terminal inbox before anything touches GitHub.
+      </p>
+    </div>
+    <div class="hero-actions">
+      <a class="button primary" href="https://github.com/kunchenguid/ezoss">View on GitHub</a>
+      <a class="button secondary" href="#install">Install</a>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-header">
+      <h2>Core loop</h2>
+      <p>
+        The tool is deliberately maintainer-first. GitHub stays the visible source of truth,
+        while the local SQLite database keeps draft comments, agent rationale, and token usage
+        private until you explicitly approve an action.
+      </p>
+    </div>
+    <div class="grid cards">
+      <article class="card">
+        <h3>1. Poll GitHub</h3>
+        <p>Fetch issues and PRs missing the <code>ezoss/triaged</code> label.</p>
+      </article>
+      <article class="card">
+        <h3>2. Ask your agent</h3>
+        <p>Claude, Codex, Rovo Dev, or OpenCode returns a structured recommendation.</p>
+      </article>
+      <article class="card">
+        <h3>3. Review privately</h3>
+        <p>Approve, edit, skip, or rerun from the local TUI inbox without exposing drafts.</p>
+      </article>
+      <article class="card">
+        <h3>4. Sync the outcome</h3>
+        <p>Approved actions execute with <code>gh</code> and mirror triage labels back to GitHub.</p>
+      </article>
+    </div>
+    <p class="section-note">
+      PRs without prior agreement can pause for maintainer approval before any code review happens.
+      The agent can surface that as <code>request_approval_for_review</code> so you decide whether
+      to review the approach first or go straight into code review.
+    </p>
+  </section>
+
+  <section class="section grid two-column">
+    <div class="panel">
+      <div class="section-header">
+        <h2>Quick start</h2>
+        <p>Initialize one or more repos, launch the daemon, and open the inbox.</p>
+      </div>
+      <pre><code>{quickStart}</code></pre>
+    </div>
+    <div class="panel">
+      <div class="section-header">
+        <h2>Requirements</h2>
+      </div>
+      <ul>
+        <li><code>gh auth login</code> already configured for the GitHub account you want to use.</li>
+        <li>One supported agent backend installed locally.</li>
+        <li>Writable state directory under <code>~/.ezoss</code>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section grid two-column">
+    <div class="panel">
+      <div class="section-header">
+        <h2>Configuration</h2>
+        <p>
+          Global config lives in <code>~/.ezoss/config.yaml</code>. Per-repo overrides can
+          live in <code>.ezoss.yaml</code>, and <code>~/.ezoss/AGENTS.md</code> is
+          appended to every triage prompt. <code>ezoss/triaged</code> is always managed
+          automatically, while <code>sync_labels</code> controls the optional waiting and stale
+          mirrors.
+        </p>
+      </div>
+      <pre><code>{configExample}</code></pre>
+    </div>
+    <div class="panel">
+      <div class="section-header">
+        <h2>What the inbox can do</h2>
+      </div>
+      <div class="command-list">
+        <div class="command-row">
+          <strong><code>a</code> approve</strong>
+          Execute the recommended GitHub action and sync triage labels.
+        </div>
+        <div class="command-row">
+          <strong><code>e</code> edit</strong>
+          Open the draft in your editor before approval.
+        </div>
+        <div class="command-row">
+          <strong><code>s</code> skip</strong>
+          Dismiss the recommendation and stamp the GitHub triaged label.
+        </div>
+        <div class="command-row">
+          <strong><code>r</code> rerun</strong>
+          Re-triage the item and replace the active recommendation in place.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" class="section">
+    <div class="section-header">
+      <h2>Install</h2>
+      <p>
+        Pick the install path that matches your environment. GitHub releases also ship platform
+        archives plus <code>checksums.txt</code> for manual SHA-256 verification.
+      </p>
+    </div>
+    <div class="grid cards">
+      <article class="card">
+        <h3>Go install</h3>
+        <pre><code>{installGo}</code></pre>
+      </article>
+      <article class="card">
+        <h3>macOS / Linux</h3>
+        <pre><code>{installShell}</code></pre>
+      </article>
+      <article class="card">
+        <h3>Windows PowerShell</h3>
+        <pre><code>{installPowerShell}</code></pre>
+      </article>
+      <article class="card">
+        <h3>From source</h3>
+        <pre><code>{installSource}</code></pre>
+      </article>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-header">
+      <h2>Important commands</h2>
+      <p>The CLI is meant to be usable both interactively and from shell scripts.</p>
+    </div>
+    <div class="grid cards">
+      <article class="card">
+        <h3><code>ezoss doctor</code></h3>
+        <p>Check GitHub auth, agent availability, daemon health, and local database access.</p>
+      </article>
+      <article class="card">
+        <h3><code>ezoss status</code></h3>
+        <p>Print a one-line summary of configured repos and pending recommendations.</p>
+      </article>
+      <article class="card">
+        <h3><code>ezoss list</code></h3>
+        <p>Dump pending recommendations as text without opening the TUI.</p>
+      </article>
+      <article class="card">
+        <h3><code>ezoss update</code></h3>
+        <p>Download and replace the running binary with the latest release for the current platform.</p>
+      </article>
+    </div>
+  </section>
+
+  <footer>
+    <a href="https://github.com/kunchenguid/ezoss/blob/main/LICENSE">MIT licensed</a>. Release
+    assets and installers live on GitHub, and the <a href="https://github.com/kunchenguid/ezoss">source
+    repo</a> is public.
+  </footer>
+</BaseLayout>
