@@ -2,9 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +21,12 @@ import (
 	"github.com/kunchenguid/ezoss/internal/telemetry"
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
 )
+
+var statusANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripStatusANSI(s string) string {
+	return statusANSIPattern.ReplaceAllString(s, "")
+}
 
 func TestRootCommandIncludesStatusSubcommand(t *testing.T) {
 	cmd := NewRootCmd()
@@ -461,6 +470,92 @@ func TestStatusCommandTracksTelemetryEvent(t *testing.T) {
 	}
 }
 
+func TestStatusCommandLaunchesRealtimeTUIWhenInteractive(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalRunStatusTUI := runStatusTUI
+	originalIsInteractiveTerminal := isInteractiveTerminal
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		runStatusTUI = originalRunStatusTUI
+		isInteractiveTerminal = originalIsInteractiveTerminal
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	isInteractiveTerminal = func() bool { return true }
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
+		Repos: []string{"acme/widgets"},
+	}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	var gotInterval time.Duration
+	runStatusTUI = func(_ context.Context, _ io.Writer, _ io.Writer, opts statusTUIOptions) error {
+		gotInterval = opts.RefreshInterval
+		data, err := opts.Collect()
+		if err != nil {
+			return err
+		}
+		if len(data.repos) != 1 || data.repos[0] != "acme/widgets" {
+			t.Fatalf("collected repos = %#v, want acme/widgets", data.repos)
+		}
+		return nil
+	}
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"status"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if gotInterval != 100*time.Millisecond {
+		t.Fatalf("refresh interval = %s, want 100ms", gotInterval)
+	}
+	if got := buf.String(); got != "" {
+		t.Fatalf("output = %q, want TUI to own rendering", got)
+	}
+}
+
+func TestStatusTUIViewUsesMainTUIBoxStyle(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	m := newStatusTUIModel(statusTUIOptions{Now: func() time.Time { return now }})
+	m.data = statusData{
+		daemonState: daemon.StateRunning,
+		daemonPID:   12345,
+		repos:       []string{"acme/widgets"},
+		sync: &ipc.SyncStatusResult{
+			Repos: []ipc.RepoSyncStatus{{Repo: "acme/widgets", LastSyncEnd: now.Add(-time.Minute)}},
+		},
+	}
+	m.hasData = true
+	m.width = 80
+
+	view := stripStatusANSI(m.View())
+	for _, want := range []string{
+		"╭─ Status ",
+		"│ daemon: running (pid 12345)",
+		"│   ✓ acme/widgets  synced",
+		"╰── q quit  ? help ",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q in:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{
+		"ezoss status",
+		"refresh 10fps",
+	} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("View() should not include standalone header %q in:\n%s", unwanted, view)
+		}
+	}
+}
+
 func TestRenderRichStatusDaemonStoppedShowsHint(t *testing.T) {
 	d := statusData{
 		daemonState: daemon.StateStopped,
@@ -526,7 +621,7 @@ func TestRenderRichStatusPerRepoLines(t *testing.T) {
 		"Sync: cycle 4 finished 2m ago",
 		"next in 8m",
 		"✓ acme/done",
-		"synced 2m ago (450ms)",
+		"synced",
 		"→ acme/syncing",
 		"syncing... (3s in)",
 		"·",          // pending marker for never-synced
@@ -537,6 +632,14 @@ func TestRenderRichStatusPerRepoLines(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("render missing %q\n--- got ---\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"synced 2m ago",
+		"(450ms)",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("render should not include %q\n--- got ---\n%s", unwanted, got)
 		}
 	}
 }
