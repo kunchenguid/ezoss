@@ -80,7 +80,7 @@ The details pane always shows cumulative token usage for the item - every triage
 
 ## State model
 
-**GitHub is the source of truth. Local DB only holds things that should stay private** - draft recommendations, agent rationales, token counts, and the approval audit trail. Anything the maintainer would want a co-maintainer to see (triage status, waiting-on signals, resolution) lives on GitHub as labels or native state.
+**GitHub is the source of truth. Local DB only holds things that should stay private** - draft recommendations, fix prompts, agent rationales, token counts, and the approval audit trail. Anything the maintainer would want a co-maintainer to see (triage status, waiting-on signals, resolution) lives on GitHub as labels or native state.
 
 The "have we triaged this yet" signal is a single GitHub label: **`ezoss/triaged`**. Applied by the orchestrator after the maintainer approves and the action executes. If anyone removes it, the next poll picks the item up again and the old recommendation is superseded.
 

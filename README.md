@@ -49,7 +49,7 @@ Docs: https://kunchenguid.github.io/ezoss/
 
 - **Private by default** - agent rationale, draft comments, fix prompts, and token usage stay in local SQLite until you approve an action.
 - **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.
-- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/edit/rerun flows already work end to end.
+- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/copy-prompt/edit/rerun flows already work end to end.
 - **PRs can pause before review** - PRs without prior agreement can be routed into a maintainer approval step before code review.
 
 ## Quick Start
