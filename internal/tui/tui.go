@@ -1313,12 +1313,12 @@ func (m Model) cardMaxScroll(boxHeight int) int {
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
+	if len(wrapped) <= contentHeight {
+		return 0
+	}
 	visibleHeight := contentHeight - 1
 	if visibleHeight < 1 {
 		visibleHeight = 1
-	}
-	if len(wrapped) <= visibleHeight {
-		return 0
 	}
 	return len(wrapped) - visibleHeight
 }

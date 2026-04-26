@@ -1527,6 +1527,24 @@ func TestCardScrollResetsWhenCurrentCardIsReplaced(t *testing.T) {
 	}
 }
 
+func TestCardMaxScrollDoesNotReserveHintLineWhenCardExactlyFits(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:       "acme/widgets",
+		Number:       1,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "title",
+		Rationale:    "rationale",
+		DraftComment: "draft",
+	}})
+	m.width = 80
+	m.height = 20
+	boxHeight := len(m.cardWrappedLines(80)) + 2
+
+	if got := m.cardMaxScroll(boxHeight); got != 0 {
+		t.Fatalf("cardMaxScroll for exactly fitting card = %d, want 0", got)
+	}
+}
+
 // extractDetailsBodyLines returns the body lines of the focused-item card,
 // with `│ ` and trailing ` │` borders stripped. The card title carries the
 // repo+item identifier so we look for the first ╭ that's followed by a
