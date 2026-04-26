@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides shared guidance for coding agents working in this repository. `CLAUDE.md` points here for Claude Code compatibility.
 
 ## Project
 
@@ -24,7 +24,7 @@ make demo               # vhs demo.tape (requires VHS)
 make docs-build         # npm ci + build the Astro docs site under ./docs
 ```
 
-CI runs `fmt-check`, `lint`, `test`, `build`, plus install-script smoke tests on Ubuntu and macOS. `make fmt-check` is the same gate, so run it locally before pushing.
+CI runs `fmt-check`, `lint`, `test`, and `build` on Ubuntu, macOS, and Windows; installer smoke tests for shell and PowerShell; packaged archive smoke checks; release archive verification; and the docs build. `make fmt-check` is the same formatting gate, so run it locally before pushing.
 
 `make install` triggers `ezoss daemon restart` after install. Set `EZOSS_SKIP_DAEMON=1` to skip that side effect.
 
