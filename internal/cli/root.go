@@ -86,6 +86,9 @@ var lookPath = exec.LookPath
 var newAgent = func(name sharedtypes.AgentName, bin string) (triageAgent, error) {
 	return agent.New(name, bin)
 }
+var prepareInvestigationCheckout = func(ctx context.Context, root string, repoID string) (string, error) {
+	return preparePersistentInvestigationCheckout(ctx, root, repoID, runGitCommand)
+}
 var newLabelEditor = func() labelEditor {
 	return ghclient.New(nil)
 }
@@ -387,7 +390,7 @@ func newDaemonRunCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("load daemon triage config: %w", err)
 				}
-				runner, err := newLiveTriageRunner(triageCfg.Agent)
+				runner, err := newLiveTriageRunner(p.Root(), triageCfg.Agent)
 				if err != nil {
 					return fmt.Errorf("create triage runner: %w", err)
 				}
@@ -2474,7 +2477,7 @@ func newManualTriagePoller(ctx context.Context, root string, database *db.DB, re
 		return daemon.Poller{}, fmt.Errorf("load item: %w", err)
 	}
 
-	runner, err := newLiveTriageRunner(cfg.Agent)
+	runner, err := newLiveTriageRunner(root, cfg.Agent)
 	if err != nil {
 		return daemon.Poller{}, fmt.Errorf("create triage runner: %w", err)
 	}
@@ -2547,7 +2550,7 @@ func loadNearestRepoConfig(dir string) (*config.RepoConfig, error) {
 	}
 }
 
-func newLiveTriageRunner(agentName sharedtypes.AgentName) (*liveTriageRunner, error) {
+func newLiveTriageRunner(stateRoot string, agentName sharedtypes.AgentName) (*liveTriageRunner, error) {
 	resolvedName, bin, err := agent.Resolve(agentName, lookPath)
 	if err != nil {
 		return nil, err
@@ -2556,13 +2559,14 @@ func newLiveTriageRunner(agentName sharedtypes.AgentName) (*liveTriageRunner, er
 	if err != nil {
 		return nil, fmt.Errorf("resolve working directory: %w", err)
 	}
-	return &liveTriageRunner{name: resolvedName, bin: bin, cwd: cwd}, nil
+	return &liveTriageRunner{name: resolvedName, bin: bin, cwd: cwd, stateRoot: stateRoot}, nil
 }
 
 type liveTriageRunner struct {
-	name sharedtypes.AgentName
-	bin  string
-	cwd  string
+	name      sharedtypes.AgentName
+	bin       string
+	cwd       string
+	stateRoot string
 }
 
 func (r *liveTriageRunner) Triage(ctx context.Context, req daemon.TriageRequest) (*daemon.TriageResult, error) {
@@ -2572,9 +2576,22 @@ func (r *liveTriageRunner) Triage(ctx context.Context, req daemon.TriageRequest)
 	}
 	defer agentRunner.Close()
 
+	cwd := r.cwd
+	prompt := req.Prompt
+	if r.stateRoot != "" && strings.TrimSpace(req.Item.Repo) != "" {
+		checkout, err := prepareInvestigationCheckout(ctx, r.stateRoot, req.Item.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("prepare investigation checkout: %w", err)
+		}
+		if checkout != "" {
+			cwd = checkout
+			prompt = promptWithInvestigationCheckout(prompt, checkout)
+		}
+	}
+
 	result, err := agentRunner.Run(ctx, agent.RunOpts{
-		Prompt:     req.Prompt,
-		CWD:        r.cwd,
+		Prompt:     prompt,
+		CWD:        cwd,
 		JSONSchema: cloneJSON(req.Schema),
 	})
 	if err != nil {
@@ -2596,6 +2613,83 @@ func (r *liveTriageRunner) Triage(ctx context.Context, req daemon.TriageRequest)
 		TokensIn:       result.Usage.TotalInputTokens(),
 		TokensOut:      result.Usage.OutputTokens,
 	}, nil
+}
+
+type gitCommandRunner func(ctx context.Context, dir string, args ...string) ([]byte, error)
+
+func runGitCommand(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+func preparePersistentInvestigationCheckout(ctx context.Context, root string, repoID string, run gitCommandRunner) (string, error) {
+	repoID = strings.TrimSpace(repoID)
+	if repoID == "" || !strings.Contains(repoID, "/") {
+		return "", fmt.Errorf("invalid repo %q", repoID)
+	}
+	if run == nil {
+		run = runGitCommand
+	}
+
+	investigationsDir := filepath.Join(root, "investigations")
+	checkout := filepath.Join(investigationsDir, investigationRepoDirName(repoID))
+	if err := os.MkdirAll(investigationsDir, 0o755); err != nil {
+		return "", fmt.Errorf("create investigations dir: %w", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(checkout, ".git")); err != nil {
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("inspect checkout: %w", err)
+		}
+		if err := os.RemoveAll(checkout); err != nil {
+			return "", fmt.Errorf("remove invalid checkout: %w", err)
+		}
+		cloneURL := "https://github.com/" + repoID + ".git"
+		if _, err := run(ctx, investigationsDir, "clone", cloneURL, checkout); err != nil {
+			return "", err
+		}
+	}
+
+	if _, err := run(ctx, checkout, "fetch", "--prune", "origin"); err != nil {
+		return "", err
+	}
+	_, _ = run(ctx, checkout, "remote", "set-head", "origin", "-a")
+	defaultRef := "origin/main"
+	if out, err := run(ctx, checkout, "rev-parse", "--abbrev-ref", "origin/HEAD"); err == nil {
+		ref := strings.TrimSpace(string(out))
+		if ref != "" && ref != "origin/HEAD" {
+			defaultRef = ref
+		}
+	}
+	if _, err := run(ctx, checkout, "reset", "--hard"); err != nil {
+		return "", err
+	}
+	if _, err := run(ctx, checkout, "clean", "-fdx"); err != nil {
+		return "", err
+	}
+	if _, err := run(ctx, checkout, "checkout", "--detach", defaultRef); err != nil {
+		return "", err
+	}
+	if _, err := run(ctx, checkout, "reset", "--hard", defaultRef); err != nil {
+		return "", err
+	}
+	if _, err := run(ctx, checkout, "clean", "-fdx"); err != nil {
+		return "", err
+	}
+	return checkout, nil
+}
+
+func investigationRepoDirName(repoID string) string {
+	return strings.NewReplacer("/", "__", "\\", "__", ":", "_").Replace(repoID)
+}
+
+func promptWithInvestigationCheckout(prompt string, checkout string) string {
+	return strings.TrimSpace(prompt) + "\n\nRepository checkout for investigation:\n" + checkout + "\n\nThis checkout is managed by ezoss for daemon-initiated agent work. Use it as the local repository context for code investigation. Do not push, publish branches, open pull requests, or mutate GitHub from this checkout. Local edits are scratch and will be discarded before a future agent run."
 }
 
 func cloneJSON(data json.RawMessage) json.RawMessage {

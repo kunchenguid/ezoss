@@ -224,6 +224,9 @@ func TestPromptIncludesURLAndAgentInstructions(t *testing.T) {
 	if !strings.Contains(prompt, "structured JSON") {
 		t.Fatalf("prompt missing structured-output instruction: %q", prompt)
 	}
+	if strings.Contains(prompt, "You can clone") {
+		t.Fatalf("prompt should not encourage ad hoc clones now that ezoss provides a managed checkout: %q", prompt)
+	}
 }
 
 func TestPromptDescribesDecomposedActionFields(t *testing.T) {

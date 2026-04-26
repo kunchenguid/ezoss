@@ -103,6 +103,7 @@ func TestDaemonRunCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 	originalNewDaemonTriageLister := newDaemonTriageLister
 	originalNewAgent := newAgent
 	originalLookPath := lookPath
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
 	originalInstallLogPipe := installTimestampedLogPipe
 	t.Cleanup(func() {
 		newPaths = originalNewPaths
@@ -110,6 +111,7 @@ func TestDaemonRunCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 		newDaemonTriageLister = originalNewDaemonTriageLister
 		newAgent = originalNewAgent
 		lookPath = originalLookPath
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
 		installTimestampedLogPipe = originalInstallLogPipe
 	})
 
@@ -118,6 +120,12 @@ func TestDaemonRunCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 	}
 	installTimestampedLogPipe = func(_ io.Writer) (func(), error) {
 		return func() {}, nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, root string, repo string) (string, error) {
+		if root != tempRoot || repo != "acme/widgets" {
+			t.Fatalf("prepareInvestigationCheckout(root, repo) = (%q, %q), want (%q, %q)", root, repo, tempRoot, "acme/widgets")
+		}
+		return t.TempDir(), nil
 	}
 	newDaemonTriageLister = func() daemonTriageLister {
 		return stubDaemonTriageLister{items: []ghclient.Item{{
@@ -226,6 +234,7 @@ func TestDaemonRunCommandUsesRepoOverrideForSingleConfiguredRepo(t *testing.T) {
 	originalNewAgent := newAgent
 	originalLookPath := lookPath
 	originalCurrentWorkingDir := currentWorkingDir
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
 	originalInstallLogPipe := installTimestampedLogPipe
 	t.Cleanup(func() {
 		newPaths = originalNewPaths
@@ -234,6 +243,7 @@ func TestDaemonRunCommandUsesRepoOverrideForSingleConfiguredRepo(t *testing.T) {
 		newAgent = originalNewAgent
 		lookPath = originalLookPath
 		currentWorkingDir = originalCurrentWorkingDir
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
 		installTimestampedLogPipe = originalInstallLogPipe
 	})
 
@@ -256,6 +266,12 @@ func TestDaemonRunCommandUsesRepoOverrideForSingleConfiguredRepo(t *testing.T) {
 		}}}
 	}
 	currentWorkingDir = func() (string, error) {
+		return repoDir, nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, root string, repo string) (string, error) {
+		if root != tempRoot || repo != "acme/widgets" {
+			t.Fatalf("prepareInvestigationCheckout(root, repo) = (%q, %q), want (%q, %q)", root, repo, tempRoot, "acme/widgets")
+		}
 		return repoDir, nil
 	}
 
