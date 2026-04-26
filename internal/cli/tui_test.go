@@ -1389,7 +1389,7 @@ func TestLoadInboxEntriesPopulatesGitHubURLForIssuesAndPRs(t *testing.T) {
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "acme/widgets#42", Agent: sharedtypes.AgentClaude,
-		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium, FixPrompt: "Fix https://github.com/acme/widgets/issues/42 and add a regression test."}}}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
@@ -1411,6 +1411,13 @@ func TestLoadInboxEntriesPopulatesGitHubURLForIssuesAndPRs(t *testing.T) {
 	}
 	if got, want := urls["acme/widgets#7"], "https://github.com/acme/widgets/pull/7"; got != want {
 		t.Fatalf("PR URL = %q, want %q", got, want)
+	}
+	prompts := map[string]string{}
+	for _, entry := range entries {
+		prompts[fmt.Sprintf("%s#%d", entry.RepoID, entry.Number)] = entry.FixPrompt
+	}
+	if got := prompts["acme/widgets#42"]; !strings.Contains(got, "https://github.com/acme/widgets/issues/42") {
+		t.Fatalf("issue FixPrompt = %q, want original issue URL", got)
 	}
 }
 
