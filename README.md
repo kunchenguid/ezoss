@@ -47,7 +47,7 @@ You stay in control. The agent drafts. The maintainer decides.
 
 Docs: https://kunchenguid.github.io/ezoss/
 
-- **Private by default** - agent rationale, draft comments, and token usage stay in local SQLite until you approve an action.
+- **Private by default** - agent rationale, draft comments, fix prompts, and token usage stay in local SQLite until you approve an action.
 - **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.
 - **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/edit/rerun flows already work end to end.
 - **PRs can pause before review** - PRs without prior agreement can be routed into a maintainer approval step before code review.
@@ -141,7 +141,7 @@ Live triage requires `gh`, `git`, and one supported agent backend available loca
 ```
 
 - **GitHub is the visible truth** - `ezoss/triaged` is the public signal that an item has already been handled.
-- **Local DB is the private memory** - drafts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
+- **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
 - **Polling is deliberate** - v1 avoids webhook complexity and just re-triages when the GitHub label disappears.
 - **Approval is explicit** - nothing gets posted, closed, merged, or labeled until you do it from the inbox.

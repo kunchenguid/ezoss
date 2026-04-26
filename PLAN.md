@@ -147,6 +147,21 @@ CREATE TABLE recommendations (
     superseded_at    INTEGER
 );
 
+CREATE TABLE recommendation_options (
+    id                 TEXT PRIMARY KEY,
+    recommendation_id  TEXT NOT NULL REFERENCES recommendations(id) ON DELETE CASCADE,
+    position           INTEGER NOT NULL,
+    state_change       TEXT,
+    rationale          TEXT,
+    draft_comment      TEXT,
+    fix_prompt         TEXT,
+    proposed_labels    TEXT,
+    confidence         TEXT,
+    waiting_on         TEXT,
+    followups          TEXT,
+    created_at         INTEGER
+);
+
 CREATE TABLE approvals (
     id                 TEXT PRIMARY KEY,
     recommendation_id  TEXT NOT NULL REFERENCES recommendations(id),
