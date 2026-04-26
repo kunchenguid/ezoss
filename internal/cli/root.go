@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -2631,11 +2632,32 @@ func acquireInvestigationCheckoutLock(ctx context.Context, root string, repoID s
 	lockPath := filepath.Join(lockDir, investigationRepoDirName(repoID)+".lock")
 
 	for {
-		err := os.Mkdir(lockPath, 0o755)
+		file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if err == nil {
+			if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
+				_ = file.Close()
+				_ = os.Remove(lockPath)
+				return nil, fmt.Errorf("write lock owner: %w", err)
+			}
+			if err := file.Close(); err != nil {
+				_ = os.Remove(lockPath)
+				return nil, fmt.Errorf("close lock owner: %w", err)
+			}
 			return func() error {
 				return os.Remove(lockPath)
 			}, nil
+		}
+		if !os.IsExist(err) {
+			if _, statErr := os.Stat(lockPath); statErr != nil {
+				return nil, fmt.Errorf("acquire lock: %w", err)
+			}
+		}
+		removed, staleErr := removeStaleInvestigationCheckoutLock(lockPath)
+		if staleErr != nil {
+			return nil, staleErr
+		}
+		if removed {
+			continue
 		}
 		if !os.IsExist(err) {
 			return nil, fmt.Errorf("acquire lock: %w", err)
@@ -2647,6 +2669,53 @@ func acquireInvestigationCheckoutLock(ctx context.Context, root string, repoID s
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+func removeStaleInvestigationCheckoutLock(lockPath string) (bool, error) {
+	info, err := os.Stat(lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("inspect lock: %w", err)
+	}
+	if info.IsDir() {
+		if err := os.RemoveAll(lockPath); err != nil {
+			return false, fmt.Errorf("remove stale lock: %w", err)
+		}
+		return true, nil
+	}
+
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("read lock owner: %w", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			return false, fmt.Errorf("remove stale lock: %w", err)
+		}
+		return true, nil
+	}
+	if processExists(pid) {
+		return false, nil
+	}
+	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("remove stale lock: %w", err)
+	}
+	return true, nil
+}
+
+func processExists(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = process.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 type gitCommandRunner func(ctx context.Context, dir string, env []string, args ...string) ([]byte, error)
