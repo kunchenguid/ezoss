@@ -41,6 +41,10 @@ If you maintain open source long enough, every new issue and PR starts with the 
 
 You stay in control. The agent drafts. The maintainer decides.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kunchenguid/ezoss/main/demo.gif" alt="ezoss demo" width="800" />
+</p>
+
 Docs: https://kunchenguid.github.io/ezoss/
 
 - **Private by default** - agent rationale, draft comments, and token usage stay in local SQLite until you approve an action.
