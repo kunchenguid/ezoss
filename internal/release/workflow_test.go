@@ -771,6 +771,25 @@ func TestCIWorkflowIncludesWindowsBuildSmokeCheck(t *testing.T) {
 	}
 }
 
+func TestCIWorkflowPinsWindowsTempDirectoryToRunnerTemp(t *testing.T) {
+	workflowPath := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
+	data, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
+	}
+
+	text := string(data)
+	checks := []string{
+		"windows-build:\n    runs-on: windows-latest\n    env:\n      TMP: ${{ runner.temp }}\n      TEMP: ${{ runner.temp }}",
+		"run: go test ./...",
+	}
+	for _, want := range checks {
+		if !strings.Contains(text, want) {
+			t.Fatalf("ci workflow missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestCIWorkflowRunsFormattingAndVetChecksOnWindows(t *testing.T) {
 	workflowPath := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
 	data, err := os.ReadFile(workflowPath)
