@@ -18,10 +18,10 @@ import (
 )
 
 type Result struct {
-	Name   string
-	OK     bool
+	Name    string
+	OK      bool
 	Warning bool
-	Detail string
+	Detail  string
 }
 
 type Runner struct {

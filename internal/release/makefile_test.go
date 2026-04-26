@@ -35,7 +35,7 @@ func TestMakeBuildSucceedsWithoutPreexistingBinDirectory(t *testing.T) {
 		t.Fatalf("make build error = %v, output = %s", err, output)
 	}
 
-	if _, err := os.Stat(filepath.Join(worktree, "bin", "ezoss")); err != nil {
+	if _, err := os.Stat(filepath.Join(worktree, "bin", hostBinaryName())); err != nil {
 		t.Fatalf("expected built binary in bin/: %v", err)
 	}
 }
@@ -57,7 +57,7 @@ func TestMakeBuildEmbedsRequestedVersion(t *testing.T) {
 		t.Fatalf("make build VERSION=test-build error = %v, output = %s", err, output)
 	}
 
-	versionCmd := exec.Command(filepath.Join(worktree, "bin", "ezoss"), "--version")
+	versionCmd := exec.Command(filepath.Join(worktree, "bin", hostBinaryName()), "--version")
 	versionOutput, err := versionCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("built binary --version error = %v, output = %s", err, versionOutput)
@@ -90,7 +90,7 @@ func TestMakeInstallSucceedsWithFreshGOBIN(t *testing.T) {
 		t.Fatalf("make install error = %v, output = %s", err, output)
 	}
 
-	if _, err := os.Stat(filepath.Join(gobin, "ezoss")); err != nil {
+	if _, err := os.Stat(filepath.Join(gobin, hostBinaryName())); err != nil {
 		t.Fatalf("expected installed binary in GOBIN: %v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestMakeInstallEmbedsRequestedVersion(t *testing.T) {
 		t.Fatalf("make install VERSION=test-install error = %v, output = %s", err, output)
 	}
 
-	versionCmd := exec.Command(filepath.Join(gobin, "ezoss"), "--version")
+	versionCmd := exec.Command(filepath.Join(gobin, hostBinaryName()), "--version")
 	versionCmd.Env = append(os.Environ(), "EZOSS_NO_UPDATE_CHECK=1")
 	versionOutput, err := versionCmd.CombinedOutput()
 	if err != nil {
@@ -222,7 +222,7 @@ func TestMakeDistFallsBackToSHA256SumWhenShasumIsUnavailable(t *testing.T) {
 	toolPath := makeDistToolPathWithoutShasum(t)
 	cmd := exec.Command("make", "dist", "VERSION=test-sha256sum")
 	cmd.Dir = worktree
-	cmd.Env = append([]string{"PATH=" + toolPath}, filteredEnv(os.Environ(), "PATH")...)
+	cmd.Env = append([]string{"PATH=" + testPathWithoutShasum(t, toolPath), "GOROOT=" + runtime.GOROOT()}, filteredEnv(os.Environ(), "PATH", "GOROOT")...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("make dist with sha256sum fallback error = %v, output = %s", err, output)
@@ -260,6 +260,13 @@ func extractReleaseBinary(t *testing.T, distDir, archiveBase string) string {
 	}
 
 	return filepath.Join(extractDir, archiveBase, binaryName)
+}
+
+func hostBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "ezoss.exe"
+	}
+	return "ezoss"
 }
 
 func extractTarGz(t *testing.T, archivePath, dstDir string) {
@@ -474,7 +481,7 @@ func makeDistToolPathWithoutShasum(t *testing.T) string {
 	t.Helper()
 
 	dir := t.TempDir()
-	for _, name := range []string{"make", "go", "tar", "zip", "cp", "rm", "mkdir"} {
+	for _, name := range []string{"make", "go", "cp", "rm", "mkdir"} {
 		path, err := exec.LookPath(name)
 		if err != nil {
 			t.Fatalf("LookPath(%q) error = %v", name, err)
@@ -498,14 +505,44 @@ func makeDistToolPathWithoutShasum(t *testing.T) string {
 	return dir
 }
 
-func filteredEnv(env []string, key string) []string {
-	prefix := key + "="
-	filtered := make([]string, 0, len(env))
-	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
+func testPathWithoutShasum(t *testing.T, toolPath string) string {
+	t.Helper()
+
+	pathEntries := []string{toolPath}
+	for _, entry := range filepath.SplitList(os.Getenv("PATH")) {
+		if entry == "" {
 			continue
 		}
-		filtered = append(filtered, entry)
+		if _, err := os.Stat(filepath.Join(entry, "shasum")); err == nil {
+			continue
+		}
+		if runtime.GOOS == "windows" {
+			if _, err := os.Stat(filepath.Join(entry, "shasum.exe")); err == nil {
+				continue
+			}
+		}
+		pathEntries = append(pathEntries, entry)
+	}
+	return strings.Join(pathEntries, string(os.PathListSeparator))
+}
+
+func filteredEnv(env []string, keys ...string) []string {
+	prefixes := make([]string, 0, len(keys))
+	for _, key := range keys {
+		prefixes = append(prefixes, key+"=")
+	}
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		skip := false
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(entry, prefix) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			filtered = append(filtered, entry)
+		}
 	}
 
 	return filtered

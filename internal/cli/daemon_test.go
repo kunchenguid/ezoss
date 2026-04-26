@@ -141,11 +141,11 @@ func TestDaemonRunCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 		return stubTriageAgent{result: &agent.Result{
 			Output: mustDaemonJSON(t, triage.Recommendation{
 				Options: []triage.RecommendationOption{{
-					StateChange:    sharedtypes.StateChangeNone,
-					Rationale:      "Needs logs before debugging.",
-					WaitingOn:      sharedtypes.WaitingOnContributor,
-					DraftComment:   "Please share the daemon log around the crash.",
-					Confidence:     sharedtypes.ConfidenceMedium,
+					StateChange:  sharedtypes.StateChangeNone,
+					Rationale:    "Needs logs before debugging.",
+					WaitingOn:    sharedtypes.WaitingOnContributor,
+					DraftComment: "Please share the daemon log around the crash.",
+					Confidence:   sharedtypes.ConfidenceMedium,
 				}},
 			}),
 			Usage: agent.TokenUsage{InputTokens: 900, OutputTokens: 120},
@@ -268,11 +268,11 @@ func TestDaemonRunCommandUsesRepoOverrideForSingleConfiguredRepo(t *testing.T) {
 		return stubTriageAgent{result: &agent.Result{
 			Output: mustDaemonJSON(t, triage.Recommendation{
 				Options: []triage.RecommendationOption{{
-					StateChange:    sharedtypes.StateChangeNone,
-					Rationale:      "Needs logs before debugging.",
-					WaitingOn:      sharedtypes.WaitingOnContributor,
-					DraftComment:   "Please share the daemon log around the crash.",
-					Confidence:     sharedtypes.ConfidenceMedium,
+					StateChange:  sharedtypes.StateChangeNone,
+					Rationale:    "Needs logs before debugging.",
+					WaitingOn:    sharedtypes.WaitingOnContributor,
+					DraftComment: "Please share the daemon log around the crash.",
+					Confidence:   sharedtypes.ConfidenceMedium,
 				}},
 			}),
 			Usage: agent.TokenUsage{InputTokens: 900, OutputTokens: 120},
@@ -326,6 +326,9 @@ func TestDaemonRunCommandLoadsConfigAndStartsRuntime(t *testing.T) {
 		newPaths = originalNewPaths
 		runDaemonWithOptions = originalRunDaemon
 		installTimestampedLogPipe = originalInstallLogPipe
+	})
+	stubAgentLookPath(t, map[string]string{
+		"codex": "/usr/local/bin/codex",
 	})
 
 	newPaths = func() (*paths.Paths, error) {
@@ -430,4 +433,3 @@ func mustDaemonTime(t *testing.T, value string) time.Time {
 	}
 	return parsed
 }
-

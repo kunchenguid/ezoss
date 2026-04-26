@@ -103,12 +103,11 @@ func TestListCommandPrintsActiveRecommendations(t *testing.T) {
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "kunchenguid/ezoss#42",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
+			StateChange:  sharedtypes.StateChangeNone,
+			Confidence:   sharedtypes.ConfidenceMedium,
 			DraftComment: "Thanks for the report.",
-			
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
@@ -254,11 +253,10 @@ func TestListCommandUsesFriendlyLabelForNoActionRecommendations(t *testing.T) {
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "acme/widgets#11",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceHigh,
-			
+			Confidence:  sharedtypes.ConfidenceHigh,
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
@@ -323,11 +321,10 @@ func TestListCommandIncludesRecommendationAgeColumn(t *testing.T) {
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "kunchenguid/ezoss#7",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			Confidence:  sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -409,11 +406,10 @@ func TestListCommandWarnsWhenDaemonIsStopped(t *testing.T) {
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "kunchenguid/ezoss#42",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			Confidence:  sharedtypes.ConfidenceMedium,
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
@@ -492,11 +488,10 @@ func TestListCommandWarnsForRecommendationsFromUnconfiguredRepos(t *testing.T) {
 		}
 		if _, err := database.InsertRecommendation(db.NewRecommendation{
 			ItemID: fmt.Sprintf("%s#%d", s.repoID, s.number),
-			Agent: sharedtypes.AgentClaude,
+			Agent:  sharedtypes.AgentClaude,
 			Options: []db.NewRecommendationOption{{
 				StateChange: sharedtypes.StateChangeNone,
-				Confidence: sharedtypes.ConfidenceMedium,
-				
+				Confidence:  sharedtypes.ConfidenceMedium,
 			}},
 		}); err != nil {
 			t.Fatalf("InsertRecommendation(%s#%d) error = %v", s.repoID, s.number, err)
@@ -574,11 +569,10 @@ func TestListCommandShowsConfiguredReposBeforeUnconfiguredOnes(t *testing.T) {
 	}
 	configuredRec, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: configuredItemID,
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			Confidence:  sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -598,11 +592,10 @@ func TestListCommandShowsConfiguredReposBeforeUnconfiguredOnes(t *testing.T) {
 	}
 	orphanRec, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: orphanItemID,
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			Confidence:  sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -699,11 +692,10 @@ func TestListCommandMarksUnconfiguredRowsInline(t *testing.T) {
 		}
 		if _, err := database.InsertRecommendation(db.NewRecommendation{
 			ItemID: itemID,
-			Agent: sharedtypes.AgentClaude,
+			Agent:  sharedtypes.AgentClaude,
 			Options: []db.NewRecommendationOption{{
 				StateChange: sharedtypes.StateChangeNone,
-				Confidence: sharedtypes.ConfidenceMedium,
-				
+				Confidence:  sharedtypes.ConfidenceMedium,
 			}},
 		}); err != nil {
 			t.Fatalf("InsertRecommendation(%s) error = %v", itemID, err)
@@ -781,11 +773,10 @@ func TestListCommandSummarizesConfiguredAndUnconfiguredQueueCounts(t *testing.T)
 		}
 		if _, err := database.InsertRecommendation(db.NewRecommendation{
 			ItemID: itemID,
-			Agent: sharedtypes.AgentClaude,
+			Agent:  sharedtypes.AgentClaude,
 			Options: []db.NewRecommendationOption{{
 				StateChange: sharedtypes.StateChangeNone,
-				Confidence: sharedtypes.ConfidenceMedium,
-				
+				Confidence:  sharedtypes.ConfidenceMedium,
 			}},
 		}); err != nil {
 			t.Fatalf("InsertRecommendation(%s) error = %v", itemID, err)
@@ -889,11 +880,10 @@ func TestListCommandOmitsOrphanNoteWhenAllReposAreConfigured(t *testing.T) {
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "kunchenguid/ezoss#42",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			Confidence:  sharedtypes.ConfidenceMedium,
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
@@ -953,11 +943,10 @@ func TestListCommandHintsWhenAllRecsAreForUnconfiguredRepos(t *testing.T) {
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "orphan/only#1",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			Confidence:  sharedtypes.ConfidenceMedium,
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)

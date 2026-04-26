@@ -41,11 +41,11 @@ If you maintain open source long enough, every new issue and PR starts with the 
 
 You stay in control. The agent drafts. The maintainer decides.
 
-Docs: https://kunchenguid.github.io/ezoss/
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/kunchenguid/ezoss/main/demo.gif" alt="ezoss demo" width="800" />
 </p>
+
+Docs: https://kunchenguid.github.io/ezoss/
 
 - **Private by default** - agent rationale, draft comments, and token usage stay in local SQLite until you approve an action.
 - **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.
@@ -147,7 +147,7 @@ Every GitHub release also includes platform archives plus `checksums.txt` if you
 ## CLI Reference
 
 | Command | Description |
-| ------- | ----------- |
+| --- | --- |
 | `ezoss` | Open the inbox TUI from the local recommendations database |
 | `ezoss doctor` | Check local prerequisites including `gh`, agent availability, daemon state, and SQLite access |
 | `ezoss init` | Create or update `~/.ezoss/config.yaml` |
@@ -162,7 +162,7 @@ Every GitHub release also includes platform archives plus `checksums.txt` if you
 ### Flags
 
 | Command | Flag | Description |
-| ------- | ---- | ----------- |
+| --- | --- | --- |
 | `daemon start` | `--mock` | Use canned GitHub items and recommendations |
 | `triage <repo>#<number>` | `--mock` | Triage against canned fixtures instead of live GitHub + agent backends |
 | `init` | `--repo` | Repository to monitor, repeatable |

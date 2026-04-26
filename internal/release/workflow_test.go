@@ -771,6 +771,25 @@ func TestCIWorkflowIncludesWindowsBuildSmokeCheck(t *testing.T) {
 	}
 }
 
+func TestCIWorkflowPinsWindowsTempDirectoryToRunnerTemp(t *testing.T) {
+	workflowPath := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
+	data, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
+	}
+
+	text := string(data)
+	checks := []string{
+		"windows-build:\n    runs-on: windows-latest\n    env:\n      TMP: ${{ runner.temp }}\n      TEMP: ${{ runner.temp }}",
+		"run: go test ./...",
+	}
+	for _, want := range checks {
+		if !strings.Contains(text, want) {
+			t.Fatalf("ci workflow missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestCIWorkflowRunsFormattingAndVetChecksOnWindows(t *testing.T) {
 	workflowPath := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
 	data, err := os.ReadFile(workflowPath)
@@ -1328,7 +1347,7 @@ func TestREADMECLIReferenceMatchesCurrentCommandSurface(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", readmePath, err)
 	}
 
-	text := string(data)
+	text := normalizeMarkdownTableRows(string(data))
 	checks := []string{
 		"## CLI Reference",
 		"| `ezoss` | Open the inbox TUI from the local recommendations database |",
@@ -1358,6 +1377,24 @@ func TestREADMECLIReferenceMatchesCurrentCommandSurface(t *testing.T) {
 	if strings.Contains(text, "| `ezoss daemon run` |") {
 		t.Fatalf("README CLI reference should not expose the hidden daemon run command:\n%s", text)
 	}
+}
+
+func normalizeMarkdownTableRows(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "|") || !strings.HasSuffix(line, "|") {
+			continue
+		}
+		cells := strings.Split(line, "|")
+		if len(cells) < 3 {
+			continue
+		}
+		for j := 1; j < len(cells)-1; j++ {
+			cells[j] = strings.TrimSpace(cells[j])
+		}
+		lines[i] = "| " + strings.Join(cells[1:len(cells)-1], " | ") + " |"
+	}
+	return strings.Join(lines, "\n")
 }
 
 func TestREADMEHowItWorksSectionMatchesCurrentMaintainerFirstFlow(t *testing.T) {

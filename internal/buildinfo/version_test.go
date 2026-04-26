@@ -1,6 +1,9 @@
 package buildinfo
 
-import "testing"
+import (
+	"runtime/debug"
+	"testing"
+)
 
 func TestCurrentVersionPrefersExplicitVersion(t *testing.T) {
 	originalVersion := Version
@@ -12,6 +15,28 @@ func TestCurrentVersionPrefersExplicitVersion(t *testing.T) {
 
 	if got := CurrentVersion(); got != "v1.2.3" {
 		t.Fatalf("CurrentVersion() = %q, want %q", got, "v1.2.3")
+	}
+}
+
+func TestCurrentVersionKeepsExplicitDevVersion(t *testing.T) {
+	originalVersion := Version
+	originalReadBuildInfo := readBuildInfo
+	t.Cleanup(func() {
+		Version = originalVersion
+		readBuildInfo = originalReadBuildInfo
+	})
+
+	Version = "dev"
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{
+			Main: debug.Module{
+				Version: "v0.0.0-20260426183701-03f2ae8aa228",
+			},
+		}, true
+	}
+
+	if got := CurrentVersion(); got != "dev" {
+		t.Fatalf("CurrentVersion() = %q, want %q", got, "dev")
 	}
 }
 
