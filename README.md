@@ -145,7 +145,7 @@ Live triage requires `gh`, `git`, and one supported agent backend available loca
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
 - **Polling is deliberate** - v1 avoids webhook complexity and just re-triages when the GitHub label disappears.
 - **Approval is explicit** - nothing gets posted, closed, merged, or labeled until you do it from the inbox.
-- **PR review is gated when needed** - unsolicited PRs can surface as `request_approval_for_review` so you decide whether to review the approach before the tool drafts code review feedback.
+- **PR review is gated when needed** - unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.
 
 ## CLI Reference
 

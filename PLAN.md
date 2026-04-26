@@ -138,8 +138,9 @@ CREATE TABLE recommendations (
     model            TEXT,
     rationale        TEXT,
     draft_comment    TEXT,
+    followups        TEXT,
     proposed_labels  TEXT,              -- JSON array
-    proposed_action  TEXT,              -- 'comment' | 'close' | 'merge' | 'request_changes' | 'label_only' | 'request_approval_for_review' | 'none'
+    state_change     TEXT,              -- 'none' | 'close' | 'merge' | 'request_changes'
     confidence       TEXT,              -- 'low' | 'medium' | 'high'
     tokens_in        INTEGER,
     tokens_out       INTEGER,
@@ -165,10 +166,11 @@ CREATE TABLE recommendation_options (
 CREATE TABLE approvals (
     id                 TEXT PRIMARY KEY,
     recommendation_id  TEXT NOT NULL REFERENCES recommendations(id),
+    option_id          TEXT REFERENCES recommendation_options(id) ON DELETE SET NULL,
     decision           TEXT NOT NULL,   -- 'approved' | 'edited' | 'rejected' | 'dismissed'
     final_comment      TEXT,
     final_labels       TEXT,
-    final_action       TEXT,
+    final_state_change TEXT,
     acted_at           INTEGER,         -- when the gh call actually happened
     acted_error        TEXT,
     created_at         INTEGER
@@ -231,8 +233,8 @@ We don't pre-fetch issue context or stuff the prompt. Ezoss prepares the repo ch
 PRs branch on whether there's a prior agreement to build the thing:
 
 1. Agent first checks: is this PR linked to an issue where the approach was already discussed and agreed upon?
-2. **Yes** → proceed to code review. Produce a top-level review comment as `draft_comment` and `proposed_action: request_changes` or `proposed_action: merge` based on the review.
-3. **No** → set `proposed_action: request_approval_for_review`. The draft comment should explain what the PR is doing and ask the maintainer whether the approach is wanted before any code review happens. The maintainer can approve that action (which posts the question to the PR) or manually flip the recommendation to "do a code review anyway" via `e`.
+2. **Yes** → proceed to code review. Produce a top-level review comment as `draft_comment` and set `state_change: request_changes` or `state_change: merge` based on the review.
+3. **No** → set `state_change: none`. The draft comment should explain what the PR is doing and ask the maintainer whether the approach is wanted before any code review happens. The maintainer can approve that option, which posts the question to the PR, or manually edit it to do a code review anyway via `e`.
 
 Line-level review comments stay out of v1 - top-level review only. Upgrade later.
 
@@ -245,14 +247,12 @@ Default behavior, not opt-in:
 
 ## Acting on approvals
 
-Once the user approves a recommendation, the orchestrator translates to `gh` commands:
+Once the user approves a recommendation option, the orchestrator posts `draft_comment` when present, applies lifecycle labels independently, then translates `state_change` to `gh` commands:
 
-- `comment` → `gh issue comment <n> -b <body>` (or `gh pr comment`).
-- `close` → `gh issue close <n> -c <body>` (close with a comment).
+- `none` → no state transition; post only the draft comment and labels.
+- `close` → `gh issue close <n> -c <body>` (close with a comment when present).
 - `merge` → `gh pr merge <n> --squash/--merge/--rebase` (default configurable).
 - `request_changes` → `gh pr review <n> --request-changes -b <body>`.
-- `request_approval_for_review` → post the draft_comment on the PR, don't mark merged/closed.
-- `label_only` → `gh issue edit <n> --add-label ...`.
 
 After any successful action, add the `ezoss/triaged` label to the item (and `ezoss/awaiting-*` if configured). That's what keeps the item out of the next poll's triage queue.
 
