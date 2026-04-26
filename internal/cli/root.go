@@ -1737,7 +1737,7 @@ func newStatusCmd() *cobra.Command {
 In an interactive terminal, status opens a realtime TUI. In non-interactive
 output, status prints rich text status. Use --short for the script-friendly
 one-line key=value summary.`,
-		Args:  cobra.NoArgs,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			telemetry.Track("command", telemetry.Fields{"command": "status", "entrypoint": "status"})
 
