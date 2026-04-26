@@ -62,7 +62,7 @@ $ ezoss daemon start --mock
 started
 
 $ ezoss status
-pending=3 repos=1
+# opens the realtime status TUI
 
 $ ezoss list
 kunchenguid/ezoss#42	issue	comment	low	panic in sync loop
@@ -154,7 +154,8 @@ Live triage requires `gh`, `git`, and one supported agent backend available loca
 | `ezoss` | Open the inbox TUI from the local recommendations database |
 | `ezoss doctor` | Check local prerequisites including `gh`, agent availability, daemon state, and SQLite access |
 | `ezoss init` | Create or update `~/.ezoss/config.yaml` |
-| `ezoss status` | Print a one-line summary of pending recommendations and configured repos |
+| `ezoss status` | Open the realtime status TUI; in non-interactive output, print rich text status |
+| `ezoss status --short` | Print a one-line summary of pending recommendations and configured repos |
 | `ezoss list` | Print pending recommendations in a text format |
 | `ezoss triage <repo>#<number>` | Manually triage one issue or PR |
 | `ezoss update` | Download and install the latest released binary for the current platform |

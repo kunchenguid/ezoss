@@ -32,7 +32,8 @@ What's genuinely new for `ezoss` (vs. copy-paste from no-mistakes):
 $ ezoss init                 # pick repos, agent, poll cadence
 $ ezoss daemon start         # launches background poller
 $ ezoss                      # opens TUI inbox of pending recs
-$ ezoss status               # one-line summary for shell prompts
+$ ezoss status               # realtime status TUI
+$ ezoss status --short       # one-line summary for shell prompts
 $ ezoss doctor               # checks gh auth, agent bin, daemon, db
 ```
 
