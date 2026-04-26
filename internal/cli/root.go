@@ -2578,7 +2578,15 @@ func (r *liveTriageRunner) Triage(ctx context.Context, req daemon.TriageRequest)
 
 	cwd := r.cwd
 	prompt := req.Prompt
+	var releaseCheckoutLock func() error
 	if r.stateRoot != "" && strings.TrimSpace(req.Item.Repo) != "" {
+		release, err := acquireInvestigationCheckoutLock(ctx, r.stateRoot, req.Item.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("lock investigation checkout: %w", err)
+		}
+		releaseCheckoutLock = release
+		defer func() { _ = releaseCheckoutLock() }()
+
 		checkout, err := prepareInvestigationCheckout(ctx, r.stateRoot, req.Item.Repo)
 		if err != nil {
 			return nil, fmt.Errorf("prepare investigation checkout: %w", err)
@@ -2613,6 +2621,32 @@ func (r *liveTriageRunner) Triage(ctx context.Context, req daemon.TriageRequest)
 		TokensIn:       result.Usage.TotalInputTokens(),
 		TokensOut:      result.Usage.OutputTokens,
 	}, nil
+}
+
+func acquireInvestigationCheckoutLock(ctx context.Context, root string, repoID string) (func() error, error) {
+	lockDir := filepath.Join(root, "investigations", ".locks")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create lock dir: %w", err)
+	}
+	lockPath := filepath.Join(lockDir, investigationRepoDirName(repoID)+".lock")
+
+	for {
+		err := os.Mkdir(lockPath, 0o755)
+		if err == nil {
+			return func() error {
+				return os.Remove(lockPath)
+			}, nil
+		}
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("acquire lock: %w", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 type gitCommandRunner func(ctx context.Context, dir string, env []string, args ...string) ([]byte, error)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -805,6 +806,75 @@ func TestLiveTriageRunnerPreparesInvestigationCheckoutForRepoItem(t *testing.T) 
 	for _, want := range []string{"Repository checkout for investigation:", checkout, "Do not push", "Local edits are scratch"} {
 		if !strings.Contains(gotOpts.Prompt, want) {
 			t.Fatalf("RunOpts.Prompt = %q, missing %q", gotOpts.Prompt, want)
+		}
+	}
+}
+
+func TestLiveTriageRunnerSerializesInvestigationCheckoutUse(t *testing.T) {
+	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
+	t.Cleanup(func() {
+		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
+	})
+
+	root := t.TempDir()
+	checkout := filepath.Join(root, "investigations", "kunchenguid__no-mistakes")
+	prepared := make(chan struct{}, 2)
+	prepareInvestigationCheckout = func(_ context.Context, _ string, _ string) (string, error) {
+		prepared <- struct{}{}
+		return checkout, nil
+	}
+
+	firstRunStarted := make(chan struct{})
+	releaseFirstRun := make(chan struct{})
+	var mu sync.Mutex
+	runCount := 0
+	newAgent = func(_ sharedtypes.AgentName, _ string) (triageAgent, error) {
+		return stubTriageAgent{result: &agent.Result{
+			Output: mustJSON(t, triage.Recommendation{Options: []triage.RecommendationOption{{
+				StateChange: sharedtypes.StateChangeNone,
+				Rationale:   "ok",
+				WaitingOn:   sharedtypes.WaitingOnNone,
+				Confidence:  sharedtypes.ConfidenceHigh,
+			}}}),
+		}, onRun: func(agent.RunOpts) {
+			mu.Lock()
+			runCount++
+			currentRun := runCount
+			mu.Unlock()
+			if currentRun == 1 {
+				close(firstRunStarted)
+				<-releaseFirstRun
+			}
+		}}, nil
+	}
+
+	runner := &liveTriageRunner{name: sharedtypes.AgentClaude, bin: "claude", cwd: t.TempDir(), stateRoot: root}
+	errCh := make(chan error, 2)
+	req := daemon.TriageRequest{Item: ghclient.Item{Repo: "kunchenguid/no-mistakes"}, Prompt: "base prompt"}
+	go func() {
+		_, err := runner.Triage(context.Background(), req)
+		errCh <- err
+	}()
+
+	<-prepared
+	<-firstRunStarted
+	go func() {
+		_, err := runner.Triage(context.Background(), req)
+		errCh <- err
+	}()
+
+	select {
+	case <-prepared:
+		t.Fatal("second triage prepared checkout while first agent still held it")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirstRun)
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("Triage() error = %v", err)
 		}
 	}
 }
