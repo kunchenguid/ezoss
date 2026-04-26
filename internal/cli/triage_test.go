@@ -897,6 +897,27 @@ func TestAcquireInvestigationCheckoutLockRecoversStaleLock(t *testing.T) {
 	}
 }
 
+func TestAcquireInvestigationCheckoutLockRecoversStalePIDLock(t *testing.T) {
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "investigations", ".locks", "kunchenguid__no-mistakes.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("create lock dir: %v", err)
+	}
+	if err := os.WriteFile(lockPath, []byte("999999\n"), 0o644); err != nil {
+		t.Fatalf("create stale lock: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	t.Cleanup(cancel)
+	release, err := acquireInvestigationCheckoutLock(ctx, root, "kunchenguid/no-mistakes")
+	if err != nil {
+		t.Fatalf("acquireInvestigationCheckoutLock() error = %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release() error = %v", err)
+	}
+}
+
 func TestPreparePersistentInvestigationCheckoutCreatesAndCleansClone(t *testing.T) {
 	root := t.TempDir()
 	originalGitHubAuthToken := gitHubAuthToken

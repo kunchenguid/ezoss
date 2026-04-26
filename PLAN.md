@@ -40,7 +40,7 @@ Typical loop:
 
 1. Contributor opens issue #42 on your repo.
 2. Daemon's next poll picks it up: it has no `ezoss/triaged` label yet.
-3. Daemon invokes your agent with the issue URL and a structured-output schema. The agent clones/reads whatever context it needs on its own. The recommendation lands in the local DB.
+3. Daemon prepares a managed repo checkout under `~/.ezoss/investigations`, then invokes your agent with the issue URL, checkout path, and a structured-output schema. The recommendation lands in the local DB.
 4. You open the TUI. Issue #42 shows in the "needs your review" queue with the agent's draft response, suggested labels, and proposed next action.
 5. You approve as-is, edit, or reject. On approval, the orchestrator executes via `gh` CLI and stamps `ezoss/triaged` on the issue.
 6. If anyone (you, a co-maintainer) removes that label later, the daemon re-triages on next poll.
@@ -200,9 +200,9 @@ The prompt is intentionally minimal:
 
 - The issue or PR URL.
 - The contents of `~/.ezoss/AGENTS.md` if it exists (user-supplied instructions - voice profile, custom guidance, house rules - injected verbatim into every prompt).
-- A brief note that the agent can clone the repo and read whatever context it needs (issue body, comments, diff, linked issues, code).
+- A brief note that the agent should inspect the managed checkout and any issue body, comments, diff, linked issues, or CI context it needs.
 
-We don't pre-fetch context or stuff the prompt. The agent has tools; let it decide what to look at. The agent interface already supports streaming, so the TUI can show rationale appearing live when the user runs `rerun`.
+We don't pre-fetch issue context or stuff the prompt. Ezoss prepares the repo checkout, the agent decides what to look at, and local scratch edits are discarded before a future run. The agent interface already supports streaming, so the TUI can show rationale appearing live when the user runs `rerun`.
 
 ### PR-specific flow
 
