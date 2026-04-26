@@ -2615,16 +2615,38 @@ func (r *liveTriageRunner) Triage(ctx context.Context, req daemon.TriageRequest)
 	}, nil
 }
 
-type gitCommandRunner func(ctx context.Context, dir string, args ...string) ([]byte, error)
+type gitCommandRunner func(ctx context.Context, dir string, env []string, args ...string) ([]byte, error)
 
-func runGitCommand(ctx context.Context, dir string, args ...string) ([]byte, error) {
+var gitHubAuthToken = func(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func runGitCommand(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return out, nil
+}
+
+func gitHubGitAuthEnv(ctx context.Context) []string {
+	token, err := gitHubAuthToken(ctx)
+	if err != nil || token == "" {
+		return nil
+	}
+	return []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: bearer " + token,
+	}
 }
 
 func preparePersistentInvestigationCheckout(ctx context.Context, root string, repoID string, run gitCommandRunner) (string, error) {
@@ -2635,6 +2657,7 @@ func preparePersistentInvestigationCheckout(ctx context.Context, root string, re
 	if run == nil {
 		run = runGitCommand
 	}
+	gitEnv := gitHubGitAuthEnv(ctx)
 
 	investigationsDir := filepath.Join(root, "investigations")
 	checkout := filepath.Join(investigationsDir, investigationRepoDirName(repoID))
@@ -2650,35 +2673,35 @@ func preparePersistentInvestigationCheckout(ctx context.Context, root string, re
 			return "", fmt.Errorf("remove invalid checkout: %w", err)
 		}
 		cloneURL := "https://github.com/" + repoID + ".git"
-		if _, err := run(ctx, investigationsDir, "clone", cloneURL, checkout); err != nil {
+		if _, err := run(ctx, investigationsDir, gitEnv, "clone", cloneURL, checkout); err != nil {
 			return "", err
 		}
 	}
 
-	if _, err := run(ctx, checkout, "fetch", "--prune", "origin"); err != nil {
+	if _, err := run(ctx, checkout, gitEnv, "fetch", "--prune", "origin"); err != nil {
 		return "", err
 	}
-	_, _ = run(ctx, checkout, "remote", "set-head", "origin", "-a")
+	_, _ = run(ctx, checkout, gitEnv, "remote", "set-head", "origin", "-a")
 	defaultRef := "origin/main"
-	if out, err := run(ctx, checkout, "rev-parse", "--abbrev-ref", "origin/HEAD"); err == nil {
+	if out, err := run(ctx, checkout, gitEnv, "rev-parse", "--abbrev-ref", "origin/HEAD"); err == nil {
 		ref := strings.TrimSpace(string(out))
 		if ref != "" && ref != "origin/HEAD" {
 			defaultRef = ref
 		}
 	}
-	if _, err := run(ctx, checkout, "reset", "--hard"); err != nil {
+	if _, err := run(ctx, checkout, gitEnv, "reset", "--hard"); err != nil {
 		return "", err
 	}
-	if _, err := run(ctx, checkout, "clean", "-fdx"); err != nil {
+	if _, err := run(ctx, checkout, gitEnv, "clean", "-fdx"); err != nil {
 		return "", err
 	}
-	if _, err := run(ctx, checkout, "checkout", "--detach", defaultRef); err != nil {
+	if _, err := run(ctx, checkout, gitEnv, "checkout", "--detach", defaultRef); err != nil {
 		return "", err
 	}
-	if _, err := run(ctx, checkout, "reset", "--hard", defaultRef); err != nil {
+	if _, err := run(ctx, checkout, gitEnv, "reset", "--hard", defaultRef); err != nil {
 		return "", err
 	}
-	if _, err := run(ctx, checkout, "clean", "-fdx"); err != nil {
+	if _, err := run(ctx, checkout, gitEnv, "clean", "-fdx"); err != nil {
 		return "", err
 	}
 	return checkout, nil

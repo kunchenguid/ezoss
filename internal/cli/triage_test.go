@@ -811,9 +811,17 @@ func TestLiveTriageRunnerPreparesInvestigationCheckoutForRepoItem(t *testing.T) 
 
 func TestPreparePersistentInvestigationCheckoutCreatesAndCleansClone(t *testing.T) {
 	root := t.TempDir()
+	originalGitHubAuthToken := gitHubAuthToken
+	t.Cleanup(func() {
+		gitHubAuthToken = originalGitHubAuthToken
+	})
+	gitHubAuthToken = func(_ context.Context) (string, error) {
+		return "", nil
+	}
+
 	var calls []gitCommandCall
-	runner := func(_ context.Context, dir string, args ...string) ([]byte, error) {
-		calls = append(calls, gitCommandCall{dir: dir, args: append([]string(nil), args...)})
+	runner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
+		calls = append(calls, gitCommandCall{dir: dir, env: append([]string(nil), env...), args: append([]string(nil), args...)})
 		if len(args) > 0 && args[0] == "clone" {
 			if err := os.MkdirAll(filepath.Join(root, "investigations", "kunchenguid__no-mistakes", ".git"), 0o755); err != nil {
 				return nil, err
@@ -850,8 +858,50 @@ func TestPreparePersistentInvestigationCheckoutCreatesAndCleansClone(t *testing.
 	}
 }
 
+func TestPreparePersistentInvestigationCheckoutUsesGhTokenForGitHubGit(t *testing.T) {
+	root := t.TempDir()
+	originalGitHubAuthToken := gitHubAuthToken
+	t.Cleanup(func() {
+		gitHubAuthToken = originalGitHubAuthToken
+	})
+	gitHubAuthToken = func(_ context.Context) (string, error) {
+		return "gho_private", nil
+	}
+
+	var calls []gitCommandCall
+	runner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
+		calls = append(calls, gitCommandCall{dir: dir, env: append([]string(nil), env...), args: append([]string(nil), args...)})
+		if len(args) > 0 && args[0] == "clone" {
+			if err := os.MkdirAll(filepath.Join(root, "investigations", "kunchenguid__no-mistakes", ".git"), 0o755); err != nil {
+				return nil, err
+			}
+		}
+		if len(args) >= 3 && args[0] == "rev-parse" && args[1] == "--abbrev-ref" {
+			return []byte("origin/main\n"), nil
+		}
+		return nil, nil
+	}
+
+	_, err := preparePersistentInvestigationCheckout(context.Background(), root, "kunchenguid/no-mistakes", runner)
+	if err != nil {
+		t.Fatalf("preparePersistentInvestigationCheckout() error = %v", err)
+	}
+
+	wantEnv := []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: bearer gho_private",
+	}
+	for _, call := range calls {
+		if !reflect.DeepEqual(call.env, wantEnv) {
+			t.Fatalf("git call env = %#v, want %#v", call.env, wantEnv)
+		}
+	}
+}
+
 type gitCommandCall struct {
 	dir  string
+	env  []string
 	args []string
 }
 
