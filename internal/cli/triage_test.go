@@ -273,11 +273,11 @@ func TestTriageCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 		return stubTriageAgent{result: &agent.Result{
 			Output: mustJSON(t, triage.Recommendation{
 				Options: []triage.RecommendationOption{{
-					StateChange:    sharedtypes.StateChangeNone,
-					Rationale:      "Needs logs before debugging.",
-					WaitingOn:      sharedtypes.WaitingOnContributor,
-					DraftComment:   "Please share the daemon log around the crash.",
-					Confidence:     sharedtypes.ConfidenceMedium,
+					StateChange:  sharedtypes.StateChangeNone,
+					Rationale:    "Needs logs before debugging.",
+					WaitingOn:    sharedtypes.WaitingOnContributor,
+					DraftComment: "Please share the daemon log around the crash.",
+					Confidence:   sharedtypes.ConfidenceMedium,
 				}},
 			}),
 			Usage: agent.TokenUsage{InputTokens: 900, OutputTokens: 120},
@@ -394,11 +394,11 @@ func TestTriageCommandPrefersRepoAgentOverrideWithoutMock(t *testing.T) {
 		return stubTriageAgent{result: &agent.Result{
 			Output: mustJSON(t, triage.Recommendation{
 				Options: []triage.RecommendationOption{{
-					StateChange:    sharedtypes.StateChangeNone,
-					Rationale:      "Needs logs before debugging.",
-					WaitingOn:      sharedtypes.WaitingOnContributor,
-					DraftComment:   "Please share the daemon log around the crash.",
-					Confidence:     sharedtypes.ConfidenceMedium,
+					StateChange:  sharedtypes.StateChangeNone,
+					Rationale:    "Needs logs before debugging.",
+					WaitingOn:    sharedtypes.WaitingOnContributor,
+					DraftComment: "Please share the daemon log around the crash.",
+					Confidence:   sharedtypes.ConfidenceMedium,
 				}},
 			}),
 			Usage: agent.TokenUsage{InputTokens: 900, OutputTokens: 120},
@@ -477,11 +477,11 @@ func TestTriageCommandFindsRepoAgentOverrideFromSubdirectoryWithoutMock(t *testi
 		return stubTriageAgent{result: &agent.Result{
 			Output: mustJSON(t, triage.Recommendation{
 				Options: []triage.RecommendationOption{{
-					StateChange:    sharedtypes.StateChangeNone,
-					Rationale:      "Needs logs before debugging.",
-					WaitingOn:      sharedtypes.WaitingOnContributor,
-					DraftComment:   "Please share the daemon log around the crash.",
-					Confidence:     sharedtypes.ConfidenceMedium,
+					StateChange:  sharedtypes.StateChangeNone,
+					Rationale:    "Needs logs before debugging.",
+					WaitingOn:    sharedtypes.WaitingOnContributor,
+					DraftComment: "Please share the daemon log around the crash.",
+					Confidence:   sharedtypes.ConfidenceMedium,
 				}},
 			}),
 			Usage: agent.TokenUsage{InputTokens: 900, OutputTokens: 120},
@@ -609,11 +609,11 @@ func TestTriageCommandResolvesAutoAgentWithoutMock(t *testing.T) {
 		return stubTriageAgent{result: &agent.Result{
 			Output: mustJSON(t, triage.Recommendation{
 				Options: []triage.RecommendationOption{{
-					StateChange:    sharedtypes.StateChangeNone,
-					Rationale:      "Needs logs before debugging.",
-					WaitingOn:      sharedtypes.WaitingOnContributor,
-					DraftComment:   "Please share the daemon log around the crash.",
-					Confidence:     sharedtypes.ConfidenceMedium,
+					StateChange:  sharedtypes.StateChangeNone,
+					Rationale:    "Needs logs before debugging.",
+					WaitingOn:    sharedtypes.WaitingOnContributor,
+					DraftComment: "Please share the daemon log around the crash.",
+					Confidence:   sharedtypes.ConfidenceMedium,
 				}},
 			}),
 			Usage: agent.TokenUsage{InputTokens: 900, OutputTokens: 120},

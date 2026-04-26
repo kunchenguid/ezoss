@@ -158,4 +158,3 @@ func executablePathsMatch(a, b string) bool {
 	b = filepath.Clean(strings.ReplaceAll(b, `\`, "/"))
 	return strings.EqualFold(a, b)
 }
-

@@ -36,7 +36,6 @@ type SyncState struct {
 	repoIndex map[string]int
 }
 
-
 type repoSyncRecord struct {
 	repo          string
 	lastSyncStart time.Time
@@ -233,15 +232,15 @@ func (s *SyncState) Snapshot() ipc.SyncStatusResult {
 		})
 	}
 	return ipc.SyncStatusResult{
-		Interval:       s.interval,
-		CycleCount:     s.cycleCount,
-		LastCycleStart: s.lastCycleStart,
-		LastCycleEnd:   s.lastCycleEnd,
-		NextCycleAt:    s.nextCycleAt,
-		Phase:          s.phase,
-		CurrentRepo:    s.currentRepo,
-		CurrentIndex:   s.currentIndex,
-		Total:          s.currentTotal,
+		Interval:          s.interval,
+		CycleCount:        s.cycleCount,
+		LastCycleStart:    s.lastCycleStart,
+		LastCycleEnd:      s.lastCycleEnd,
+		NextCycleAt:       s.nextCycleAt,
+		Phase:             s.phase,
+		CurrentRepo:       s.currentRepo,
+		CurrentIndex:      s.currentIndex,
+		Total:             s.currentTotal,
 		AgentsTotal:       s.agentsTotal,
 		AgentsDone:        s.agentsDone,
 		CurrentItem:       s.currentItem,

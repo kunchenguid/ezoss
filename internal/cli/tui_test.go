@@ -209,17 +209,16 @@ func TestRootCommandLaunchesTUIOnNoArgs(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	firstRec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Needs a repro before deeper debugging.",
-			DraftComment: "Can you share a minimal repro?",
+			Rationale:      "Needs a repro before deeper debugging.",
+			DraftComment:   "Can you share a minimal repro?",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -229,18 +228,17 @@ func TestRootCommandLaunchesTUIOnNoArgs(t *testing.T) {
 		t.Fatalf("MarkRecommendationSuperseded() error = %v", err)
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 250,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  250,
 		TokensOut: 30,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Second pass after more context.",
-			DraftComment: "Please also share the daemon log.",
-			Followups: []string{"Check whether the regression started after the queue refactor."},
+			Rationale:      "Second pass after more context.",
+			DraftComment:   "Please also share the daemon log.",
+			Followups:      []string{"Check whether the regression started after the queue refactor."},
 			ProposedLabels: []string{"bug", "needs-repro"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceHigh,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceHigh,
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
@@ -470,17 +468,16 @@ func TestRootCommandFallsBackToListWhenNotATerminal(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Needs a repro before deeper debugging.",
-			DraftComment: "Can you share a minimal repro?",
+			Rationale:      "Needs a repro before deeper debugging.",
+			DraftComment:   "Can you share a minimal repro?",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
@@ -550,17 +547,16 @@ func TestInboxModelActionsReloadLoadsUpdatedEntries(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Needs a repro before deeper debugging.",
-			DraftComment: "Can you share a minimal repro?",
+			Rationale:      "Needs a repro before deeper debugging.",
+			DraftComment:   "Can you share a minimal repro?",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
@@ -720,17 +716,16 @@ func TestDismissInboxEntriesMarksRecommendationDismissedAndTriaged(t *testing.T)
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Needs a repro before deeper debugging.",
-			DraftComment: "Can you share a minimal repro?",
+			Rationale:      "Needs a repro before deeper debugging.",
+			DraftComment:   "Can you share a minimal repro?",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -820,17 +815,16 @@ func TestDismissInboxEntriesStillMarksTriagedWhenSyncDisabled(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Needs a repro before deeper debugging.",
-			DraftComment: "Can you share a minimal repro?",
+			Rationale:      "Needs a repro before deeper debugging.",
+			DraftComment:   "Can you share a minimal repro?",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -929,17 +923,16 @@ func TestApproveInboxEntriesStillMarksTriagedWhenSyncDisabled(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#43",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#43",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Needs contributor follow-up before deeper debugging.",
-			DraftComment: "Can you share a minimal repro?",
+			Rationale:      "Needs contributor follow-up before deeper debugging.",
+			DraftComment:   "Can you share a minimal repro?",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -1027,17 +1020,16 @@ func TestDismissInboxEntriesRemovesObsoleteManagedLabels(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Needs maintainer triage.",
-			DraftComment: "",
+			Rationale:      "Needs maintainer triage.",
+			DraftComment:   "",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -1117,17 +1109,16 @@ func TestDismissInboxEntriesDoesNotApplyRecommendationLabels(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#26",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#26",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "This looks like a docs question.",
-			DraftComment: "Can you share your config file?",
+			Rationale:      "This looks like a docs question.",
+			DraftComment:   "Can you share your config file?",
 			ProposedLabels: []string{"question", "needs-info"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -1221,13 +1212,12 @@ func TestApproveInboxEntriesPersistsFailedApprovalAttempt(t *testing.T) {
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
-			DraftComment: "Can you share a minimal repro?",
+			DraftComment:   "Can you share a minimal repro?",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -1328,12 +1318,11 @@ func TestLoadInboxEntriesIncludesLatestApprovalError(t *testing.T) {
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			DraftComment: "Can you share a minimal repro?",
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:  sharedtypes.StateChangeNone,
+			Confidence:   sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -1400,12 +1389,12 @@ func TestLoadInboxEntriesPopulatesGitHubURLForIssuesAndPRs(t *testing.T) {
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "acme/widgets#42", Agent: sharedtypes.AgentClaude,
-		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}},	}); err != nil {
+		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "acme/widgets#7", Agent: sharedtypes.AgentClaude,
-		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeMerge, Confidence: sharedtypes.ConfidenceHigh}},	}); err != nil {
+		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeMerge, Confidence: sharedtypes.ConfidenceHigh}}}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
@@ -1464,13 +1453,13 @@ func TestLoadInboxEntriesKeepsNewestRecommendationsFirst(t *testing.T) {
 
 	older, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "alpha/repo#1", Agent: sharedtypes.AgentClaude,
-		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}},	})
+		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}})
 	if err != nil {
 		t.Fatalf("InsertRecommendation(older) error = %v", err)
 	}
 	newer, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "zeta/repo#2", Agent: sharedtypes.AgentClaude,
-		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceHigh}},	})
+		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceHigh}}})
 	if err != nil {
 		t.Fatalf("InsertRecommendation(newer) error = %v", err)
 	}
@@ -1609,17 +1598,16 @@ func TestApproveInboxEntriesRecordsEditedApprovalWhenDraftChanged(t *testing.T) 
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Needs a repro before deeper debugging.",
-			DraftComment: "Can you share a minimal repro?",
+			Rationale:      "Needs a repro before deeper debugging.",
+			DraftComment:   "Can you share a minimal repro?",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -1745,17 +1733,16 @@ func TestApproveInboxEntriesTreatsEditedActionAsEditedApproval(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#11",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 160,
+		ItemID:    "acme/widgets#11",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  160,
 		TokensOut: 24,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "The PR may be valid, but the approach was not previously agreed on.",
-			DraftComment: "Should we discuss the approach first?",
+			Rationale:      "The PR may be valid, but the approach was not previously agreed on.",
+			DraftComment:   "Should we discuss the approach first?",
 			ProposedLabels: []string{"needs-decision"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -1852,17 +1839,16 @@ func TestApproveInboxEntriesExecutesCommentRecommendationAndMarksTriaged(t *test
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Needs a repro before deeper debugging.",
-			DraftComment: "Can you share a minimal repro?",
+			Rationale:      "Needs a repro before deeper debugging.",
+			DraftComment:   "Can you share a minimal repro?",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -1965,11 +1951,11 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 		return stubTriageAgent{result: &agent.Result{
 			Output: mustJSONTUI(t, triage.Recommendation{
 				Options: []triage.RecommendationOption{{
-					StateChange:    sharedtypes.StateChangeNone,
-					Rationale:      "The rerun found a clearer request for logs.",
-					WaitingOn:      sharedtypes.WaitingOnContributor,
-					DraftComment:   "Please share the daemon log and the exact failing command.",
-					Confidence:     sharedtypes.ConfidenceHigh,
+					StateChange:  sharedtypes.StateChangeNone,
+					Rationale:    "The rerun found a clearer request for logs.",
+					WaitingOn:    sharedtypes.WaitingOnContributor,
+					DraftComment: "Please share the daemon log and the exact failing command.",
+					Confidence:   sharedtypes.ConfidenceHigh,
 				}},
 			}),
 			Usage: agent.TokenUsage{InputTokens: 900, OutputTokens: 120},
@@ -2001,18 +1987,17 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	oldRec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		Model: "claude",
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		Model:     "claude",
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Old rationale.",
-			DraftComment: "Old draft.",
+			Rationale:      "Old rationale.",
+			DraftComment:   "Old draft.",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -2120,11 +2105,11 @@ func TestRerunInboxEntriesPrefersRepoAgentOverride(t *testing.T) {
 		return stubTriageAgent{result: &agent.Result{
 			Output: mustJSONTUI(t, triage.Recommendation{
 				Options: []triage.RecommendationOption{{
-					StateChange:    sharedtypes.StateChangeNone,
-					Rationale:      "The rerun found a clearer request for logs.",
-					WaitingOn:      sharedtypes.WaitingOnContributor,
-					DraftComment:   "Please share the daemon log and the exact failing command.",
-					Confidence:     sharedtypes.ConfidenceHigh,
+					StateChange:  sharedtypes.StateChangeNone,
+					Rationale:    "The rerun found a clearer request for logs.",
+					WaitingOn:    sharedtypes.WaitingOnContributor,
+					DraftComment: "Please share the daemon log and the exact failing command.",
+					Confidence:   sharedtypes.ConfidenceHigh,
 				}},
 			}),
 			Usage: agent.TokenUsage{InputTokens: 900, OutputTokens: 120},
@@ -2156,18 +2141,17 @@ func TestRerunInboxEntriesPrefersRepoAgentOverride(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	oldRec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#42",
-		Agent: sharedtypes.AgentClaude,
-		Model: "claude",
-		TokensIn: 100,
+		ItemID:    "acme/widgets#42",
+		Agent:     sharedtypes.AgentClaude,
+		Model:     "claude",
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "Old rationale.",
-			DraftComment: "Old draft.",
+			Rationale:      "Old rationale.",
+			DraftComment:   "Old draft.",
 			ProposedLabels: []string{"bug"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -2241,17 +2225,16 @@ func TestApproveInboxEntriesExecutesCloseRecommendationAndMarksTriaged(t *testin
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#21",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 120,
+		ItemID:    "acme/widgets#21",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  120,
 		TokensOut: 18,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "The contributor has been inactive past the stale threshold.",
-			DraftComment: "Closing as stale for now. Feel free to reopen with more detail.",
+			Rationale:      "The contributor has been inactive past the stale threshold.",
+			DraftComment:   "Closing as stale for now. Feel free to reopen with more detail.",
 			ProposedLabels: []string{"stale"},
-			StateChange: sharedtypes.StateChangeClose,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeClose,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -2357,17 +2340,16 @@ func TestApproveInboxEntriesSyncsWaitingOnAndStaleLabelsFromConfig(t *testing.T)
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#22",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 100,
+		ItemID:    "acme/widgets#22",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  100,
 		TokensOut: 20,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "We are waiting on the contributor and the thread is stale.",
-			DraftComment: "Following up on the missing info.",
+			Rationale:      "We are waiting on the contributor and the thread is stale.",
+			DraftComment:   "Following up on the missing info.",
 			ProposedLabels: []string{"needs-info"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -2456,17 +2438,16 @@ func TestApproveInboxEntriesRemovesOutdatedManagedStateLabels(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#24",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 80,
+		ItemID:    "acme/widgets#24",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  80,
 		TokensOut: 18,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "We already have what we need locally.",
-			DraftComment: "Thanks, we'll take it from here.",
+			Rationale:      "We already have what we need locally.",
+			DraftComment:   "Thanks, we'll take it from here.",
 			ProposedLabels: []string{"question"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -2557,17 +2538,16 @@ func TestApproveInboxEntriesDeduplicatesManagedLabels(t *testing.T) {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#25",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 80,
+		ItemID:    "acme/widgets#25",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  80,
 		TokensOut: 18,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "The recommendation already includes managed labels and should not duplicate them on approval.",
-			DraftComment: "Please share the missing reproduction steps.",
+			Rationale:      "The recommendation already includes managed labels and should not duplicate them on approval.",
+			DraftComment:   "Please share the missing reproduction steps.",
 			ProposedLabels: []string{"needs-info", ezossTriagedLabel, "ezoss/awaiting-contributor", ezossStaleLabel, "needs-info"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -2670,17 +2650,16 @@ func TestApproveInboxEntriesExecutesRequestChangesRecommendationAndMarksTriaged(
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#9",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 180,
+		ItemID:    "acme/widgets#9",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  180,
 		TokensOut: 26,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "The PR changes behavior and still needs tests.",
-			DraftComment: "Please add coverage for the empty-state path before this lands.",
+			Rationale:      "The PR changes behavior and still needs tests.",
+			DraftComment:   "Please add coverage for the empty-state path before this lands.",
 			ProposedLabels: []string{"needs-work"},
-			StateChange: sharedtypes.StateChangeRequestChanges,
-			Confidence: sharedtypes.ConfidenceHigh,
-			
+			StateChange:    sharedtypes.StateChangeRequestChanges,
+			Confidence:     sharedtypes.ConfidenceHigh,
 		}},
 	})
 	if err != nil {
@@ -2775,17 +2754,16 @@ func TestApproveInboxEntriesExecutesRequestApprovalForReviewRecommendationAndMar
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#11",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 160,
+		ItemID:    "acme/widgets#11",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  160,
 		TokensOut: 24,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "The PR may be valid, but the approach was not previously agreed on.",
-			DraftComment: "This looks like a substantial direction change. Should we do this review now, or would you prefer to discuss the approach first?",
+			Rationale:      "The PR may be valid, but the approach was not previously agreed on.",
+			DraftComment:   "This looks like a substantial direction change. Should we do this review now, or would you prefer to discuss the approach first?",
 			ProposedLabels: []string{"needs-decision"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceMedium,
 		}},
 	})
 	if err != nil {
@@ -2891,17 +2869,16 @@ func TestApproveInboxEntriesExecutesMergeRecommendationAndMarksTriaged(t *testin
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#10",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 140,
+		ItemID:    "acme/widgets#10",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  140,
 		TokensOut: 12,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "The PR is approved and ready to land.",
-			DraftComment: "",
+			Rationale:      "The PR is approved and ready to land.",
+			DraftComment:   "",
 			ProposedLabels: []string{"ready-to-merge"},
-			StateChange: sharedtypes.StateChangeMerge,
-			Confidence: sharedtypes.ConfidenceHigh,
-			
+			StateChange:    sharedtypes.StateChangeMerge,
+			Confidence:     sharedtypes.ConfidenceHigh,
 		}},
 	})
 	if err != nil {
@@ -3201,17 +3178,16 @@ func TestApproveInboxEntriesExecutesNoneRecommendationAndMarksTriaged(t *testing
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	rec, err := database.InsertRecommendation(db.NewRecommendation{
-		ItemID: "acme/widgets#11",
-		Agent: sharedtypes.AgentClaude,
-		TokensIn: 80,
+		ItemID:    "acme/widgets#11",
+		Agent:     sharedtypes.AgentClaude,
+		TokensIn:  80,
 		TokensOut: 10,
 		Options: []db.NewRecommendationOption{{
-			Rationale: "No GitHub action is needed beyond marking this triaged.",
-			DraftComment: "",
+			Rationale:      "No GitHub action is needed beyond marking this triaged.",
+			DraftComment:   "",
 			ProposedLabels: []string{"question"},
-			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceHigh,
-			
+			StateChange:    sharedtypes.StateChangeNone,
+			Confidence:     sharedtypes.ConfidenceHigh,
 		}},
 	})
 	if err != nil {

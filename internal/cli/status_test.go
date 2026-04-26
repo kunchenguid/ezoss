@@ -105,11 +105,10 @@ func TestStatusCommandPrintsPendingRecommendationCount(t *testing.T) {
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "kunchenguid/ezoss#42",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			Confidence:  sharedtypes.ConfidenceMedium,
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
@@ -171,11 +170,10 @@ func TestStatusCommandPrintsUnconfiguredPendingRecommendationCount(t *testing.T)
 	}
 	if _, err := database.InsertRecommendation(db.NewRecommendation{
 		ItemID: "kunchenguid/ezoss#42",
-		Agent: sharedtypes.AgentClaude,
+		Agent:  sharedtypes.AgentClaude,
 		Options: []db.NewRecommendationOption{{
 			StateChange: sharedtypes.StateChangeNone,
-			Confidence: sharedtypes.ConfidenceMedium,
-			
+			Confidence:  sharedtypes.ConfidenceMedium,
 		}},
 	}); err != nil {
 		t.Fatalf("InsertRecommendation() error = %v", err)
@@ -531,8 +529,8 @@ func TestRenderRichStatusPerRepoLines(t *testing.T) {
 		"synced 2m ago (450ms)",
 		"→ acme/syncing",
 		"syncing... (3s in)",
-		"·",                    // pending marker for never-synced
-		"acme/never",           // never-synced row
+		"·",          // pending marker for never-synced
+		"acme/never", // never-synced row
 		"pending first sync",
 		"✗ acme/errored",
 		"error: rate limited",

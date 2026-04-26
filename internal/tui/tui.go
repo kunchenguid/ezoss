@@ -731,9 +731,9 @@ const (
 
 	// Rail (left) is the narrower context column; card (right) is the
 	// focal column and always gets the bigger share so the eye lands there.
-	responsiveRailMinWidth  = 40
-	responsiveRailMaxWidth  = 60
-	responsiveCardMinWidth  = 60
+	responsiveRailMinWidth = 40
+	responsiveRailMaxWidth = 60
+	responsiveCardMinWidth = 60
 
 	compactHeightThreshold = 24
 	minInboxContentHeight  = 4

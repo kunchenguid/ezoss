@@ -67,13 +67,13 @@ func TestModelViewShowsInboxCountsAndDetails(t *testing.T) {
 			WaitingOn:      sharedtypes.WaitingOnContributor,
 		},
 		{
-			RepoID:         "acme/widgets",
-			Number:         7,
-			Kind:           sharedtypes.ItemKindPR,
-			Title:          "feat: ship it",
-			StateChange:    sharedtypes.StateChangeRequestChanges,
-			Confidence:     sharedtypes.ConfidenceHigh,
-			AgeLabel:       "5h",
+			RepoID:      "acme/widgets",
+			Number:      7,
+			Kind:        sharedtypes.ItemKindPR,
+			Title:       "feat: ship it",
+			StateChange: sharedtypes.StateChangeRequestChanges,
+			Confidence:  sharedtypes.ConfidenceHigh,
+			AgeLabel:    "5h",
 		},
 	})
 	m.width = 100
@@ -160,15 +160,15 @@ func TestModelViewOmitsSwitchOptionHintForSingleOption(t *testing.T) {
 
 func TestModelViewShowsGitHubURLInDetails(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "Bug: triage queue stalls",
-		StateChange:    sharedtypes.StateChangeNone,
-		Confidence:     sharedtypes.ConfidenceMedium,
-		Rationale:      "Need a minimal repro.",
-		DraftComment:   "Can you share a minimal repro?",
-		URL:            "https://github.com/acme/widgets/issues/42",
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "Bug: triage queue stalls",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceMedium,
+		Rationale:    "Need a minimal repro.",
+		DraftComment: "Can you share a minimal repro?",
+		URL:          "https://github.com/acme/widgets/issues/42",
 	}})
 	m.width = 100
 
@@ -180,13 +180,13 @@ func TestModelViewShowsGitHubURLInDetails(t *testing.T) {
 
 func TestModelViewIndentsMultilineDraftResponse(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "Bug: triage queue stalls",
-		StateChange:    sharedtypes.StateChangeNone,
-		Confidence:     sharedtypes.ConfidenceMedium,
-		DraftComment:   "Thanks for the report.\nPlease share a minimal repro.\nAlso include the daemon log.",
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "Bug: triage queue stalls",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceMedium,
+		DraftComment: "Thanks for the report.\nPlease share a minimal repro.\nAlso include the daemon log.",
 	}})
 	m.width = 100
 
@@ -205,13 +205,13 @@ func TestModelViewIndentsMultilineDraftResponse(t *testing.T) {
 
 func TestModelViewIndentsMultilineRationale(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "Bug: triage queue stalls",
-		StateChange:    sharedtypes.StateChangeNone,
-		Confidence:     sharedtypes.ConfidenceMedium,
-		Rationale:      "The queue likely deadlocked after a lock retry.\nThe error path still needs a minimal repro.",
+		RepoID:      "acme/widgets",
+		Number:      42,
+		Kind:        sharedtypes.ItemKindIssue,
+		Title:       "Bug: triage queue stalls",
+		StateChange: sharedtypes.StateChangeNone,
+		Confidence:  sharedtypes.ConfidenceMedium,
+		Rationale:   "The queue likely deadlocked after a lock retry.\nThe error path still needs a minimal repro.",
 	}})
 	m.width = 100
 
@@ -229,14 +229,14 @@ func TestModelViewIndentsMultilineRationale(t *testing.T) {
 
 func TestModelViewDoesNotStartDetailsPaneWithBlankLineWhenNoApprovalError(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "Bug: triage queue stalls",
-		StateChange:    sharedtypes.StateChangeNone,
-		Confidence:     sharedtypes.ConfidenceMedium,
-		Rationale:      "Need a minimal repro.",
-		DraftComment:   "Can you share a minimal repro?",
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "Bug: triage queue stalls",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceMedium,
+		Rationale:    "Need a minimal repro.",
+		DraftComment: "Can you share a minimal repro?",
 	}})
 	m.width = 100
 
@@ -253,8 +253,8 @@ func TestModelViewDoesNotStartDetailsPaneWithBlankLineWhenNoApprovalError(t *tes
 
 func TestModelNavigationMovesSelection(t *testing.T) {
 	m := NewModel([]Entry{
-		{RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange:    sharedtypes.StateChangeNone},
-		{RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindPR, Title: "two", StateChange:    sharedtypes.StateChangeMerge},
+		{RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange: sharedtypes.StateChangeNone},
+		{RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindPR, Title: "two", StateChange: sharedtypes.StateChangeMerge},
 	})
 	m.width = 100
 
@@ -274,8 +274,8 @@ func TestModelNavigationMovesSelection(t *testing.T) {
 func TestModelSkipDismissesCurrentEntry(t *testing.T) {
 	var dismissed []string
 	m := NewModelWithDismiss([]Entry{
-		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange:    sharedtypes.StateChangeNone},
-		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindPR, Title: "two", StateChange:    sharedtypes.StateChangeMerge},
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange: sharedtypes.StateChangeNone},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindPR, Title: "two", StateChange: sharedtypes.StateChangeMerge},
 	}, func(entries []Entry) error {
 		for _, entry := range entries {
 			dismissed = append(dismissed, entry.RecommendationID)
@@ -304,8 +304,8 @@ func TestModelSkipDismissesCurrentEntry(t *testing.T) {
 func TestModelApproveRemovesCurrentEntry(t *testing.T) {
 	var approved []string
 	m := NewModelWithActions([]Entry{
-		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange:    sharedtypes.StateChangeNone},
-		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindPR, Title: "two", StateChange:    sharedtypes.StateChangeMerge},
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange: sharedtypes.StateChangeNone},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindPR, Title: "two", StateChange: sharedtypes.StateChangeMerge},
 	}, ModelActions{
 		Approve: func(entries []Entry) error {
 			for _, entry := range entries {
@@ -821,15 +821,15 @@ func TestModelReloadRefreshesEntriesAndPreservesEditedDrafts(t *testing.T) {
 
 	updated, _ := m.Update(reloadedEntriesMsg{Entries: []Entry{
 		{
-			RecommendationID:       "rec-1",
-			RepoID:                 "acme/widgets",
-			Number:                 1,
-			Kind:                   sharedtypes.ItemKindIssue,
-			Title:                  "one refreshed",
-			StateChange:            sharedtypes.StateChangeNone,
-			OriginalStateChange:    sharedtypes.StateChangeNone,
-			DraftComment:           "server draft",
-			OriginalDraftComment:   "server draft",
+			RecommendationID:     "rec-1",
+			RepoID:               "acme/widgets",
+			Number:               1,
+			Kind:                 sharedtypes.ItemKindIssue,
+			Title:                "one refreshed",
+			StateChange:          sharedtypes.StateChangeNone,
+			OriginalStateChange:  sharedtypes.StateChangeNone,
+			DraftComment:         "server draft",
+			OriginalDraftComment: "server draft",
 		},
 		{
 			RecommendationID:     "rec-3",
@@ -886,11 +886,11 @@ func TestModelReloadErrorShowsStatus(t *testing.T) {
 
 func TestModelHelpToggleShowsAndHidesHelp(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         1,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "one",
-		StateChange:    sharedtypes.StateChangeNone,
+		RepoID:      "acme/widgets",
+		Number:      1,
+		Kind:        sharedtypes.ItemKindIssue,
+		Title:       "one",
+		StateChange: sharedtypes.StateChangeNone,
 	}})
 	m.width = 100
 
@@ -921,13 +921,13 @@ func TestModelHelpToggleShowsAndHidesHelp(t *testing.T) {
 
 func TestModelViewShowsApprovalErrorBanner(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "Bug: triage queue stalls",
-		StateChange:    sharedtypes.StateChangeNone,
-		DraftComment:   "Can you share a minimal repro?",
-		ApprovalError:  "comment on acme/widgets#42: gh comment failed",
+		RepoID:        "acme/widgets",
+		Number:        42,
+		Kind:          sharedtypes.ItemKindIssue,
+		Title:         "Bug: triage queue stalls",
+		StateChange:   sharedtypes.StateChangeNone,
+		DraftComment:  "Can you share a minimal repro?",
+		ApprovalError: "comment on acme/widgets#42: gh comment failed",
 	}})
 	m.width = 100
 
@@ -980,19 +980,19 @@ func TestModelActionSummaryDescribesProposedActions(t *testing.T) {
 func TestModelViewMarksUnconfiguredEntriesAndSummary(t *testing.T) {
 	m := NewModel([]Entry{
 		{
-			RepoID:         "acme/widgets",
-			Number:         42,
-			Kind:           sharedtypes.ItemKindIssue,
-			Title:          "configured",
-			StateChange:    sharedtypes.StateChangeNone,
+			RepoID:      "acme/widgets",
+			Number:      42,
+			Kind:        sharedtypes.ItemKindIssue,
+			Title:       "configured",
+			StateChange: sharedtypes.StateChangeNone,
 		},
 		{
-			RepoID:         "orphan/repo",
-			Number:         7,
-			Kind:           sharedtypes.ItemKindIssue,
-			Title:          "unconfigured",
-			StateChange:    sharedtypes.StateChangeNone,
-			Unconfigured:   true,
+			RepoID:       "orphan/repo",
+			Number:       7,
+			Kind:         sharedtypes.ItemKindIssue,
+			Title:        "unconfigured",
+			StateChange:  sharedtypes.StateChangeNone,
+			Unconfigured: true,
 		},
 	})
 	m.width = 100
@@ -1207,14 +1207,14 @@ func TestModelCompactModeForShortTerminals(t *testing.T) {
 
 func TestModelDetailsHidesNoneFields(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "title",
-		StateChange:    sharedtypes.StateChangeNone,
-		Confidence:     sharedtypes.ConfidenceHigh,
-		Rationale:      "r",
-		DraftComment:   "d",
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "title",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceHigh,
+		Rationale:    "r",
+		DraftComment: "d",
 		// no labels, no follow-ups, no waiting on, no URL
 	}})
 	m.width = 100
@@ -1234,17 +1234,17 @@ func TestModelDetailsHidesNoneFields(t *testing.T) {
 
 func TestModelDetailsStatusStripGroupsConfidenceWaitingOnTokens(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "title",
-		StateChange:    sharedtypes.StateChangeNone,
-		Confidence:     sharedtypes.ConfidenceHigh,
-		WaitingOn:      sharedtypes.WaitingOnMaintainer,
-		TokensIn:       2100,
-		TokensOut:      4200,
-		Rationale:      "r",
-		DraftComment:   "d",
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "title",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceHigh,
+		WaitingOn:    sharedtypes.WaitingOnMaintainer,
+		TokensIn:     2100,
+		TokensOut:    4200,
+		Rationale:    "r",
+		DraftComment: "d",
 	}})
 	m.width = 100
 
@@ -1270,7 +1270,7 @@ func TestModelDetailsConfidenceRendersWithLevelColor(t *testing.T) {
 		t.Run(string(c.conf), func(t *testing.T) {
 			m := NewModel([]Entry{{
 				RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue,
-				Title: "t", StateChange:    sharedtypes.StateChangeNone,
+				Title: "t", StateChange: sharedtypes.StateChangeNone,
 				Confidence: c.conf, Rationale: "r", DraftComment: "d",
 			}})
 			m.width = 100
@@ -1322,14 +1322,14 @@ func TestModelDetailsActionSummaryAndURLAppearAfterBody(t *testing.T) {
 
 func TestModelDetailsSectionLabelsAreCyanBold(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "title",
-		StateChange:    sharedtypes.StateChangeNone,
-		Confidence:     sharedtypes.ConfidenceHigh,
-		Rationale:      "r",
-		DraftComment:   "d",
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "title",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceHigh,
+		Rationale:    "r",
+		DraftComment: "d",
 	}})
 	m.width = 100
 	details := m.renderDetails()
@@ -1345,14 +1345,14 @@ func TestModelDetailsSectionLabelsAreCyanBold(t *testing.T) {
 func TestModelDetailsWrapsLongBodyTextInsteadOfTruncating(t *testing.T) {
 	longRationale := "PR was opened on the deprecated repo. Maintainer already asked contributor to move it to the new home a month ago. No response and no equivalent PR exists in the new repo."
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "title",
-		StateChange:    sharedtypes.StateChangeNone,
-		Confidence:     sharedtypes.ConfidenceHigh,
-		Rationale:      longRationale,
-		DraftComment:   "short draft",
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "title",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceHigh,
+		Rationale:    longRationale,
+		DraftComment: "short draft",
 	}})
 	m.width = 80
 	m.height = 60 // plenty of room
@@ -1399,15 +1399,15 @@ func extractDetailsBodyLines(view string) []string {
 
 func TestModelDetailsURLNotBrokenInWrap(t *testing.T) {
 	m := NewModel([]Entry{{
-		RepoID:         "acme/widgets",
-		Number:         42,
-		Kind:           sharedtypes.ItemKindIssue,
-		Title:          "t",
-		StateChange:    sharedtypes.StateChangeNone,
-		Confidence:     sharedtypes.ConfidenceHigh,
-		Rationale:      "r",
-		DraftComment:   "d",
-		URL:            "https://github.com/kunchenguid/example-with-a-fairly-long-path/pull/9999",
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "t",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceHigh,
+		Rationale:    "r",
+		DraftComment: "d",
+		URL:          "https://github.com/kunchenguid/example-with-a-fairly-long-path/pull/9999",
 	}})
 	m.width = 80
 	m.height = 60
