@@ -41,8 +41,8 @@ Typical loop:
 1. Contributor opens issue #42 on your repo.
 2. Daemon's next poll picks it up: it has no `ezoss/triaged` label yet.
 3. Daemon prepares a managed repo checkout under `~/.ezoss/investigations`, then invokes your agent with the issue URL, checkout path, and a structured-output schema. The recommendation lands in the local DB.
-4. You open the TUI. Issue #42 shows in the "needs your review" queue with the agent's draft response, suggested labels, and proposed next action.
-5. You approve as-is, edit, or reject. On approval, the orchestrator executes via `gh` CLI and stamps `ezoss/triaged` on the issue.
+4. You open the TUI. Issue #42 shows in the "needs your review" queue with the agent's draft response, fix prompt when present, suggested labels, and proposed next action.
+5. You approve as-is, copy the fix prompt, edit, or reject. On approval, the orchestrator executes via `gh` CLI and stamps `ezoss/triaged` on the issue.
 6. If anyone (you, a co-maintainer) removes that label later, the daemon re-triages on next poll.
 
 ## TUI layout
@@ -188,14 +188,17 @@ For each item that needs triage, run one agent call with a structured-output sch
 
 ```json
 {
-  "proposed_action": "comment | close | merge | request_changes | label_only | request_approval_for_review | none",
-  "rationale": "short paragraph explaining what this is and why",
-  "waiting_on": "maintainer | contributor | ci | none",
-  "draft_comment": "markdown text or empty",
-  "fix_prompt": "coding-agent handoff prompt with original URL, or empty",
-  "proposed_labels": ["bug", "needs-repro"],
-  "confidence": "low | medium | high",
-  "followups": ["optional list of things the maintainer might want to check"]
+  "options": [
+    {
+      "state_change": "none | close | merge | request_changes",
+      "rationale": "short paragraph explaining what this is and why",
+      "waiting_on": "maintainer | contributor | ci | none",
+      "draft_comment": "markdown text or empty",
+      "fix_prompt": "coding-agent handoff prompt with original URL, or empty",
+      "confidence": "low | medium | high",
+      "followups": ["optional list of things the maintainer might want to check"]
+    }
+  ]
 }
 ```
 
@@ -284,7 +287,7 @@ Single daemon, many repos. Repos configured in `~/.ezoss/config.yaml`. Agent cho
 **Phase 2 - TUI**
 
 - Copy `internal/ipc/`, `internal/tui/` skeleton.
-- Inbox list view, detail pane with token usage, approve/edit/skip/rerun actions.
+- Inbox list view, detail pane with token usage, approve/copy prompt/edit/skip/rerun actions.
 - Live subscription so new triages land in the TUI without a refresh.
 - Follow `DESIGN.md` primitives exactly.
 
