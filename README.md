@@ -43,10 +43,6 @@ You stay in control. The agent drafts. The maintainer decides.
 
 Docs: https://kunchenguid.github.io/ezoss/
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/kunchenguid/ezoss/main/demo.gif" alt="ezoss demo" width="800" />
-</p>
-
 - **Private by default** - agent rationale, draft comments, and token usage stay in local SQLite until you approve an action.
 - **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.
 - **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/edit/rerun flows already work end to end.
@@ -146,30 +142,30 @@ Every GitHub release also includes platform archives plus `checksums.txt` if you
 
 ## CLI Reference
 
-| Command | Description |
-| ------- | ----------- |
-| `ezoss` | Open the inbox TUI from the local recommendations database |
-| `ezoss doctor` | Check local prerequisites including `gh`, agent availability, daemon state, and SQLite access |
-| `ezoss init` | Create or update `~/.ezoss/config.yaml` |
-| `ezoss status` | Print a one-line summary of pending recommendations and configured repos |
-| `ezoss list` | Print pending recommendations in a text format |
-| `ezoss triage <repo>#<number>` | Manually triage one issue or PR |
-| `ezoss update` | Download and install the latest released binary for the current platform |
-| `ezoss daemon start` | Start the background poller |
-| `ezoss daemon stop` | Stop the background poller |
-| `ezoss daemon status` | Show whether the daemon is running |
+| Command                        | Description                                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------------- |
+| `ezoss`                        | Open the inbox TUI from the local recommendations database                                    |
+| `ezoss doctor`                 | Check local prerequisites including `gh`, agent availability, daemon state, and SQLite access |
+| `ezoss init`                   | Create or update `~/.ezoss/config.yaml`                                                       |
+| `ezoss status`                 | Print a one-line summary of pending recommendations and configured repos                      |
+| `ezoss list`                   | Print pending recommendations in a text format                                                |
+| `ezoss triage <repo>#<number>` | Manually triage one issue or PR                                                               |
+| `ezoss update`                 | Download and install the latest released binary for the current platform                      |
+| `ezoss daemon start`           | Start the background poller                                                                   |
+| `ezoss daemon stop`            | Stop the background poller                                                                    |
+| `ezoss daemon status`          | Show whether the daemon is running                                                            |
 
 ### Flags
 
-| Command | Flag | Description |
-| ------- | ---- | ----------- |
-| `daemon start` | `--mock` | Use canned GitHub items and recommendations |
-| `triage <repo>#<number>` | `--mock` | Triage against canned fixtures instead of live GitHub + agent backends |
-| `init` | `--repo` | Repository to monitor, repeatable |
-| `init` | `--agent` | Agent backend: `auto`, `claude`, `codex`, `rovodev`, `opencode` |
-| `init` | `--merge-method` | Default PR merge method: `merge`, `squash`, or `rebase` |
-| `init` | `--poll-interval` | Poll cadence as a duration like `5m` |
-| `init` | `--stale-threshold` | Stale threshold as a duration like `30d` or `720h` |
+| Command                  | Flag                | Description                                                            |
+| ------------------------ | ------------------- | ---------------------------------------------------------------------- |
+| `daemon start`           | `--mock`            | Use canned GitHub items and recommendations                            |
+| `triage <repo>#<number>` | `--mock`            | Triage against canned fixtures instead of live GitHub + agent backends |
+| `init`                   | `--repo`            | Repository to monitor, repeatable                                      |
+| `init`                   | `--agent`           | Agent backend: `auto`, `claude`, `codex`, `rovodev`, `opencode`        |
+| `init`                   | `--merge-method`    | Default PR merge method: `merge`, `squash`, or `rebase`                |
+| `init`                   | `--poll-interval`   | Poll cadence as a duration like `5m`                                   |
+| `init`                   | `--stale-threshold` | Stale threshold as a duration like `30d` or `720h`                     |
 
 ## Configuration
 
