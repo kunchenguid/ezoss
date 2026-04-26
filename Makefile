@@ -35,9 +35,9 @@ dist: build
 		GOOS=$$goos GOARCH=$$goarch $(GO) build -ldflags "$(LDFLAGS)" -o "$$stage_path/$$binary_name" $(CMD_DIR); \
 		cp LICENSE README.md "$$stage_path/"; \
 		if [ "$$goos" = "windows" ]; then \
-			(cd $(DIST_DIR) && zip -q -r "$$stage_name.zip" "$$stage_name"); \
+			$(GO) run ./internal/releasecmd archive -format zip -source "$$stage_path" -output "$(DIST_DIR)/$$stage_name.zip"; \
 		else \
-			tar -C $(DIST_DIR) -czf "$(DIST_DIR)/$$stage_name.tar.gz" "$$stage_name"; \
+			$(GO) run ./internal/releasecmd archive -format tar.gz -source "$$stage_path" -output "$(DIST_DIR)/$$stage_name.tar.gz"; \
 		fi; \
 		rm -rf "$$stage_path"; \
 	done
