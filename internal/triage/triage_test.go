@@ -17,6 +17,7 @@ func TestParseSingleOptionRecommendation(t *testing.T) {
 			"rationale":"Issue is a duplicate of #100 - linking and closing.",
 			"waiting_on":"maintainer",
 			"draft_comment":"Closing as duplicate of #100. Please follow the discussion there.",
+			"fix_prompt":"Fix https://github.com/acme/widgets/issues/42 by reproducing the parser panic and adding a regression test.",
 			"confidence":"high",
 			"followups":["Verify no further reports come in"]
 		}]
@@ -43,6 +44,9 @@ func TestParseSingleOptionRecommendation(t *testing.T) {
 	}
 	if opt.DraftComment == "" {
 		t.Fatalf("DraftComment empty, want non-empty")
+	}
+	if !strings.Contains(opt.FixPrompt, "https://github.com/acme/widgets/issues/42") {
+		t.Fatalf("FixPrompt = %q, want issue URL", opt.FixPrompt)
 	}
 }
 
@@ -195,7 +199,7 @@ func TestSchemaWrapsOptions(t *testing.T) {
 	if !ok {
 		t.Fatalf("item properties = %#v", itemSchema["properties"])
 	}
-	for _, field := range []string{"state_change", "rationale", "waiting_on", "draft_comment", "confidence", "followups"} {
+	for _, field := range []string{"state_change", "rationale", "waiting_on", "draft_comment", "fix_prompt", "confidence", "followups"} {
 		if _, ok := itemProperties[field]; !ok {
 			t.Fatalf("option schema missing property %q", field)
 		}
@@ -236,10 +240,12 @@ func TestPromptDescribesDecomposedActionFields(t *testing.T) {
 
 	for _, want := range []string{
 		"draft_comment",
+		"fix_prompt",
 		"state_change",
 		"explain why we are closing and close",
 		"merge an approved PR",
 		"request changes on a PR",
+		"copy into a coding agent",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q in:\n%s", want, prompt)

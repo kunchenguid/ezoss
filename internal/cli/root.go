@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -100,6 +101,7 @@ var loadGlobalConfig = config.LoadGlobal
 var newDraftEditor = func() draftEditor {
 	return envDraftEditor{}
 }
+var copyTextToClipboard = copyTextWithSystemClipboard
 var runTUI = openInboxTUI
 var runTUIWithActions = tui.RunWithActions
 var ipcSubscribe = ipc.Subscribe
@@ -674,6 +676,7 @@ func buildEntryOptions(options []db.RecommendationOption) []tui.EntryOption {
 			Confidence:             opt.Confidence,
 			Rationale:              opt.Rationale,
 			DraftComment:           opt.DraftComment,
+			FixPrompt:              opt.FixPrompt,
 			OriginalDraftComment:   opt.DraftComment,
 			Followups:              append([]string(nil), opt.Followups...),
 			WaitingOn:              opt.WaitingOn,
@@ -736,6 +739,9 @@ func inboxModelActions(notify <-chan struct{}) tui.ModelActions {
 		Notify: notify,
 		Rerun: func(selected []tui.Entry) ([]tui.Entry, error) {
 			return rerunInboxEntries(context.Background(), selected)
+		},
+		CopyPrompt: func(entry tui.Entry) error {
+			return copyTextToClipboard(context.Background(), entry.FixPrompt)
 		},
 		Reload: loadInboxEntries,
 	}
@@ -1395,6 +1401,40 @@ func (envDraftEditor) Prepare(ctx context.Context, initial string) (*exec.Cmd, f
 		return string(content), nil
 	}
 	return cmd, finish, nil
+}
+
+func copyTextWithSystemClipboard(ctx context.Context, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("prompt is empty")
+	}
+	commands := clipboardCommands()
+	if len(commands) == 0 {
+		return errors.New("no clipboard command configured for this platform")
+	}
+	var lastErr error
+	for _, command := range commands {
+		cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+		cmd.Stdin = strings.NewReader(text)
+		if err := cmd.Run(); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("copy to clipboard: %w", lastErr)
+}
+
+func clipboardCommands() [][]string {
+	switch runtime.GOOS {
+	case "darwin":
+		return [][]string{{"pbcopy"}}
+	case "windows":
+		return [][]string{{"clip"}}
+	case "linux":
+		return [][]string{{"wl-copy"}, {"xclip", "-selection", "clipboard"}, {"xsel", "--clipboard", "--input"}}
+	default:
+		return nil
+	}
 }
 
 func readAgentsInstructions(root string) string {

@@ -37,7 +37,7 @@ make build
       <p>
         <code>ezoss</code> polls GitHub for untriaged issues and PRs, asks your coding
         agent for a structured recommendation, stores the private draft locally, and lets you
-        approve, edit, skip, or rerun from a terminal inbox before anything touches GitHub.
+        approve, copy fix prompts, edit, skip, or rerun from a terminal inbox before anything touches GitHub.
       </p>
     </div>
     <div class="hero-actions">
@@ -51,7 +51,7 @@ make build
       <h2>Core loop</h2>
       <p>
         The tool is deliberately maintainer-first. GitHub stays the visible source of truth,
-        while the local SQLite database keeps draft comments, agent rationale, and token usage
+        while the local SQLite database keeps draft comments, fix prompts, agent rationale, and token usage
         private until you explicitly approve an action.
       </p>
     </div>
@@ -66,7 +66,7 @@ make build
       </article>
       <article class="card">
         <h3>3. Review privately</h3>
-        <p>Approve, edit, skip, or rerun from the local TUI inbox without exposing drafts.</p>
+        <p>Approve, copy fix prompts, edit, skip, or rerun from the local TUI inbox without exposing drafts.</p>
       </article>
       <article class="card">
         <h3>4. Sync the outcome</h3>
@@ -75,8 +75,8 @@ make build
     </div>
     <p class="section-note">
       PRs without prior agreement can pause for maintainer approval before any code review happens.
-      The agent can surface that as <code>request_approval_for_review</code> so you decide whether
-      to review the approach first or go straight into code review.
+      The agent can surface that as <code>state_change: none</code> with a draft question so you decide
+      whether to review the approach first or go straight into code review.
     </p>
   </section>
 
@@ -96,6 +96,7 @@ make build
         <li><code>gh auth login</code> already configured for the GitHub account you want to use.</li>
         <li><code>git</code> available for managed investigation checkouts.</li>
         <li>One supported agent backend installed locally.</li>
+        <li>A platform clipboard command for copying fix prompts: <code>pbcopy</code>, <code>clip</code>, <code>wl-copy</code>, <code>xclip</code>, or <code>xsel</code>.</li>
         <li>Writable state directory under <code>~/.ezoss</code>, including checkout storage in <code>~/.ezoss/investigations</code>.</li>
       </ul>
     </div>
@@ -123,6 +124,10 @@ make build
         <div class="command-row">
           <strong><code>a</code> approve</strong>
           Execute the recommended GitHub action and sync triage labels.
+        </div>
+        <div class="command-row">
+          <strong><code>c</code> copy prompt</strong>
+          Copy the active option's coding-agent fix prompt, when one is available.
         </div>
         <div class="command-row">
           <strong><code>e</code> edit</strong>

@@ -54,6 +54,7 @@ type RecommendationOption struct {
 	StateChange      sharedtypes.StateChange
 	Rationale        string
 	DraftComment     string
+	FixPrompt        string
 	Followups        []string
 	ProposedLabels   []string
 	Confidence       sharedtypes.Confidence
@@ -79,6 +80,7 @@ type NewRecommendationOption struct {
 	StateChange    sharedtypes.StateChange
 	Rationale      string
 	DraftComment   string
+	FixPrompt      string
 	Followups      []string
 	ProposedLabels []string
 	Confidence     sharedtypes.Confidence

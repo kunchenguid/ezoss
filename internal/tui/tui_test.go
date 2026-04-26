@@ -361,6 +361,43 @@ func TestModelApproveRemovesCurrentEntry(t *testing.T) {
 	}
 }
 
+func TestModelCopyPromptCopiesCurrentEntryPrompt(t *testing.T) {
+	var copied []string
+	m := NewModelWithActions([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "panic in parser",
+		FixPrompt:        "Fix https://github.com/acme/widgets/issues/42 by adding a regression test.",
+	}}, ModelActions{
+		CopyPrompt: func(entry Entry) error {
+			copied = append(copied, entry.FixPrompt)
+			return nil
+		},
+	})
+	m.width = 100
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if cmd == nil {
+		t.Fatal("expected copy prompt command")
+	}
+	if len(copied) != 0 {
+		t.Fatalf("copy prompt ran synchronously, copied = %#v", copied)
+	}
+	updated, _ = updated.(Model).Update(cmd())
+	next := updated.(Model)
+	if len(copied) != 1 || copied[0] != "Fix https://github.com/acme/widgets/issues/42 by adding a regression test." {
+		t.Fatalf("copied = %#v", copied)
+	}
+	if len(next.entries) != 1 {
+		t.Fatalf("copying prompt should keep entry in inbox, got %d entries", len(next.entries))
+	}
+	if !strings.Contains(stripANSI(next.View()), "copied prompt for acme/widgets #42") {
+		t.Fatalf("View() missing copy status in:\n%s", next.View())
+	}
+}
+
 func TestModelEditUpdatesCurrentDraft(t *testing.T) {
 	m := NewModelWithActions([]Entry{{
 		RecommendationID:       "rec-1",
@@ -600,7 +637,7 @@ func TestModelPendingRendersSpinnerAndMorphsActionBar(t *testing.T) {
 	if !strings.Contains(view, "skipping acme/widgets #42") {
 		t.Fatalf("View() should show 'skipping acme/widgets #42' in the morphed action bar:\n%s", view)
 	}
-	if strings.Contains(view, "a approve   e edit draft   s skip   r rerun") {
+	if strings.Contains(view, "a approve   c copy prompt   e edit draft   s skip   r rerun") {
 		t.Fatalf("View() should hide the regular action hints while pending:\n%s", view)
 	}
 	if !strings.Contains(view, "…") {
@@ -934,6 +971,7 @@ func TestModelHelpToggleShowsAndHidesHelp(t *testing.T) {
 	for _, want := range []string{
 		"Keyboard shortcuts",
 		"approve active option",
+		"copy active option's coding-agent prompt",
 		"next item",
 		"down / up          scroll overflowing card",
 		"toggle this help",

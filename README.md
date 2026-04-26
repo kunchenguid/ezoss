@@ -47,9 +47,9 @@ You stay in control. The agent drafts. The maintainer decides.
 
 Docs: https://kunchenguid.github.io/ezoss/
 
-- **Private by default** - agent rationale, draft comments, and token usage stay in local SQLite until you approve an action.
+- **Private by default** - agent rationale, draft comments, fix prompts, and token usage stay in local SQLite until you approve an action.
 - **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.
-- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/edit/rerun flows already work end to end.
+- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/copy-prompt/edit/rerun flows already work end to end.
 - **PRs can pause before review** - PRs without prior agreement can be routed into a maintainer approval step before code review.
 
 ## Quick Start
@@ -68,7 +68,7 @@ $ ezoss list
 kunchenguid/ezoss#42	issue	comment	low	panic in sync loop
 
 $ ezoss
-# opens the inbox TUI for approve, edit, skip, and rerun
+# opens the inbox TUI for approve, copy prompt, edit, skip, and rerun
 ```
 
 ## Install
@@ -102,7 +102,7 @@ make build
 
 Every GitHub release also includes platform archives plus `checksums.txt` if you prefer a manual download and verification path.
 
-Live triage requires `gh`, `git`, and one supported agent backend available locally.
+Live triage requires `gh`, `git`, and one supported agent backend available locally. Copying fix prompts from the inbox also needs a platform clipboard command: `pbcopy` on macOS, `clip` on Windows, or `wl-copy`, `xclip`, or `xsel` on Linux.
 
 ## How It Works
 
@@ -141,11 +141,11 @@ Live triage requires `gh`, `git`, and one supported agent backend available loca
 ```
 
 - **GitHub is the visible truth** - `ezoss/triaged` is the public signal that an item has already been handled.
-- **Local DB is the private memory** - drafts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
+- **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
 - **Polling is deliberate** - v1 avoids webhook complexity and just re-triages when the GitHub label disappears.
 - **Approval is explicit** - nothing gets posted, closed, merged, or labeled until you do it from the inbox.
-- **PR review is gated when needed** - unsolicited PRs can surface as `request_approval_for_review` so you decide whether to review the approach before the tool drafts code review feedback.
+- **PR review is gated when needed** - unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.
 
 ## CLI Reference
 

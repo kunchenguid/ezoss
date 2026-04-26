@@ -41,6 +41,7 @@ type EntryOption struct {
 	Confidence             sharedtypes.Confidence
 	Rationale              string
 	DraftComment           string
+	FixPrompt              string
 	OriginalDraftComment   string
 	Followups              []string
 	WaitingOn              sharedtypes.WaitingOn
@@ -92,6 +93,7 @@ type Entry struct {
 	Confidence             sharedtypes.Confidence
 	Rationale              string
 	DraftComment           string
+	FixPrompt              string
 	OriginalDraftComment   string
 	Followups              []string
 	WaitingOn              sharedtypes.WaitingOn
@@ -113,6 +115,7 @@ func (e *Entry) SyncActive() {
 	e.Confidence = o.Confidence
 	e.Rationale = o.Rationale
 	e.DraftComment = o.DraftComment
+	e.FixPrompt = o.FixPrompt
 	e.OriginalDraftComment = o.OriginalDraftComment
 	e.Followups = append([]string(nil), o.Followups...)
 	e.WaitingOn = o.WaitingOn
@@ -128,6 +131,7 @@ func (e *Entry) CommitEdits() {
 	o.StateChange = e.StateChange
 	o.ProposedLabels = append([]string(nil), e.ProposedLabels...)
 	o.DraftComment = e.DraftComment
+	o.FixPrompt = e.FixPrompt
 }
 
 func (e Entry) Edited() bool {
@@ -172,6 +176,7 @@ type ModelActions struct {
 	Notify        <-chan struct{}
 	Reload        func() ([]Entry, error)
 	Rerun         func([]Entry) ([]Entry, error)
+	CopyPrompt    func(Entry) error
 }
 
 type Model struct {
@@ -187,6 +192,7 @@ type Model struct {
 	notify     <-chan struct{}
 	reload     func() ([]Entry, error)
 	rerun      func([]Entry) ([]Entry, error)
+	copyPrompt func(Entry) error
 	showHelp   bool
 	quitting   bool
 
@@ -285,6 +291,12 @@ type actionFinishedMsg struct {
 	updatedEntries   []Entry // non-nil for rerun; replaces the entry in-place on success
 }
 
+type copyPromptFinishedMsg struct {
+	repoID string
+	number int
+	err    error
+}
+
 // spinnerTickMsg drives spinner animation while at least one action is
 // pending. The handler advances the frame and reschedules itself; once
 // pendingActions is empty, ticks stop.
@@ -308,6 +320,7 @@ func NewModelWithActions(entries []Entry, actions ModelActions) Model {
 	m.notify = actions.Notify
 	m.reload = actions.Reload
 	m.rerun = actions.Rerun
+	m.copyPrompt = actions.CopyPrompt
 	return m
 }
 
@@ -369,6 +382,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionFinishedMsg:
 		m.applyActionFinished(msg)
 		return m, nil
+	case copyPromptFinishedMsg:
+		if msg.err != nil {
+			m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("copy prompt failed: %v", msg.err)})
+			return m, nil
+		}
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("copied prompt for %s #%d", msg.repoID, msg.number)})
+		return m, nil
 	case spinnerTickMsg:
 		m.spinnerFrame++
 		if len(m.pendingActions) > 0 {
@@ -405,6 +425,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "e":
 			if cmd := m.editCurrent(); cmd != nil {
+				return m, cmd
+			}
+		case "c":
+			if cmd := m.copyPromptCurrent(); cmd != nil {
 				return m, cmd
 			}
 		case "r":
@@ -572,6 +596,32 @@ func (m *Model) editCurrent() tea.Cmd {
 	m.cardScroll = 0
 	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
 	return nil
+}
+
+func (m *Model) copyPromptCurrent() tea.Cmd {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	entry := m.entries[m.cursor]
+	if _, blocked := m.guardConflict(entry, "copy prompt"); blocked {
+		return nil
+	}
+	if strings.TrimSpace(entry.FixPrompt) == "" {
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("no fix prompt for %s #%d", entry.RepoID, entry.Number)})
+		return nil
+	}
+	if m.copyPrompt == nil {
+		m.pushLog(logEntry{state: logStateInfo, note: "copy prompt unavailable"})
+		return nil
+	}
+	copyPrompt := m.copyPrompt
+	return func() tea.Msg {
+		return copyPromptFinishedMsg{
+			repoID: entry.RepoID,
+			number: entry.Number,
+			err:    copyPrompt(entry),
+		}
+	}
 }
 
 // guardConflict reports whether an action on entry should be refused
@@ -1027,7 +1077,7 @@ func formatLogElapsed(d time.Duration) string {
 // spinner+verb so it's obvious that pressing a/s/r/e right now is a
 // no-op until the action completes.
 func renderDecideBar(optionCount int) string {
-	bar := "a approve   e edit draft   s skip   r rerun"
+	bar := "a approve   c copy prompt   e edit draft   s skip   r rerun"
 	if optionCount > 1 {
 		bar += "   tab switch option"
 	}
@@ -1105,6 +1155,7 @@ func (m Model) renderHelp() string {
 		"tab / shift+tab    cycle between alternate recommendations (when present)",
 		"1-9                jump directly to that recommendation option",
 		"a                  approve active option (post comment, apply state change, sync labels)",
+		"c                  copy active option's coding-agent prompt",
 		"e                  edit active option's draft, action, or labels",
 		"s                  skip current item",
 		"r                  rerun the agent on the current item",
@@ -1243,6 +1294,9 @@ func (m Model) renderDetails() string {
 		sectionLabel("Draft response"),
 		renderIndentedBlock(emptyFallback(entry.DraftComment, "No draft response."), "  "),
 	)
+	if strings.TrimSpace(entry.FixPrompt) != "" {
+		lines = append(lines, sectionLabel("Fix prompt"), renderIndentedBlock(entry.FixPrompt, "  "))
+	}
 	if len(entry.Followups) > 0 {
 		lines = append(lines, sectionLabel("Follow-ups"))
 		for _, followup := range entry.Followups {
@@ -1277,6 +1331,9 @@ func cardBodyLines(entry Entry) []string {
 		sectionLabel("Draft response"),
 		renderIndentedBlock(emptyFallback(entry.DraftComment, "No draft response."), "  "),
 	)
+	if strings.TrimSpace(entry.FixPrompt) != "" {
+		lines = append(lines, sectionLabel("Fix prompt"), renderIndentedBlock(entry.FixPrompt, "  "))
+	}
 	if len(entry.Followups) > 0 {
 		lines = append(lines, sectionLabel("Follow-ups"))
 		for _, followup := range entry.Followups {

@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS recommendation_options (
     state_change      TEXT,
     rationale         TEXT,
     draft_comment     TEXT,
+    fix_prompt        TEXT,
     proposed_labels   TEXT,
     confidence        TEXT,
     waiting_on        TEXT,

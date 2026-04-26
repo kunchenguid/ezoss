@@ -283,6 +283,7 @@ func TestRecommendationRoundTripAndListActive(t *testing.T) {
 			StateChange:    sharedtypes.StateChangeNone,
 			Rationale:      "The report includes a repro and points to a likely regression.",
 			DraftComment:   "Thanks for the report. I can reproduce this and will take a look.",
+			FixPrompt:      "Fix https://github.com/kunchenguid/ezoss/issues/42 by reproducing the queue stall and adding a regression test.",
 			Followups:      []string{"Check linked issue history", "Confirm this still reproduces on main"},
 			ProposedLabels: []string{"bug", "needs-investigation"},
 			Confidence:     sharedtypes.ConfidenceHigh,
@@ -318,6 +319,9 @@ func TestRecommendationRoundTripAndListActive(t *testing.T) {
 	if opt.Position != 0 {
 		t.Fatalf("Position = %d, want 0", opt.Position)
 	}
+	if opt.FixPrompt != "Fix https://github.com/kunchenguid/ezoss/issues/42 by reproducing the queue stall and adding a regression test." {
+		t.Fatalf("FixPrompt = %q", opt.FixPrompt)
+	}
 	if len(opt.Followups) != 2 || opt.Followups[0] != "Check linked issue history" || opt.Followups[1] != "Confirm this still reproduces on main" {
 		t.Fatalf("followups = %#v", opt.Followups)
 	}
@@ -337,6 +341,9 @@ func TestRecommendationRoundTripAndListActive(t *testing.T) {
 	}
 	if len(active[0].Options) != 1 {
 		t.Fatalf("active recommendation options = %#v", active[0].Options)
+	}
+	if active[0].Options[0].FixPrompt != opt.FixPrompt {
+		t.Fatalf("active FixPrompt = %q, want %q", active[0].Options[0].FixPrompt, opt.FixPrompt)
 	}
 
 	if err := database.MarkRecommendationSuperseded(rec.ID, time.Unix(1713000000, 0)); err != nil {

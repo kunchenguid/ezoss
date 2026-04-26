@@ -44,6 +44,10 @@ func Open(path string) (*DB, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("migrate db: %w", err)
 	}
+	if err := ensureColumnExists(sqlDB, "recommendation_options", "fix_prompt", `ALTER TABLE recommendation_options ADD COLUMN fix_prompt TEXT`); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("migrate db: %w", err)
+	}
 	if err := backfillRecommendationOptions(sqlDB); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("migrate db: %w", err)
@@ -159,13 +163,14 @@ func backfillRecommendationOptions(sqlDB *sql.DB) error {
 		optionID := newID()
 		if _, err := sqlDB.Exec(
 			`INSERT INTO recommendation_options (
-			 id, recommendation_id, position, state_change, rationale, draft_comment, proposed_labels, confidence, waiting_on, followups, created_at
-			) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 id, recommendation_id, position, state_change, rationale, draft_comment, fix_prompt, proposed_labels, confidence, waiting_on, followups, created_at
+			) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			optionID,
 			r.recID,
 			nullStringValue(r.stateChange),
 			nullStringValue(r.rationale),
 			nullStringValue(r.draftComment),
+			"",
 			nullStringValue(r.proposedLabels),
 			nullStringValue(r.confidence),
 			nullStringValue(waitingOn),

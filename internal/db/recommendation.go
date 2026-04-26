@@ -108,6 +108,7 @@ func insertOptionTx(tx *sql.Tx, recommendationID string, position int, input New
 		StateChange:      input.StateChange,
 		Rationale:        input.Rationale,
 		DraftComment:     input.DraftComment,
+		FixPrompt:        input.FixPrompt,
 		Followups:        append([]string(nil), input.Followups...),
 		ProposedLabels:   append([]string(nil), input.ProposedLabels...),
 		Confidence:       input.Confidence,
@@ -117,14 +118,15 @@ func insertOptionTx(tx *sql.Tx, recommendationID string, position int, input New
 
 	if _, err := tx.Exec(
 		`INSERT INTO recommendation_options (
-		 id, recommendation_id, position, state_change, rationale, draft_comment, proposed_labels, confidence, waiting_on, followups, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 id, recommendation_id, position, state_change, rationale, draft_comment, fix_prompt, proposed_labels, confidence, waiting_on, followups, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		opt.ID,
 		opt.RecommendationID,
 		opt.Position,
 		opt.StateChange,
 		opt.Rationale,
 		opt.DraftComment,
+		opt.FixPrompt,
 		labelsJSON,
 		opt.Confidence,
 		opt.WaitingOn,
@@ -173,7 +175,7 @@ func (d *DB) GetRecommendation(id string) (*Recommendation, error) {
 
 func (d *DB) GetRecommendationOption(id string) (*RecommendationOption, error) {
 	rows, err := d.sql.Query(
-		`SELECT id, recommendation_id, position, state_change, rationale, draft_comment, proposed_labels, confidence, waiting_on, followups, created_at
+		`SELECT id, recommendation_id, position, state_change, rationale, draft_comment, fix_prompt, proposed_labels, confidence, waiting_on, followups, created_at
 		 FROM recommendation_options WHERE id = ?`,
 		id,
 	)
@@ -198,7 +200,7 @@ func (d *DB) GetRecommendationOption(id string) (*RecommendationOption, error) {
 
 func (d *DB) listOptionsForRecommendation(recommendationID string) ([]RecommendationOption, error) {
 	rows, err := d.sql.Query(
-		`SELECT id, recommendation_id, position, state_change, rationale, draft_comment, proposed_labels, confidence, waiting_on, followups, created_at
+		`SELECT id, recommendation_id, position, state_change, rationale, draft_comment, fix_prompt, proposed_labels, confidence, waiting_on, followups, created_at
 		 FROM recommendation_options
 		 WHERE recommendation_id = ?
 		 ORDER BY position ASC`,
@@ -225,6 +227,7 @@ func (d *DB) listOptionsForRecommendation(recommendationID string) ([]Recommenda
 
 func scanOption(rows *sql.Rows) (RecommendationOption, error) {
 	var opt RecommendationOption
+	var fixPrompt sql.NullString
 	var labels sql.NullString
 	var followups sql.NullString
 	if err := rows.Scan(
@@ -234,6 +237,7 @@ func scanOption(rows *sql.Rows) (RecommendationOption, error) {
 		&opt.StateChange,
 		&opt.Rationale,
 		&opt.DraftComment,
+		&fixPrompt,
 		&labels,
 		&opt.Confidence,
 		&opt.WaitingOn,
@@ -241,6 +245,9 @@ func scanOption(rows *sql.Rows) (RecommendationOption, error) {
 		&opt.CreatedAt,
 	); err != nil {
 		return RecommendationOption{}, fmt.Errorf("scan recommendation option: %w", err)
+	}
+	if fixPrompt.Valid {
+		opt.FixPrompt = fixPrompt.String
 	}
 	var err error
 	opt.ProposedLabels, err = unmarshalStringSlice(labels)

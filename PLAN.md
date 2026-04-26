@@ -41,8 +41,8 @@ Typical loop:
 1. Contributor opens issue #42 on your repo.
 2. Daemon's next poll picks it up: it has no `ezoss/triaged` label yet.
 3. Daemon prepares a managed repo checkout under `~/.ezoss/investigations`, then invokes your agent with the issue URL, checkout path, and a structured-output schema. The recommendation lands in the local DB.
-4. You open the TUI. Issue #42 shows in the "needs your review" queue with the agent's draft response, suggested labels, and proposed next action.
-5. You approve as-is, edit, or reject. On approval, the orchestrator executes via `gh` CLI and stamps `ezoss/triaged` on the issue.
+4. You open the TUI. Issue #42 shows in the "needs your review" queue with the agent's draft response, fix prompt when present, suggested labels, and proposed next action.
+5. You approve as-is, copy the fix prompt, edit, or reject. On approval, the orchestrator executes via `gh` CLI and stamps `ezoss/triaged` on the issue.
 6. If anyone (you, a co-maintainer) removes that label later, the daemon re-triages on next poll.
 
 ## TUI layout
@@ -61,24 +61,26 @@ Follows `DESIGN.md` primitives. Rough sketch:
 │           Question about install on Windows                           │
 │           → answer + close as resolved                                │
 ╰───────────────────────────────────────────────────────────────────────╯
- a approve  e edit  s skip  r rerun  d details │ ␣ toggle  A all  N none
+ a approve  c copy prompt  e edit  s skip  r rerun  d details │ ␣ toggle
 ╭─ Details ─────────────────────────────────────────────────────────────╮
 │  Rationale: the error trace in the body matches a known race in ...   │
 │  Draft response:                                                      │
 │    Thanks for the repro! Can you also share the output of `...`?      │
+│  Fix prompt:                                                          │
+│    Fix https://github.com/... by reproducing the failure and testing. │
 │  Proposed labels: bug, needs-repro                                    │
 │  Confidence: medium  ·  tokens: 12.4k in / 1.1k out                   │
 ╰───────────────────────────────────────────────────────────────────────╯
  q quit  ? help
 ```
 
-Two-pane list/detail. Inbox on top, detail below. `j/k` moves cursor; up/down arrows scroll overflowing detail content. `a` approves the selected item(s), `e` opens `$EDITOR` for the draft, `s` dismisses (won't retrigger unless the `ezoss/triaged` label is removed on GitHub), `r` reruns triage.
+Two-pane list/detail. Inbox on top, detail below. `j/k` moves cursor; up/down arrows scroll overflowing detail content. `a` approves the selected item(s), `c` copies the active option's coding-agent fix prompt, `e` opens `$EDITOR` for the draft, `s` dismisses (won't retrigger unless the `ezoss/triaged` label is removed on GitHub), `r` reruns triage.
 
 The details pane always shows cumulative token usage for the item - every triage/re-triage gets attributed so the maintainer can see what the agent is costing them per issue.
 
 ## State model
 
-**GitHub is the source of truth. Local DB only holds things that should stay private** - draft recommendations, agent rationales, token counts, and the approval audit trail. Anything the maintainer would want a co-maintainer to see (triage status, waiting-on signals, resolution) lives on GitHub as labels or native state.
+**GitHub is the source of truth. Local DB only holds things that should stay private** - draft recommendations, fix prompts, agent rationales, token counts, and the approval audit trail. Anything the maintainer would want a co-maintainer to see (triage status, waiting-on signals, resolution) lives on GitHub as labels or native state.
 
 The "have we triaged this yet" signal is a single GitHub label: **`ezoss/triaged`**. Applied by the orchestrator after the maintainer approves and the action executes. If anyone removes it, the next poll picks the item up again and the old recommendation is superseded.
 
@@ -136,8 +138,9 @@ CREATE TABLE recommendations (
     model            TEXT,
     rationale        TEXT,
     draft_comment    TEXT,
+    followups        TEXT,
     proposed_labels  TEXT,              -- JSON array
-    proposed_action  TEXT,              -- 'comment' | 'close' | 'merge' | 'request_changes' | 'label_only' | 'request_approval_for_review' | 'none'
+    state_change     TEXT,              -- 'none' | 'close' | 'merge' | 'request_changes'
     confidence       TEXT,              -- 'low' | 'medium' | 'high'
     tokens_in        INTEGER,
     tokens_out       INTEGER,
@@ -145,13 +148,29 @@ CREATE TABLE recommendations (
     superseded_at    INTEGER
 );
 
+CREATE TABLE recommendation_options (
+    id                 TEXT PRIMARY KEY,
+    recommendation_id  TEXT NOT NULL REFERENCES recommendations(id) ON DELETE CASCADE,
+    position           INTEGER NOT NULL,
+    state_change       TEXT,
+    rationale          TEXT,
+    draft_comment      TEXT,
+    fix_prompt         TEXT,
+    proposed_labels    TEXT,
+    confidence         TEXT,
+    waiting_on         TEXT,
+    followups          TEXT,
+    created_at         INTEGER
+);
+
 CREATE TABLE approvals (
     id                 TEXT PRIMARY KEY,
     recommendation_id  TEXT NOT NULL REFERENCES recommendations(id),
+    option_id          TEXT REFERENCES recommendation_options(id) ON DELETE SET NULL,
     decision           TEXT NOT NULL,   -- 'approved' | 'edited' | 'rejected' | 'dismissed'
     final_comment      TEXT,
     final_labels       TEXT,
-    final_action       TEXT,
+    final_state_change TEXT,
     acted_at           INTEGER,         -- when the gh call actually happened
     acted_error        TEXT,
     created_at         INTEGER
@@ -186,13 +205,17 @@ For each item that needs triage, run one agent call with a structured-output sch
 
 ```json
 {
-  "proposed_action": "comment | close | merge | request_changes | label_only | request_approval_for_review | none",
-  "rationale": "short paragraph explaining what this is and why",
-  "waiting_on": "maintainer | contributor | ci | none",
-  "draft_comment": "markdown text or empty",
-  "proposed_labels": ["bug", "needs-repro"],
-  "confidence": "low | medium | high",
-  "followups": ["optional list of things the maintainer might want to check"]
+  "options": [
+    {
+      "state_change": "none | close | merge | request_changes",
+      "rationale": "short paragraph explaining what this is and why",
+      "waiting_on": "maintainer | contributor | ci | none",
+      "draft_comment": "markdown text or empty",
+      "fix_prompt": "coding-agent handoff prompt with original URL, or empty",
+      "confidence": "low | medium | high",
+      "followups": ["optional list of things the maintainer might want to check"]
+    }
+  ]
 }
 ```
 
@@ -201,6 +224,7 @@ The prompt is intentionally minimal:
 - The issue or PR URL.
 - The contents of `~/.ezoss/AGENTS.md` if it exists (user-supplied instructions - voice profile, custom guidance, house rules - injected verbatim into every prompt).
 - A brief note that the agent should inspect the managed checkout and any issue body, comments, diff, linked issues, or CI context it needs.
+- For legitimate actionable issues or PRs, return `fix_prompt` with the original URL, investigation context, acceptance criteria, and verification steps; otherwise leave it empty.
 
 We don't pre-fetch issue context or stuff the prompt. Ezoss prepares the repo checkout, the agent decides what to look at, and local scratch edits are discarded before a future run. The agent interface already supports streaming, so the TUI can show rationale appearing live when the user runs `rerun`.
 
@@ -209,8 +233,8 @@ We don't pre-fetch issue context or stuff the prompt. Ezoss prepares the repo ch
 PRs branch on whether there's a prior agreement to build the thing:
 
 1. Agent first checks: is this PR linked to an issue where the approach was already discussed and agreed upon?
-2. **Yes** → proceed to code review. Produce a top-level review comment as `draft_comment` and `proposed_action: request_changes` or `proposed_action: merge` based on the review.
-3. **No** → set `proposed_action: request_approval_for_review`. The draft comment should explain what the PR is doing and ask the maintainer whether the approach is wanted before any code review happens. The maintainer can approve that action (which posts the question to the PR) or manually flip the recommendation to "do a code review anyway" via `e`.
+2. **Yes** → proceed to code review. Produce a top-level review comment as `draft_comment` and set `state_change: request_changes` or `state_change: merge` based on the review.
+3. **No** → set `state_change: none`. The draft comment should explain what the PR is doing and ask the maintainer whether the approach is wanted before any code review happens. The maintainer can approve that option, which posts the question to the PR, or manually edit it to do a code review anyway via `e`.
 
 Line-level review comments stay out of v1 - top-level review only. Upgrade later.
 
@@ -223,14 +247,12 @@ Default behavior, not opt-in:
 
 ## Acting on approvals
 
-Once the user approves a recommendation, the orchestrator translates to `gh` commands:
+Once the user approves a recommendation option, the orchestrator posts `draft_comment` when present, applies lifecycle labels independently, then translates `state_change` to `gh` commands:
 
-- `comment` → `gh issue comment <n> -b <body>` (or `gh pr comment`).
-- `close` → `gh issue close <n> -c <body>` (close with a comment).
+- `none` → no state transition; post only the draft comment and labels.
+- `close` → `gh issue close <n> -c <body>` (close with a comment when present).
 - `merge` → `gh pr merge <n> --squash/--merge/--rebase` (default configurable).
 - `request_changes` → `gh pr review <n> --request-changes -b <body>`.
-- `request_approval_for_review` → post the draft_comment on the PR, don't mark merged/closed.
-- `label_only` → `gh issue edit <n> --add-label ...`.
 
 After any successful action, add the `ezoss/triaged` label to the item (and `ezoss/awaiting-*` if configured). That's what keeps the item out of the next poll's triage queue.
 
@@ -280,7 +302,7 @@ Single daemon, many repos. Repos configured in `~/.ezoss/config.yaml`. Agent cho
 **Phase 2 - TUI**
 
 - Copy `internal/ipc/`, `internal/tui/` skeleton.
-- Inbox list view, detail pane with token usage, approve/edit/skip/rerun actions.
+- Inbox list view, detail pane with token usage, approve/copy prompt/edit/skip/rerun actions.
 - Live subscription so new triages land in the TUI without a refresh.
 - Follow `DESIGN.md` primitives exactly.
 
