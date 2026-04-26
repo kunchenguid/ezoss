@@ -1262,6 +1262,9 @@ func TestDemoTapeAndMakefileMatchShippedDemoFlow(t *testing.T) {
 		".PHONY: build dist demo docs-build install test lint fmt fmt-check",
 		"demo: build",
 		"vhs demo.tape",
+		"ffmpeg -y -i demo_raw.gif",
+		"demo.gif",
+		"rm -f demo_raw.gif",
 	} {
 		if !strings.Contains(makefileText, want) {
 			t.Fatalf("Makefile demo flow missing %q:\n%s", want, makefileText)
@@ -1276,13 +1279,14 @@ func TestDemoTapeAndMakefileMatchShippedDemoFlow(t *testing.T) {
 
 	tapeText := string(tapeData)
 	for _, want := range []string{
-		"Output demo.gif",
+		"Output demo_raw.gif",
 		"Require ./bin/ezoss",
-		"./bin/ezoss init --repo kunchenguid/ezoss --agent auto",
-		"./bin/ezoss daemon start --mock",
-		"sleep 3 && ./bin/ezoss status",
-		"./bin/ezoss list",
-		"./bin/ezoss daemon stop",
+		"export PATH=$PWD/bin:$PATH",
+		"ezoss init --repo kunchenguid/ezoss --agent auto",
+		"ezoss daemon start --mock",
+		"sleep 3 && ezoss status",
+		"ezoss",
+		"ezoss daemon stop",
 	} {
 		if !strings.Contains(tapeText, want) {
 			t.Fatalf("demo.tape missing %q:\n%s", want, tapeText)
