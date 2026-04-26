@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os/exec"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -568,6 +569,7 @@ func (m *Model) editCurrent() tea.Cmd {
 	}
 	updated.CommitEdits()
 	m.entries[m.cursor] = updated
+	m.cardScroll = 0
 	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
 	return nil
 }
@@ -675,6 +677,9 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 	case "rerun":
 		if idx >= 0 && len(msg.updatedEntries) > 0 {
 			m.entries[idx] = msg.updatedEntries[0]
+			if idx == m.cursor {
+				m.cardScroll = 0
+			}
 		}
 	}
 }
@@ -731,6 +736,9 @@ func (m *Model) applyEditFinished(msg editFinishedMsg) {
 	}
 	updated.CommitEdits()
 	m.entries[idx] = updated
+	if idx == m.cursor {
+		m.cardScroll = 0
+	}
 	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
 }
 
@@ -1852,6 +1860,7 @@ func (m *Model) removeEntries(indices []int) {
 	if len(indices) == 0 {
 		return
 	}
+	currentID := m.currentRecommendationID()
 	remove := make(map[int]struct{}, len(indices))
 	for _, index := range indices {
 		remove[index] = struct{}{}
@@ -1870,6 +1879,16 @@ func (m *Model) removeEntries(indices []int) {
 	if len(m.entries) == 0 {
 		m.cursor = 0
 	}
+	if currentID != m.currentRecommendationID() {
+		m.cardScroll = 0
+	}
+}
+
+func (m *Model) currentRecommendationID() string {
+	if m.cursor < 0 || m.cursor >= len(m.entries) {
+		return ""
+	}
+	return m.entries[m.cursor].RecommendationID
 }
 
 func scheduleRefresh() tea.Cmd {
@@ -1899,8 +1918,13 @@ func runReload(reload func() ([]Entry, error)) tea.Cmd {
 
 func (m *Model) applyReload(entries []Entry) {
 	currentID := ""
+	var current Entry
+	hasCurrent := false
 	if m.cursor >= 0 && m.cursor < len(m.entries) {
-		currentID = m.entries[m.cursor].RecommendationID
+		current = m.entries[m.cursor]
+		current.CommitEdits()
+		currentID = current.RecommendationID
+		hasCurrent = true
 	}
 
 	editedByID := make(map[string]Entry)
@@ -1956,17 +1980,23 @@ func (m *Model) applyReload(entries []Entry) {
 
 	if len(m.entries) == 0 {
 		m.cursor = 0
+		m.cardScroll = 0
 		return
 	}
 	if foundCursor {
 		m.cursor = newCursor
+		if hasCurrent && !reflect.DeepEqual(current, m.entries[m.cursor]) {
+			m.cardScroll = 0
+		}
 		return
 	}
 	if m.cursor >= len(m.entries) {
 		m.cursor = len(m.entries) - 1
+		m.cardScroll = 0
 		return
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
+	m.cardScroll = 0
 }

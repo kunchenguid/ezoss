@@ -1478,6 +1478,55 @@ func TestDownScrollsOverflowingCardBeforeMovingInboxCursor(t *testing.T) {
 	}
 }
 
+func TestCardScrollResetsWhenCurrentCardChangesAfterRemoval(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Rationale: "r", DraftComment: strings.Join([]string{"one draft 1", "one draft 2", "one draft 3"}, "\n")},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Rationale: "r", DraftComment: strings.Join([]string{"two draft 1", "two draft 2", "two draft 3"}, "\n")},
+	})
+	m.width = 80
+	m.height = 8
+	m.cardScroll = 2
+
+	m.removeEntries([]int{0})
+
+	if m.cardScroll != 0 {
+		t.Fatalf("cardScroll after removing current card = %d, want 0", m.cardScroll)
+	}
+}
+
+func TestCardScrollResetsWhenCurrentCardIsReplaced(t *testing.T) {
+	m := NewModel([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "old",
+		Rationale:        "old rationale",
+		DraftComment:     strings.Join([]string{"old draft 1", "old draft 2", "old draft 3"}, "\n"),
+	}})
+	m.width = 80
+	m.height = 8
+	m.cardScroll = 2
+
+	m.applyActionFinished(actionFinishedMsg{
+		verb:             "rerun",
+		recommendationID: "rec-1",
+		updatedEntries: []Entry{{
+			RecommendationID: "rec-1",
+			RepoID:           "acme/widgets",
+			Number:           1,
+			Kind:             sharedtypes.ItemKindIssue,
+			Title:            "new",
+			Rationale:        "new rationale",
+			DraftComment:     strings.Join([]string{"new draft 1", "new draft 2", "new draft 3"}, "\n"),
+		}},
+	})
+
+	if m.cardScroll != 0 {
+		t.Fatalf("cardScroll after replacing current card = %d, want 0", m.cardScroll)
+	}
+}
+
 // extractDetailsBodyLines returns the body lines of the focused-item card,
 // with `│ ` and trailing ` │` borders stripped. The card title carries the
 // repo+item identifier so we look for the first ╭ that's followed by a
