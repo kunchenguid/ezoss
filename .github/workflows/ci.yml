@@ -126,6 +126,9 @@ jobs:
 
   windows-build:
     runs-on: windows-latest
+    env:
+      TMP: ${{ runner.temp }}
+      TEMP: ${{ runner.temp }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
