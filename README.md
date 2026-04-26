@@ -102,6 +102,8 @@ make build
 
 Every GitHub release also includes platform archives plus `checksums.txt` if you prefer a manual download and verification path.
 
+Live triage requires `gh`, `git`, and one supported agent backend available locally.
+
 ## How It Works
 
 ```
