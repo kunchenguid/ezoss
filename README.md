@@ -209,6 +209,7 @@ If `~/.ezoss/AGENTS.md` exists, its contents are appended to every triage prompt
 
 ```sh
 make build      # Build ./bin/ezoss
+make demo       # Regenerate demo.gif with VHS and ffmpeg
 make dist       # Cross-compile release archives into ./dist
 make docs-build # Install docs deps and build ./docs
 make install    # go install the CLI
