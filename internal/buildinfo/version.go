@@ -18,11 +18,13 @@ var (
 	TelemetryWebsiteID = ""
 )
 
+var readBuildInfo = debug.ReadBuildInfo
+
 func CurrentVersion() string {
-	if Version != "" && Version != "dev" {
+	if Version != "" {
 		return Version
 	}
-	if info, ok := debug.ReadBuildInfo(); ok {
+	if info, ok := readBuildInfo(); ok {
 		if info.Main.Version != "" && info.Main.Version != "(devel)" {
 			return info.Main.Version
 		}
