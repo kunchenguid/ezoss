@@ -1732,6 +1732,11 @@ func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show daemon and sync status",
+		Long: `Show daemon and sync status.
+
+In an interactive terminal, status opens a realtime TUI. In non-interactive
+output, status prints rich text status. Use --short for the script-friendly
+one-line key=value summary.`,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			telemetry.Track("command", telemetry.Fields{"command": "status", "entrypoint": "status"})
