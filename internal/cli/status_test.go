@@ -622,6 +622,47 @@ func TestStatusTUIViewHonorsNarrowTerminalWidth(t *testing.T) {
 	}
 }
 
+func TestStatusTUIViewClipsTitlesAndFootersToNarrowTerminalWidth(t *testing.T) {
+	m := newStatusTUIModel(statusTUIOptions{})
+	m.hasData = true
+	m.data = statusData{daemonState: daemon.StateStopped}
+	m.width = 10
+	m.showHelp = true
+
+	view := stripStatusANSI(m.View())
+	for _, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Fatalf("View() line width = %d, want at most %d:\n%s", got, m.width, view)
+		}
+	}
+}
+
+func TestStatusTUIViewFitsTinyTerminalHeight(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		height   int
+		showHelp bool
+	}{
+		{name: "without help", height: 2},
+		{name: "with help", height: 7, showHelp: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newStatusTUIModel(statusTUIOptions{})
+			m.hasData = true
+			m.data = statusData{daemonState: daemon.StateStopped}
+			m.width = 40
+			m.height = tc.height
+			m.showHelp = tc.showHelp
+
+			view := stripStatusANSI(m.View())
+			lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+			if len(lines) > m.height {
+				t.Fatalf("View() rendered %d lines, want at most %d:\n%s", len(lines), m.height, view)
+			}
+		})
+	}
+}
+
 func TestStatusTUIViewHelpConstrainedToTerminalHeight(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	repos := []string{

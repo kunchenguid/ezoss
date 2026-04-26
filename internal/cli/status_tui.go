@@ -113,12 +113,18 @@ func (m statusTUIModel) View() string {
 	if width <= 0 {
 		width = 80
 	}
+	if m.height > 0 && m.height < 3 {
+		return statusClipLine("Status", width)
+	}
 	help := ""
 	if m.showHelp {
 		help = statusRenderBox(width, "Keyboard shortcuts", strings.Join([]string{
 			"?                  toggle this help",
 			"q                  quit",
 		}, "\n"))
+		if m.height > 0 && statusRenderedLineCount(help)+4 > m.height {
+			help = ""
+		}
 	}
 	body := m.renderBody()
 	if m.height > 0 {
@@ -184,6 +190,7 @@ func statusRenderBoxWithFooter(width int, title string, body string, footer stri
 		width = 6
 	}
 	border := statusBorderStyle()
+	title = statusClipLine(title, width-6)
 	styledTitle := statusTitleStyle().Render(title)
 
 	titleW := lipgloss.Width(styledTitle)
@@ -241,6 +248,7 @@ func statusRenderBottomBorder(width int, footer string) string {
 		}
 		return border.Render("╰" + strings.Repeat("─", fill) + "╯")
 	}
+	footer = statusClipLine(footer, width-7)
 	rw := lipgloss.Width(footer)
 	trail := width - rw - 6
 	if trail < 1 {
