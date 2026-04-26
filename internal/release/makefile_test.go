@@ -222,7 +222,7 @@ func TestMakeDistFallsBackToSHA256SumWhenShasumIsUnavailable(t *testing.T) {
 	toolPath := makeDistToolPathWithoutShasum(t)
 	cmd := exec.Command("make", "dist", "VERSION=test-sha256sum")
 	cmd.Dir = worktree
-	cmd.Env = append([]string{"PATH=" + toolPath, "GOROOT=" + runtime.GOROOT()}, filteredEnv(os.Environ(), "PATH", "GOROOT")...)
+	cmd.Env = append([]string{"PATH=" + testPathWithoutShasum(t, toolPath), "GOROOT=" + runtime.GOROOT()}, filteredEnv(os.Environ(), "PATH", "GOROOT")...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("make dist with sha256sum fallback error = %v, output = %s", err, output)
@@ -503,6 +503,27 @@ func makeDistToolPathWithoutShasum(t *testing.T) string {
 	}
 
 	return dir
+}
+
+func testPathWithoutShasum(t *testing.T, toolPath string) string {
+	t.Helper()
+
+	pathEntries := []string{toolPath}
+	for _, entry := range filepath.SplitList(os.Getenv("PATH")) {
+		if entry == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(entry, "shasum")); err == nil {
+			continue
+		}
+		if runtime.GOOS == "windows" {
+			if _, err := os.Stat(filepath.Join(entry, "shasum.exe")); err == nil {
+				continue
+			}
+		}
+		pathEntries = append(pathEntries, entry)
+	}
+	return strings.Join(pathEntries, string(os.PathListSeparator))
 }
 
 func filteredEnv(env []string, keys ...string) []string {
