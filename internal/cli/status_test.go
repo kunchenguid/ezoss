@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/kunchenguid/ezoss/internal/config"
 	"github.com/kunchenguid/ezoss/internal/daemon"
 	"github.com/kunchenguid/ezoss/internal/db"
@@ -604,6 +605,51 @@ func TestStatusTUIViewConstrainedToTerminalHeight(t *testing.T) {
 	}
 	if !strings.Contains(view, "more lines") {
 		t.Fatalf("View() missing overflow indicator:\n%s", view)
+	}
+}
+
+func TestStatusTUIViewHonorsNarrowTerminalWidth(t *testing.T) {
+	m := newStatusTUIModel(statusTUIOptions{})
+	m.hasData = true
+	m.data = statusData{daemonState: daemon.StateStopped}
+	m.width = 40
+
+	view := stripStatusANSI(m.View())
+	for _, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Fatalf("View() line width = %d, want at most %d:\n%s", got, m.width, view)
+		}
+	}
+}
+
+func TestStatusTUIViewHelpConstrainedToTerminalHeight(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	repos := []string{
+		"acme/repo-01",
+		"acme/repo-02",
+		"acme/repo-03",
+		"acme/repo-04",
+		"acme/repo-05",
+	}
+	m := newStatusTUIModel(statusTUIOptions{Now: func() time.Time { return now }})
+	m.data = statusData{
+		daemonState: daemon.StateRunning,
+		daemonPID:   12345,
+		repos:       repos,
+		sync:        &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{}},
+	}
+	m.hasData = true
+	m.width = 80
+	m.height = 8
+	m.showHelp = true
+
+	view := stripStatusANSI(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(lines) > m.height {
+		t.Fatalf("View() rendered %d lines, want at most %d:\n%s", len(lines), m.height, view)
+	}
+	if !strings.Contains(view, "Keyboard shortcuts") {
+		t.Fatalf("View() missing help:\n%s", view)
 	}
 }
 

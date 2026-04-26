@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -109,20 +110,28 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m statusTUIModel) View() string {
 	width := m.width
-	if width < 80 {
+	if width <= 0 {
 		width = 80
+	}
+	help := ""
+	if m.showHelp {
+		help = statusRenderBox(width, "Keyboard shortcuts", strings.Join([]string{
+			"?                  toggle this help",
+			"q                  quit",
+		}, "\n"))
 	}
 	body := m.renderBody()
 	if m.height > 0 {
-		body = statusTruncateBody(body, m.height-2)
+		maxLines := m.height - 2
+		if help != "" {
+			maxLines -= statusRenderedLineCount(help) + 1
+		}
+		body = statusTruncateBody(body, maxLines)
 	}
 	footer := statusMetaStyle().Render("q quit  ? help")
 	sections := []string{statusRenderBoxWithFooter(width, "Status", body, footer)}
-	if m.showHelp {
-		sections = append(sections, statusRenderBox(width, "Keyboard shortcuts", strings.Join([]string{
-			"?                  toggle this help",
-			"q                  quit",
-		}, "\n")))
+	if help != "" {
+		sections = append(sections, help)
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -195,6 +204,7 @@ func statusRenderBoxWithFooter(width int, title string, body string, footer stri
 	}
 	lines := make([]string, 0, len(rawLines))
 	for _, cl := range rawLines {
+		cl = statusClipLine(cl, contentWidth)
 		visW := lipgloss.Width(cl)
 		pad := contentWidth - visW
 		if pad < 0 {
@@ -203,6 +213,23 @@ func statusRenderBoxWithFooter(width int, title string, body string, footer stri
 		lines = append(lines, border.Render("│")+" "+cl+strings.Repeat(" ", pad)+" "+border.Render("│"))
 	}
 	return top + "\n" + strings.Join(lines, "\n") + "\n" + statusRenderBottomBorder(width, footer)
+}
+
+func statusRenderedLineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	return len(strings.Split(strings.TrimRight(s, "\n"), "\n"))
+}
+
+func statusClipLine(s string, width int) string {
+	if width <= 0 || lipgloss.Width(s) <= width {
+		return s
+	}
+	if width <= 3 {
+		return ansi.Truncate(s, width, "")
+	}
+	return ansi.Truncate(s, width, "...")
 }
 
 func statusRenderBottomBorder(width int, footer string) string {
