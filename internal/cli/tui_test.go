@@ -1421,6 +1421,16 @@ func TestLoadInboxEntriesPopulatesGitHubURLForIssuesAndPRs(t *testing.T) {
 	}
 }
 
+func TestCopyTextWithSystemClipboardRejectsEmptyPrompt(t *testing.T) {
+	err := copyTextWithSystemClipboard(context.Background(), "  \n\t")
+	if err == nil {
+		t.Fatal("expected empty prompt error")
+	}
+	if !strings.Contains(err.Error(), "prompt is empty") {
+		t.Fatalf("error = %q, want empty prompt", err.Error())
+	}
+}
+
 func TestLoadInboxEntriesKeepsNewestRecommendationsFirst(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths

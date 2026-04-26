@@ -96,6 +96,7 @@ make build
         <li><code>gh auth login</code> already configured for the GitHub account you want to use.</li>
         <li><code>git</code> available for managed investigation checkouts.</li>
         <li>One supported agent backend installed locally.</li>
+        <li>A platform clipboard command for copying fix prompts: <code>pbcopy</code>, <code>clip</code>, <code>wl-copy</code>, <code>xclip</code>, or <code>xsel</code>.</li>
         <li>Writable state directory under <code>~/.ezoss</code>, including checkout storage in <code>~/.ezoss/investigations</code>.</li>
       </ul>
     </div>
@@ -123,6 +124,10 @@ make build
         <div class="command-row">
           <strong><code>a</code> approve</strong>
           Execute the recommended GitHub action and sync triage labels.
+        </div>
+        <div class="command-row">
+          <strong><code>c</code> copy prompt</strong>
+          Copy the active option's coding-agent fix prompt, when one is available.
         </div>
         <div class="command-row">
           <strong><code>e</code> edit</strong>

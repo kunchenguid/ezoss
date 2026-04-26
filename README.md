@@ -68,7 +68,7 @@ $ ezoss list
 kunchenguid/ezoss#42	issue	comment	low	panic in sync loop
 
 $ ezoss
-# opens the inbox TUI for approve, edit, skip, and rerun
+# opens the inbox TUI for approve, copy prompt, edit, skip, and rerun
 ```
 
 ## Install
@@ -102,7 +102,7 @@ make build
 
 Every GitHub release also includes platform archives plus `checksums.txt` if you prefer a manual download and verification path.
 
-Live triage requires `gh`, `git`, and one supported agent backend available locally.
+Live triage requires `gh`, `git`, and one supported agent backend available locally. Copying fix prompts from the inbox also needs a platform clipboard command: `pbcopy` on macOS, `clip` on Windows, or `wl-copy`, `xclip`, or `xsel` on Linux.
 
 ## How It Works
 

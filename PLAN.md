@@ -61,18 +61,20 @@ Follows `DESIGN.md` primitives. Rough sketch:
 │           Question about install on Windows                           │
 │           → answer + close as resolved                                │
 ╰───────────────────────────────────────────────────────────────────────╯
- a approve  e edit  s skip  r rerun  d details │ ␣ toggle  A all  N none
+ a approve  c copy prompt  e edit  s skip  r rerun  d details │ ␣ toggle
 ╭─ Details ─────────────────────────────────────────────────────────────╮
 │  Rationale: the error trace in the body matches a known race in ...   │
 │  Draft response:                                                      │
 │    Thanks for the repro! Can you also share the output of `...`?      │
+│  Fix prompt:                                                          │
+│    Fix https://github.com/... by reproducing the failure and testing. │
 │  Proposed labels: bug, needs-repro                                    │
 │  Confidence: medium  ·  tokens: 12.4k in / 1.1k out                   │
 ╰───────────────────────────────────────────────────────────────────────╯
  q quit  ? help
 ```
 
-Two-pane list/detail. Inbox on top, detail below. `j/k` moves cursor; up/down arrows scroll overflowing detail content. `a` approves the selected item(s), `e` opens `$EDITOR` for the draft, `s` dismisses (won't retrigger unless the `ezoss/triaged` label is removed on GitHub), `r` reruns triage.
+Two-pane list/detail. Inbox on top, detail below. `j/k` moves cursor; up/down arrows scroll overflowing detail content. `a` approves the selected item(s), `c` copies the active option's coding-agent fix prompt, `e` opens `$EDITOR` for the draft, `s` dismisses (won't retrigger unless the `ezoss/triaged` label is removed on GitHub), `r` reruns triage.
 
 The details pane always shows cumulative token usage for the item - every triage/re-triage gets attributed so the maintainer can see what the agent is costing them per issue.
 
@@ -190,6 +192,7 @@ For each item that needs triage, run one agent call with a structured-output sch
   "rationale": "short paragraph explaining what this is and why",
   "waiting_on": "maintainer | contributor | ci | none",
   "draft_comment": "markdown text or empty",
+  "fix_prompt": "coding-agent handoff prompt with original URL, or empty",
   "proposed_labels": ["bug", "needs-repro"],
   "confidence": "low | medium | high",
   "followups": ["optional list of things the maintainer might want to check"]
@@ -201,6 +204,7 @@ The prompt is intentionally minimal:
 - The issue or PR URL.
 - The contents of `~/.ezoss/AGENTS.md` if it exists (user-supplied instructions - voice profile, custom guidance, house rules - injected verbatim into every prompt).
 - A brief note that the agent should inspect the managed checkout and any issue body, comments, diff, linked issues, or CI context it needs.
+- For legitimate actionable issues or PRs, return `fix_prompt` with the original URL, investigation context, acceptance criteria, and verification steps; otherwise leave it empty.
 
 We don't pre-fetch issue context or stuff the prompt. Ezoss prepares the repo checkout, the agent decides what to look at, and local scratch edits are discarded before a future run. The agent interface already supports streaming, so the TUI can show rationale appearing live when the user runs `rerun`.
 
