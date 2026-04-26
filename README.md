@@ -168,6 +168,7 @@ Live triage requires `gh`, `git`, and one supported agent backend available loca
 | Command | Flag | Description |
 | --- | --- | --- |
 | `daemon start` | `--mock` | Use canned GitHub items and recommendations |
+| `status` | `--short` | Print a one-line key=value summary |
 | `triage <repo>#<number>` | `--mock` | Triage against canned fixtures instead of live GitHub + agent backends |
 | `init` | `--repo` | Repository to monitor, repeatable |
 | `init` | `--agent` | Agent backend: `auto`, `claude`, `codex`, `rovodev`, `opencode` |
