@@ -556,6 +556,57 @@ func TestStatusTUIViewUsesMainTUIBoxStyle(t *testing.T) {
 	}
 }
 
+func TestStatusTUITickOnlySchedulesRenderRefresh(t *testing.T) {
+	m := newStatusTUIModel(statusTUIOptions{
+		RefreshInterval: time.Nanosecond,
+		Collect: func() (statusData, error) {
+			t.Fatal("tick should not collect status data")
+			return statusData{}, nil
+		},
+	})
+
+	_, cmd := m.Update(statusTUITickMsg{})
+	if cmd == nil {
+		t.Fatal("Update(statusTUITickMsg) cmd = nil, want render refresh tick")
+	}
+	if _, ok := cmd().(statusTUITickMsg); !ok {
+		t.Fatalf("Update(statusTUITickMsg) cmd returned %T, want statusTUITickMsg", cmd())
+	}
+}
+
+func TestStatusTUIViewConstrainedToTerminalHeight(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	repos := []string{
+		"acme/repo-01",
+		"acme/repo-02",
+		"acme/repo-03",
+		"acme/repo-04",
+		"acme/repo-05",
+		"acme/repo-06",
+		"acme/repo-07",
+		"acme/repo-08",
+	}
+	m := newStatusTUIModel(statusTUIOptions{Now: func() time.Time { return now }})
+	m.data = statusData{
+		daemonState: daemon.StateRunning,
+		daemonPID:   12345,
+		repos:       repos,
+		sync:        &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{}},
+	}
+	m.hasData = true
+	m.width = 80
+	m.height = 8
+
+	view := stripStatusANSI(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(lines) > m.height {
+		t.Fatalf("View() rendered %d lines, want at most %d:\n%s", len(lines), m.height, view)
+	}
+	if !strings.Contains(view, "more lines") {
+		t.Fatalf("View() missing overflow indicator:\n%s", view)
+	}
+}
+
 func TestRenderRichStatusDaemonStoppedShowsHint(t *testing.T) {
 	d := statusData{
 		daemonState: daemon.StateStopped,

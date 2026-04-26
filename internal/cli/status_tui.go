@@ -11,10 +11,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const statusTUIRefreshInterval = 100 * time.Millisecond
+const (
+	statusTUIRefreshInterval = 100 * time.Millisecond
+	statusTUICollectInterval = 2 * time.Second
+)
 
 type statusTUIOptions struct {
 	RefreshInterval time.Duration
+	CollectInterval time.Duration
 	Collect         func() (statusData, error)
 	Now             func() time.Time
 }
@@ -30,12 +34,15 @@ type statusTUIModel struct {
 	collect         func() (statusData, error)
 	now             func() time.Time
 	refreshInterval time.Duration
+	collectInterval time.Duration
 	width           int
 	height          int
 	showHelp        bool
 }
 
 type statusTUITickMsg struct{}
+
+type statusTUICollectMsg struct{}
 
 type statusTUIDataMsg struct {
 	data statusData
@@ -53,6 +60,9 @@ func newStatusTUIModel(opts statusTUIOptions) statusTUIModel {
 	if opts.RefreshInterval <= 0 {
 		opts.RefreshInterval = statusTUIRefreshInterval
 	}
+	if opts.CollectInterval <= 0 {
+		opts.CollectInterval = statusTUICollectInterval
+	}
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
@@ -60,6 +70,7 @@ func newStatusTUIModel(opts statusTUIOptions) statusTUIModel {
 		collect:         opts.Collect,
 		now:             opts.Now,
 		refreshInterval: opts.RefreshInterval,
+		collectInterval: opts.CollectInterval,
 	}
 }
 
@@ -82,13 +93,16 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case statusTUITickMsg:
-		return m, tea.Batch(collectStatusTUICmd(m.collect), scheduleStatusTUITick(m.refreshInterval))
+		return m, scheduleStatusTUITick(m.refreshInterval)
+	case statusTUICollectMsg:
+		return m, collectStatusTUICmd(m.collect)
 	case statusTUIDataMsg:
 		m.err = msg.err
 		if msg.err == nil {
 			m.data = msg.data
 			m.hasData = true
 		}
+		return m, scheduleStatusTUICollect(m.collectInterval)
 	}
 	return m, nil
 }
@@ -98,8 +112,12 @@ func (m statusTUIModel) View() string {
 	if width < 80 {
 		width = 80
 	}
+	body := m.renderBody()
+	if m.height > 0 {
+		body = statusTruncateBody(body, m.height-2)
+	}
 	footer := statusMetaStyle().Render("q quit  ? help")
-	sections := []string{statusRenderBoxWithFooter(width, "Status", m.renderBody(), footer)}
+	sections := []string{statusRenderBoxWithFooter(width, "Status", body, footer)}
 	if m.showHelp {
 		sections = append(sections, statusRenderBox(width, "Keyboard shortcuts", strings.Join([]string{
 			"?                  toggle this help",
@@ -130,6 +148,26 @@ func (m statusTUIModel) renderBody() string {
 
 func statusRenderBox(width int, title string, body string) string {
 	return statusRenderBoxWithFooter(width, title, body, "")
+}
+
+func statusTruncateBody(body string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(body, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) <= maxLines {
+		return body
+	}
+	if maxLines == 1 {
+		return fmt.Sprintf("... %d more lines\n", len(lines))
+	}
+	omitted := len(lines) - maxLines + 1
+	visible := append([]string(nil), lines[:maxLines-1]...)
+	visible = append(visible, fmt.Sprintf("... %d more lines", omitted))
+	return strings.Join(visible, "\n") + "\n"
 }
 
 func statusRenderBoxWithFooter(width int, title string, body string, footer string) string {
@@ -213,5 +251,11 @@ func collectStatusTUICmd(collect func() (statusData, error)) tea.Cmd {
 func scheduleStatusTUITick(interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(time.Time) tea.Msg {
 		return statusTUITickMsg{}
+	})
+}
+
+func scheduleStatusTUICollect(interval time.Duration) tea.Cmd {
+	return tea.Tick(interval, func(time.Time) tea.Msg {
+		return statusTUICollectMsg{}
 	})
 }
