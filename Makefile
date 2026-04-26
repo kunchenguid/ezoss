@@ -56,6 +56,10 @@ dist: build
 
 demo: build
 	vhs demo.tape
+	ffmpeg -y -i demo_raw.gif -filter_complex \
+	  "[0:v]setpts=PTS/1.6,fps=18,scale=1100:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle" \
+	  demo.gif
+	rm -f demo_raw.gif
 
 docs-build:
 	npm --prefix ./docs ci
