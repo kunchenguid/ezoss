@@ -243,6 +243,9 @@ func TestTriageCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 			t.Fatalf("restore Chdir() error = %v", err)
 		}
 	})
+	stubAgentLookPath(t, map[string]string{
+		"codex": "/usr/local/bin/codex",
+	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
 	}
@@ -362,6 +365,10 @@ func TestTriageCommandPrefersRepoAgentOverrideWithoutMock(t *testing.T) {
 			t.Fatalf("restore Chdir() error = %v", err)
 		}
 	})
+	stubAgentLookPath(t, map[string]string{
+		"claude": "/usr/local/bin/claude",
+		"codex":  "/usr/local/bin/codex",
+	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
 	}
@@ -444,6 +451,10 @@ func TestTriageCommandFindsRepoAgentOverrideFromSubdirectoryWithoutMock(t *testi
 		if err := os.Chdir(oldWD); err != nil {
 			t.Fatalf("restore Chdir() error = %v", err)
 		}
+	})
+	stubAgentLookPath(t, map[string]string{
+		"claude": "/usr/local/bin/claude",
+		"codex":  "/usr/local/bin/codex",
 	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
@@ -724,6 +735,21 @@ func (s stubTriageAgent) Run(_ context.Context, opts agent.RunOpts) (*agent.Resu
 }
 
 func (s stubTriageAgent) Close() error { return nil }
+
+func stubAgentLookPath(t *testing.T, bins map[string]string) {
+	t.Helper()
+
+	originalLookPath := lookPath
+	t.Cleanup(func() {
+		lookPath = originalLookPath
+	})
+	lookPath = func(file string) (string, error) {
+		if path, ok := bins[file]; ok {
+			return path, nil
+		}
+		return "", &exec.Error{Name: file, Err: exec.ErrNotFound}
+	}
+}
 
 func mustJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()

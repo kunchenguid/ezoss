@@ -1,6 +1,7 @@
 GO ?= go
 GOFMT ?= gofmt
 BINARY ?= ezoss
+HOST_BINARY := $(BINARY)$(if $(filter Windows_NT,$(OS)),.exe,)
 CMD_DIR := ./cmd/ezoss
 DIST_DIR ?= ./dist
 VERSION ?= dev
@@ -17,7 +18,7 @@ PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 win
 .PHONY: build dist demo docs-build install test lint fmt fmt-check
 
 build:
-	$(GO) build -ldflags "$(LDFLAGS)" -o ./bin/$(BINARY) $(CMD_DIR)
+	$(GO) build -ldflags "$(LDFLAGS)" -o ./bin/$(HOST_BINARY) $(CMD_DIR)
 
 dist: build
 	@rm -rf $(DIST_DIR)
@@ -65,7 +66,7 @@ install: build
 	@if [ "$${EZOSS_SKIP_DAEMON:-}" != "1" ]; then \
 		install_bin="$$($(GO) env GOBIN)"; \
 		if [ -z "$$install_bin" ]; then install_bin="$$($(GO) env GOPATH)/bin"; fi; \
-		"$$install_bin/$(BINARY)" daemon restart >/dev/null 2>&1 || true; \
+		"$$install_bin/$(HOST_BINARY)" daemon restart >/dev/null 2>&1 || true; \
 	fi
 
 test:

@@ -222,7 +222,7 @@ func TestMakeDistFallsBackToSHA256SumWhenShasumIsUnavailable(t *testing.T) {
 	toolPath := makeDistToolPathWithoutShasum(t)
 	cmd := exec.Command("make", "dist", "VERSION=test-sha256sum")
 	cmd.Dir = worktree
-	cmd.Env = append([]string{"PATH=" + toolPath}, filteredEnv(os.Environ(), "PATH")...)
+	cmd.Env = append([]string{"PATH=" + toolPath, "GOROOT=" + runtime.GOROOT()}, filteredEnv(os.Environ(), "PATH", "GOROOT")...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("make dist with sha256sum fallback error = %v, output = %s", err, output)
@@ -505,14 +505,23 @@ func makeDistToolPathWithoutShasum(t *testing.T) string {
 	return dir
 }
 
-func filteredEnv(env []string, key string) []string {
-	prefix := key + "="
+func filteredEnv(env []string, keys ...string) []string {
+	prefixes := make([]string, 0, len(keys))
+	for _, key := range keys {
+		prefixes = append(prefixes, key+"=")
+	}
 	filtered := make([]string, 0, len(env))
 	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			continue
+		skip := false
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(entry, prefix) {
+				skip = true
+				break
+			}
 		}
-		filtered = append(filtered, entry)
+		if !skip {
+			filtered = append(filtered, entry)
+		}
 	}
 
 	return filtered

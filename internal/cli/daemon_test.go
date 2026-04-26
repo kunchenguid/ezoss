@@ -327,6 +327,9 @@ func TestDaemonRunCommandLoadsConfigAndStartsRuntime(t *testing.T) {
 		runDaemonWithOptions = originalRunDaemon
 		installTimestampedLogPipe = originalInstallLogPipe
 	})
+	stubAgentLookPath(t, map[string]string{
+		"codex": "/usr/local/bin/codex",
+	})
 
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil

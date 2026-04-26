@@ -1922,6 +1922,9 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 		newGitHubClient = originalNewGitHubClient
 		newAgent = originalNewAgent
 	})
+	stubAgentLookPath(t, map[string]string{
+		"codex": "/usr/local/bin/codex",
+	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
 	}
@@ -2072,6 +2075,10 @@ func TestRerunInboxEntriesPrefersRepoAgentOverride(t *testing.T) {
 		if err := os.Chdir(oldWD); err != nil {
 			t.Fatalf("restore Chdir() error = %v", err)
 		}
+	})
+	stubAgentLookPath(t, map[string]string{
+		"claude": "/usr/local/bin/claude",
+		"codex":  "/usr/local/bin/codex",
 	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
