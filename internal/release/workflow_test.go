@@ -1632,8 +1632,8 @@ func TestDocsCoreLoopAndRequirementsMatchCurrentReleaseContract(t *testing.T) {
 		"local SQLite database keeps draft comments, agent rationale, and token usage",
 		"<h3>1. Poll GitHub</h3>",
 		"Fetch issues and PRs missing the <code>ezoss/triaged</code> label.",
-		"<h3>2. Ask your agent</h3>",
-		"Claude, Codex, Rovo Dev, or OpenCode returns a structured recommendation.",
+		"<h3>2. Prepare checkout and ask your agent</h3>",
+		"Clone or refresh the managed checkout in <code>~/.ezoss/investigations</code>, discard scratch edits from prior runs, then run Claude, Codex, Rovo Dev, or OpenCode there for a structured recommendation.",
 		"<h3>3. Review privately</h3>",
 		"Approve, edit, skip, or rerun from the local TUI inbox without exposing drafts.",
 		"<h3>4. Sync the outcome</h3>",
@@ -1641,7 +1641,7 @@ func TestDocsCoreLoopAndRequirementsMatchCurrentReleaseContract(t *testing.T) {
 		"<h2>Requirements</h2>",
 		"<li><code>gh auth login</code> already configured for the GitHub account you want to use.</li>",
 		"<li>One supported agent backend installed locally.</li>",
-		"<li>Writable state directory under <code>~/.ezoss</code>.</li>",
+		"<li>Writable state directory under <code>~/.ezoss</code>, including checkout storage in <code>~/.ezoss/investigations</code>.</li>",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
