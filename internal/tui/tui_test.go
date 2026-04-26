@@ -271,6 +271,36 @@ func TestModelNavigationMovesSelection(t *testing.T) {
 	}
 }
 
+func TestModelNavigationIgnoresArrowNPKeysForInboxCursor(t *testing.T) {
+	m := NewModel([]Entry{
+		{RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange: sharedtypes.StateChangeNone},
+		{RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindPR, Title: "two", StateChange: sharedtypes.StateChangeMerge},
+	})
+	m.width = 100
+	m.height = 30
+
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyDown},
+		{Type: tea.KeyRunes, Runes: []rune{'n'}},
+	} {
+		updated, _ := m.Update(key)
+		if got := updated.(Model).cursor; got != 0 {
+			t.Fatalf("cursor after %q = %d, want 0", key.String(), got)
+		}
+	}
+
+	m.cursor = 1
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyUp},
+		{Type: tea.KeyRunes, Runes: []rune{'p'}},
+	} {
+		updated, _ := m.Update(key)
+		if got := updated.(Model).cursor; got != 1 {
+			t.Fatalf("cursor after %q = %d, want 1", key.String(), got)
+		}
+	}
+}
+
 func TestModelSkipDismissesCurrentEntry(t *testing.T) {
 	var dismissed []string
 	m := NewModelWithDismiss([]Entry{
@@ -905,10 +935,16 @@ func TestModelHelpToggleShowsAndHidesHelp(t *testing.T) {
 		"Keyboard shortcuts",
 		"approve active option",
 		"next item",
+		"down / up          scroll overflowing card",
 		"toggle this help",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q after help toggle:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"j / n", "k / p"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("View() should not advertise %q after help toggle:\n%s", unwanted, view)
 		}
 	}
 
@@ -1087,6 +1123,38 @@ func TestModelInboxScrollsToKeepCursorVisible(t *testing.T) {
 	// With 30 entries (max digit width 2), entry 1's padded label is "#1 ".
 	if strings.Contains(stripped, "#1   issue-1-title") {
 		t.Fatalf("View() at cursor=25 should scroll entry 0 out of the rail in:\n%s", stripped)
+	}
+}
+
+func TestModelQueueRailScrollHintShowsJKNavigation(t *testing.T) {
+	got := stripANSI(formatScrollHint(0, 1))
+	if !strings.Contains(got, "j ↓ / k ↑") {
+		t.Fatalf("formatScrollHint() should show j/k navigation keys, got %q", got)
+	}
+	if strings.Contains(got, "(j/k)") {
+		t.Fatalf("formatScrollHint() should not use ambiguous j/k suffix, got %q", got)
+	}
+}
+
+func TestModelBottomNavBarOmitsInboxNavigation(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:      "acme/widgets",
+		Number:      1,
+		Kind:        sharedtypes.ItemKindIssue,
+		Title:       "one",
+		StateChange: sharedtypes.StateChangeNone,
+	}})
+	m.width = 100
+	m.height = 30
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "q quit") || !strings.Contains(view, "? help") {
+		t.Fatalf("View() should keep app-level nav hints in bottom row:\n%s", view)
+	}
+	for _, unwanted := range []string{"j next", "k prev"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("View() should not show inbox navigation %q in bottom row:\n%s", unwanted, view)
+		}
 	}
 }
 
@@ -1368,6 +1436,112 @@ func TestModelDetailsWrapsLongBodyTextInsteadOfTruncating(t *testing.T) {
 	joined = strings.Join(strings.Fields(joined), " ") // collapse multi-spaces
 	if !strings.Contains(joined, longRationale) {
 		t.Fatalf("expected full rationale text to be present (wrapped). joined=%q\nview=\n%s", joined, view)
+	}
+}
+
+func TestDownScrollsOverflowingCardBeforeMovingInboxCursor(t *testing.T) {
+	m := NewModel([]Entry{
+		{
+			RepoID:       "acme/widgets",
+			Number:       1,
+			Kind:         sharedtypes.ItemKindIssue,
+			Title:        "long draft",
+			Rationale:    "rationale",
+			DraftComment: strings.Join([]string{"draft line 1", "draft line 2", "draft line 3", "draft line 4", "draft line 5"}, "\n"),
+		},
+		{
+			RepoID:       "acme/widgets",
+			Number:       2,
+			Kind:         sharedtypes.ItemKindIssue,
+			Title:        "second item",
+			Rationale:    "second rationale",
+			DraftComment: "second draft",
+		},
+	})
+	m.width = 80
+	m.height = 8
+
+	initial := stripANSI(m.View())
+	if !strings.Contains(initial, "Rationale:") || strings.Contains(initial, "  rationale") {
+		t.Fatalf("initial view should show the top of the card and hide lower content, got:\n%s", initial)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+
+	if m.cursor != 0 {
+		t.Fatalf("down moved inbox cursor to %d, want 0 while card still has hidden content", m.cursor)
+	}
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "  rationale") || strings.Contains(view, "second item") {
+		t.Fatalf("down should scroll the active card instead of moving to the next item, got:\n%s", view)
+	}
+}
+
+func TestCardScrollResetsWhenCurrentCardChangesAfterRemoval(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Rationale: "r", DraftComment: strings.Join([]string{"one draft 1", "one draft 2", "one draft 3"}, "\n")},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Rationale: "r", DraftComment: strings.Join([]string{"two draft 1", "two draft 2", "two draft 3"}, "\n")},
+	})
+	m.width = 80
+	m.height = 8
+	m.cardScroll = 2
+
+	m.removeEntries([]int{0})
+
+	if m.cardScroll != 0 {
+		t.Fatalf("cardScroll after removing current card = %d, want 0", m.cardScroll)
+	}
+}
+
+func TestCardScrollResetsWhenCurrentCardIsReplaced(t *testing.T) {
+	m := NewModel([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "old",
+		Rationale:        "old rationale",
+		DraftComment:     strings.Join([]string{"old draft 1", "old draft 2", "old draft 3"}, "\n"),
+	}})
+	m.width = 80
+	m.height = 8
+	m.cardScroll = 2
+
+	m.applyActionFinished(actionFinishedMsg{
+		verb:             "rerun",
+		recommendationID: "rec-1",
+		updatedEntries: []Entry{{
+			RecommendationID: "rec-1",
+			RepoID:           "acme/widgets",
+			Number:           1,
+			Kind:             sharedtypes.ItemKindIssue,
+			Title:            "new",
+			Rationale:        "new rationale",
+			DraftComment:     strings.Join([]string{"new draft 1", "new draft 2", "new draft 3"}, "\n"),
+		}},
+	})
+
+	if m.cardScroll != 0 {
+		t.Fatalf("cardScroll after replacing current card = %d, want 0", m.cardScroll)
+	}
+}
+
+func TestCardMaxScrollDoesNotReserveHintLineWhenCardExactlyFits(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:       "acme/widgets",
+		Number:       1,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "title",
+		Rationale:    "rationale",
+		DraftComment: "draft",
+	}})
+	m.width = 80
+	m.height = 20
+	boxHeight := len(m.cardWrappedLines(80)) + 2
+
+	if got := m.cardMaxScroll(boxHeight); got != 0 {
+		t.Fatalf("cardMaxScroll for exactly fitting card = %d, want 0", got)
 	}
 }
 

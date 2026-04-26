@@ -72,7 +72,7 @@ Follows `DESIGN.md` primitives. Rough sketch:
  q quit  ? help
 ```
 
-Two-pane list/detail. Inbox on top, detail below. `j/k` moves cursor. `a` approves the selected item(s), `e` opens `$EDITOR` for the draft, `s` dismisses (won't retrigger unless the `ezoss/triaged` label is removed on GitHub), `r` reruns triage.
+Two-pane list/detail. Inbox on top, detail below. `j/k` moves cursor; up/down arrows scroll overflowing detail content. `a` approves the selected item(s), `e` opens `$EDITOR` for the draft, `s` dismisses (won't retrigger unless the `ezoss/triaged` label is removed on GitHub), `r` reruns triage.
 
 The details pane always shows cumulative token usage for the item - every triage/re-triage gets attributed so the maintainer can see what the agent is costing them per issue.
 

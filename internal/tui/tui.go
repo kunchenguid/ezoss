@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os/exec"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -174,19 +175,20 @@ type ModelActions struct {
 }
 
 type Model struct {
-	entries  []Entry
-	cursor   int
-	width    int
-	height   int
-	approve  func([]Entry) error
-	dismiss  func([]Entry) error
-	edit     func(Entry) (Entry, error)
-	editExec func(Entry) (*exec.Cmd, func(error) (Entry, error), error)
-	notify   <-chan struct{}
-	reload   func() ([]Entry, error)
-	rerun    func([]Entry) ([]Entry, error)
-	showHelp bool
-	quitting bool
+	entries    []Entry
+	cursor     int
+	cardScroll int
+	width      int
+	height     int
+	approve    func([]Entry) error
+	dismiss    func([]Entry) error
+	edit       func(Entry) (Entry, error)
+	editExec   func(Entry) (*exec.Cmd, func(error) (Entry, error), error)
+	notify     <-chan struct{}
+	reload     func() ([]Entry, error)
+	rerun      func([]Entry) ([]Entry, error)
+	showHelp   bool
+	quitting   bool
 
 	// Async-action state. Approve/skip/rerun run in a goroutine via tea.Cmd
 	// so the event loop stays responsive; until the goroutine reports back
@@ -413,13 +415,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd := m.dismissCurrent(); cmd != nil {
 				return m, withSpinner(cmd, m.kickSpinnerIfPending())
 			}
-		case "j", "n", "down":
+		case "down":
+			m.scrollCard(1)
+		case "j":
 			if m.cursor < len(m.entries)-1 {
 				m.cursor++
+				m.cardScroll = 0
 			}
-		case "k", "p", "up":
+		case "up":
+			m.scrollCard(-1)
+		case "k":
 			if m.cursor > 0 {
 				m.cursor--
+				m.cardScroll = 0
 			}
 		case "tab":
 			m.cycleOption(1)
@@ -457,6 +465,7 @@ func (m *Model) cycleOption(delta int) {
 	idx = ((idx % n) + n) % n
 	entry.ActiveOption = idx
 	entry.SyncActive()
+	m.cardScroll = 0
 }
 
 // jumpToOption switches the cursor entry's active option to idx (0-based).
@@ -475,6 +484,31 @@ func (m *Model) jumpToOption(idx int) {
 	entry.CommitEdits()
 	entry.ActiveOption = idx
 	entry.SyncActive()
+	m.cardScroll = 0
+}
+
+func (m *Model) scrollCard(delta int) bool {
+	if delta == 0 || len(m.entries) == 0 {
+		return false
+	}
+	_, boxHeight := m.cardRenderSize()
+	maxScroll := m.cardMaxScroll(boxHeight)
+	if maxScroll <= 0 {
+		m.cardScroll = 0
+		return false
+	}
+	next := m.cardScroll + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > maxScroll {
+		next = maxScroll
+	}
+	if next == m.cardScroll {
+		return false
+	}
+	m.cardScroll = next
+	return true
 }
 
 func (m *Model) approveCurrent() tea.Cmd {
@@ -535,6 +569,7 @@ func (m *Model) editCurrent() tea.Cmd {
 	}
 	updated.CommitEdits()
 	m.entries[m.cursor] = updated
+	m.cardScroll = 0
 	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
 	return nil
 }
@@ -642,6 +677,9 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 	case "rerun":
 		if idx >= 0 && len(msg.updatedEntries) > 0 {
 			m.entries[idx] = msg.updatedEntries[0]
+			if idx == m.cursor {
+				m.cardScroll = 0
+			}
 		}
 	}
 }
@@ -698,6 +736,9 @@ func (m *Model) applyEditFinished(msg editFinishedMsg) {
 	}
 	updated.CommitEdits()
 	m.entries[idx] = updated
+	if idx == m.cursor {
+		m.cardScroll = 0
+	}
 	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
 }
 
@@ -747,7 +788,8 @@ const (
 //     dimmed repo headings, providing context without stealing focus.
 //   - The Decide bar (a/e/s/r) sits below the card so the actions are
 //     anchored to the item being decided on.
-//   - n/p navigate forward/back through the queue (j/k still work).
+//   - j/k navigate forward/back through the queue; arrow keys only scroll
+//     overflowing card content.
 //
 // Single-item decision flow: every action key operates on the cursor's
 // item. There is no batch selection.
@@ -768,7 +810,7 @@ func (m Model) View() string {
 		gapHeight = 1
 	}
 
-	navBar := metaStyle().Render("j next  k prev      q quit  ? help")
+	navBar := appNavBar()
 
 	if len(m.entries) == 0 {
 		empty := renderBox(width, "Inbox", metaStyle().Render("No pending recommendations.\nRun `ezoss daemon start` or `ezoss triage <url>` to populate the queue."))
@@ -831,6 +873,53 @@ func (m Model) View() string {
 	}
 	sections = append(sections, navBar)
 	return strings.Join(sections, sectionGap)
+}
+
+func (m Model) cardRenderSize() (int, int) {
+	width := m.width
+	if width < 80 {
+		width = 80
+	}
+
+	compact := m.height > 0 && m.height < compactHeightThreshold
+	gapHeight := 2
+	if compact {
+		gapHeight = 1
+	}
+
+	contentBudget := -1
+	if m.height > 0 {
+		navBar := appNavBar()
+		fixed := lipgloss.Height(navBar) + gapHeight
+		if m.showHelp {
+			fixed += lipgloss.Height(renderBox(width, "Keyboard shortcuts", m.renderHelp())) + gapHeight
+		}
+		logPanel := m.renderLogPanel(width)
+		if logPanel != "" {
+			logHeight := lipgloss.Height(logPanel) + gapHeight
+			available := m.height - fixed - (minInboxContentHeight + 2) - gapHeight
+			if available < logHeight {
+				logPanel = m.shrinkLogPanel(width, available)
+				if logPanel == "" {
+					logHeight = 0
+				} else {
+					logHeight = lipgloss.Height(logPanel) + gapHeight
+				}
+			}
+			fixed += logHeight
+		}
+		contentBudget = m.height - fixed
+		if contentBudget < minInboxContentHeight+2 {
+			contentBudget = minInboxContentHeight + 2
+		}
+	}
+
+	useRail := m.width >= responsiveLayoutMinWidth && m.height >= responsiveLayoutMinHeight && !m.showHelp
+	if useRail {
+		_, cardWidth := responsiveColumnWidths(width)
+		return cardWidth, contentBudget
+	}
+	return width, contentBudget
 }
 
 // renderLogPanel returns a single "Activity" box with the last few log
@@ -1004,10 +1093,15 @@ func renderResponsiveColumns(left, right string, leftWidth, rightWidth, gap int)
 	return b.String()
 }
 
+func appNavBar() string {
+	return metaStyle().Render("q quit  ? help")
+}
+
 func (m Model) renderHelp() string {
 	return strings.Join([]string{
-		"j / n / down       next item",
-		"k / p / up         previous item",
+		"j                  next item",
+		"k                  previous item",
+		"down / up          scroll overflowing card",
 		"tab / shift+tab    cycle between alternate recommendations (when present)",
 		"1-9                jump directly to that recommendation option",
 		"a                  approve active option (post comment, apply state change, sync labels)",
@@ -1049,11 +1143,26 @@ func formatScrollHint(above, below int) string {
 	var raw string
 	switch {
 	case above > 0 && below > 0:
-		raw = fmt.Sprintf("↑ %d above  ↓ %d below (j/k)", above, below)
+		raw = fmt.Sprintf("↑ %d above  ↓ %d below (j ↓ / k ↑)", above, below)
 	case below > 0:
-		raw = fmt.Sprintf("↓ %d more (j/k)", below)
+		raw = fmt.Sprintf("↓ %d more (j ↓ / k ↑)", below)
 	case above > 0:
-		raw = fmt.Sprintf("↑ %d more (j/k)", above)
+		raw = fmt.Sprintf("↑ %d more (j ↓ / k ↑)", above)
+	default:
+		return ""
+	}
+	return metaStyle().Render(raw)
+}
+
+func formatCardScrollHint(above, below int) string {
+	var raw string
+	switch {
+	case above > 0 && below > 0:
+		raw = fmt.Sprintf("↑ %d above  ↓ %d below", above, below)
+	case below > 0:
+		raw = fmt.Sprintf("↓ %d more lines", below)
+	case above > 0:
+		raw = fmt.Sprintf("↑ %d previous lines", above)
 	default:
 		return ""
 	}
@@ -1151,6 +1260,69 @@ func (m Model) renderDetails() string {
 	return strings.Join(lines, "\n")
 }
 
+func cardBodyLines(entry Entry) []string {
+	var lines []string
+	if approvalError := renderApprovalError(entry.ApprovalError); approvalError != "" {
+		lines = append(lines, approvalError, "")
+	}
+	if heading := strings.TrimSpace(entry.Title); heading != "" {
+		lines = append(lines, sectionLabelStyle().Render(heading), "")
+	}
+	if strip := renderStatusStrip(entry); strip != "" {
+		lines = append(lines, strip, "")
+	}
+	lines = append(lines,
+		sectionLabel("Rationale"),
+		renderIndentedBlock(emptyFallback(entry.Rationale, "No rationale yet."), "  "),
+		sectionLabel("Draft response"),
+		renderIndentedBlock(emptyFallback(entry.DraftComment, "No draft response."), "  "),
+	)
+	if len(entry.Followups) > 0 {
+		lines = append(lines, sectionLabel("Follow-ups"))
+		for _, followup := range entry.Followups {
+			lines = append(lines, "  - "+followup)
+		}
+	}
+	if summary := renderActionSummary(entry); summary != "" {
+		lines = append(lines, "", summary)
+	}
+	if footer := renderMetaFooter(entry); footer != "" {
+		lines = append(lines, footer)
+	}
+	return lines
+}
+
+func (m Model) cardWrappedLines(width int) []string {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	contentWidth := width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	return wrapLines(cardBodyLines(m.entries[m.cursor]), contentWidth)
+}
+
+func (m Model) cardMaxScroll(boxHeight int) int {
+	if boxHeight <= 0 {
+		return 0
+	}
+	width, _ := m.cardRenderSize()
+	wrapped := m.cardWrappedLines(width)
+	contentHeight := boxHeight - 2
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	if len(wrapped) <= contentHeight {
+		return 0
+	}
+	visibleHeight := contentHeight - 1
+	if visibleHeight < 1 {
+		visibleHeight = 1
+	}
+	return len(wrapped) - visibleHeight
+}
+
 // renderActionSummary describes what `a approve` will execute, e.g.
 // "Will: comment + close   labels: bug". The label "Will:" anchors the
 // summary as the proposed action - what the agent recommends and what
@@ -1237,40 +1409,11 @@ func (m Model) renderCard(width, boxHeight int) string {
 
 	title := cardTitle(entry)
 
-	var lines []string
-	if approvalError := renderApprovalError(entry.ApprovalError); approvalError != "" {
-		lines = append(lines, approvalError, "")
-	}
-	if heading := strings.TrimSpace(entry.Title); heading != "" {
-		lines = append(lines, sectionLabelStyle().Render(heading), "")
-	}
-	if strip := renderStatusStrip(entry); strip != "" {
-		lines = append(lines, strip, "")
-	}
-	lines = append(lines,
-		sectionLabel("Rationale"),
-		renderIndentedBlock(emptyFallback(entry.Rationale, "No rationale yet."), "  "),
-		sectionLabel("Draft response"),
-		renderIndentedBlock(emptyFallback(entry.DraftComment, "No draft response."), "  "),
-	)
-	if len(entry.Followups) > 0 {
-		lines = append(lines, sectionLabel("Follow-ups"))
-		for _, followup := range entry.Followups {
-			lines = append(lines, "  - "+followup)
-		}
-	}
-	if summary := renderActionSummary(entry); summary != "" {
-		lines = append(lines, "", summary)
-	}
-	if footer := renderMetaFooter(entry); footer != "" {
-		lines = append(lines, footer)
-	}
-
 	actionFooter := renderDecideBar(len(entry.Options))
 	if pending, ok := m.pendingActions[entry.RecommendationID]; ok {
 		actionFooter = renderPendingDecideBar(pending.verb, m.spinnerFrame, entry.RepoID, entry.Number, pending.startedAt)
 	}
-	wrapped := wrapLines(lines, contentWidth)
+	wrapped := wrapLines(cardBodyLines(entry), contentWidth)
 	if boxHeight <= 0 {
 		return renderBoxWithFooter(width, title, strings.Join(wrapped, "\n"), actionFooter)
 	}
@@ -1278,12 +1421,33 @@ func (m Model) renderCard(width, boxHeight int) string {
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
-	if len(wrapped) <= contentHeight {
+	visibleHeight := contentHeight
+	if len(wrapped) > contentHeight {
+		visibleHeight = contentHeight - 1
+		if visibleHeight < 1 {
+			visibleHeight = 1
+		}
+	}
+	maxScroll := 0
+	if len(wrapped) > visibleHeight {
+		maxScroll = len(wrapped) - visibleHeight
+	}
+	scroll := m.cardScroll
+	if scroll < 0 {
+		scroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if maxScroll == 0 {
 		return renderBoxWithFooter(width, title, strings.Join(wrapped, "\n"), actionFooter)
 	}
-	hidden := len(wrapped) - (contentHeight - 1)
-	visible := strings.Join(wrapped[:contentHeight-1], "\n")
-	hint := metaStyle().Render(fmt.Sprintf("↓ %d more lines", hidden))
+	end := scroll + visibleHeight
+	if end > len(wrapped) {
+		end = len(wrapped)
+	}
+	visible := strings.Join(wrapped[scroll:end], "\n")
+	hint := formatCardScrollHint(scroll, len(wrapped)-end)
 	footer := actionFooter + metaStyle().Render("  ·  ") + hint
 	return renderBoxWithFooter(width, title, visible, footer)
 }
@@ -1522,7 +1686,7 @@ func renderBox(width int, title string, body string) string {
 
 // renderBoxWithFooter renders content inside a rounded-border box with the
 // title embedded in the top border and an optional hint embedded in the
-// bottom border (e.g., "↓ 3 more (j/k)" for scrollable content).
+// bottom border (e.g., "↓ 3 more (j ↓ / k ↑)" for scrollable content).
 func renderBoxWithFooter(width int, title string, body string, footer string) string {
 	if width < 6 {
 		width = 6
@@ -1696,6 +1860,7 @@ func (m *Model) removeEntries(indices []int) {
 	if len(indices) == 0 {
 		return
 	}
+	currentID := m.currentRecommendationID()
 	remove := make(map[int]struct{}, len(indices))
 	for _, index := range indices {
 		remove[index] = struct{}{}
@@ -1714,6 +1879,16 @@ func (m *Model) removeEntries(indices []int) {
 	if len(m.entries) == 0 {
 		m.cursor = 0
 	}
+	if currentID != m.currentRecommendationID() {
+		m.cardScroll = 0
+	}
+}
+
+func (m *Model) currentRecommendationID() string {
+	if m.cursor < 0 || m.cursor >= len(m.entries) {
+		return ""
+	}
+	return m.entries[m.cursor].RecommendationID
 }
 
 func scheduleRefresh() tea.Cmd {
@@ -1743,8 +1918,13 @@ func runReload(reload func() ([]Entry, error)) tea.Cmd {
 
 func (m *Model) applyReload(entries []Entry) {
 	currentID := ""
+	var current Entry
+	hasCurrent := false
 	if m.cursor >= 0 && m.cursor < len(m.entries) {
-		currentID = m.entries[m.cursor].RecommendationID
+		current = m.entries[m.cursor]
+		current.CommitEdits()
+		currentID = current.RecommendationID
+		hasCurrent = true
 	}
 
 	editedByID := make(map[string]Entry)
@@ -1800,17 +1980,23 @@ func (m *Model) applyReload(entries []Entry) {
 
 	if len(m.entries) == 0 {
 		m.cursor = 0
+		m.cardScroll = 0
 		return
 	}
 	if foundCursor {
 		m.cursor = newCursor
+		if hasCurrent && !reflect.DeepEqual(current, m.entries[m.cursor]) {
+			m.cardScroll = 0
+		}
 		return
 	}
 	if m.cursor >= len(m.entries) {
 		m.cursor = len(m.entries) - 1
+		m.cardScroll = 0
 		return
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
+	m.cardScroll = 0
 }
