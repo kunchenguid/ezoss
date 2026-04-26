@@ -102,6 +102,8 @@ make build
 
 Every GitHub release also includes platform archives plus `checksums.txt` if you prefer a manual download and verification path.
 
+Live triage requires `gh`, `git`, and one supported agent backend available locally.
+
 ## How It Works
 
 ```
@@ -114,7 +116,7 @@ Every GitHub release also includes platform archives plus `checksums.txt` if you
 ┌────────────────────┐
 │ daemon poller      │
 └─────────┬──────────┘
-          │ builds prompt + schema
+          │ prepares checkout + prompt + schema
           ▼
 ┌────────────────────┐
 │ agent backend      │
@@ -140,6 +142,7 @@ Every GitHub release also includes platform archives plus `checksums.txt` if you
 
 - **GitHub is the visible truth** - `ezoss/triaged` is the public signal that an item has already been handled.
 - **Local DB is the private memory** - drafts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
+- **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
 - **Polling is deliberate** - v1 avoids webhook complexity and just re-triages when the GitHub label disappears.
 - **Approval is explicit** - nothing gets posted, closed, merged, or labeled until you do it from the inbox.
 - **PR review is gated when needed** - unsolicited PRs can surface as `request_approval_for_review` so you decide whether to review the approach before the tool drafts code review feedback.

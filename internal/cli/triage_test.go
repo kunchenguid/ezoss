@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -228,6 +230,7 @@ func TestTriageCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 	originalNewPaths := newPaths
 	originalNewGitHubClient := newGitHubClient
 	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -239,6 +242,7 @@ func TestTriageCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 		newPaths = originalNewPaths
 		newGitHubClient = originalNewGitHubClient
 		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
 		if err := os.Chdir(oldWD); err != nil {
 			t.Fatalf("restore Chdir() error = %v", err)
 		}
@@ -248,6 +252,12 @@ func TestTriageCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, root string, repo string) (string, error) {
+		if root != tempRoot || repo != "kunchenguid/ezoss" {
+			t.Fatalf("prepareInvestigationCheckout(root, repo) = (%q, %q), want (%q, %q)", root, repo, tempRoot, "kunchenguid/ezoss")
+		}
+		return resolvedWorkingDir, nil
 	}
 
 	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
@@ -350,6 +360,7 @@ func TestTriageCommandPrefersRepoAgentOverrideWithoutMock(t *testing.T) {
 	originalNewPaths := newPaths
 	originalNewGitHubClient := newGitHubClient
 	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -361,6 +372,7 @@ func TestTriageCommandPrefersRepoAgentOverrideWithoutMock(t *testing.T) {
 		newPaths = originalNewPaths
 		newGitHubClient = originalNewGitHubClient
 		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
 		if err := os.Chdir(oldWD); err != nil {
 			t.Fatalf("restore Chdir() error = %v", err)
 		}
@@ -371,6 +383,12 @@ func TestTriageCommandPrefersRepoAgentOverrideWithoutMock(t *testing.T) {
 	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, root string, repo string) (string, error) {
+		if root != tempRoot || repo != "kunchenguid/ezoss" {
+			t.Fatalf("prepareInvestigationCheckout(root, repo) = (%q, %q), want (%q, %q)", root, repo, tempRoot, "kunchenguid/ezoss")
+		}
+		return workingDir, nil
 	}
 
 	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
@@ -434,6 +452,7 @@ func TestTriageCommandFindsRepoAgentOverrideFromSubdirectoryWithoutMock(t *testi
 	originalNewPaths := newPaths
 	originalNewGitHubClient := newGitHubClient
 	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -448,6 +467,7 @@ func TestTriageCommandFindsRepoAgentOverrideFromSubdirectoryWithoutMock(t *testi
 		newPaths = originalNewPaths
 		newGitHubClient = originalNewGitHubClient
 		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
 		if err := os.Chdir(oldWD); err != nil {
 			t.Fatalf("restore Chdir() error = %v", err)
 		}
@@ -458,6 +478,12 @@ func TestTriageCommandFindsRepoAgentOverrideFromSubdirectoryWithoutMock(t *testi
 	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, root string, repo string) (string, error) {
+		if root != tempRoot || repo != "kunchenguid/ezoss" {
+			t.Fatalf("prepareInvestigationCheckout(root, repo) = (%q, %q), want (%q, %q)", root, repo, tempRoot, "kunchenguid/ezoss")
+		}
+		return workingDir, nil
 	}
 
 	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
@@ -589,13 +615,21 @@ func TestTriageCommandResolvesAutoAgentWithoutMock(t *testing.T) {
 	originalNewPaths := newPaths
 	originalNewGitHubClient := newGitHubClient
 	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
 	t.Cleanup(func() {
 		newPaths = originalNewPaths
 		newGitHubClient = originalNewGitHubClient
 		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
 	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, root string, repo string) (string, error) {
+		if root != tempRoot || repo != "kunchenguid/ezoss" {
+			t.Fatalf("prepareInvestigationCheckout(root, repo) = (%q, %q), want (%q, %q)", root, repo, tempRoot, "kunchenguid/ezoss")
+		}
+		return t.TempDir(), nil
 	}
 
 	newGitHubClient = func() itemFetcher {
@@ -681,7 +715,14 @@ func (s stubItemFetcher) GetItem(_ context.Context, _ string, _ sharedtypes.Item
 // Claude is often single digits even for huge prompts).
 func TestLiveTriageRunner_TokensInIncludesCacheTokens(t *testing.T) {
 	originalNewAgent := newAgent
-	t.Cleanup(func() { newAgent = originalNewAgent })
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
+	t.Cleanup(func() {
+		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
+	})
+	prepareInvestigationCheckout = func(_ context.Context, _ string, _ string) (string, error) {
+		return "", nil
+	}
 
 	newAgent = func(_ sharedtypes.AgentName, _ string) (triageAgent, error) {
 		return stubTriageAgent{result: &agent.Result{
@@ -714,6 +755,263 @@ func TestLiveTriageRunner_TokensInIncludesCacheTokens(t *testing.T) {
 	if got.TokensOut != 170 {
 		t.Errorf("TokensOut = %d, want 170", got.TokensOut)
 	}
+}
+
+func TestLiveTriageRunnerPreparesInvestigationCheckoutForRepoItem(t *testing.T) {
+	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
+	t.Cleanup(func() {
+		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
+	})
+
+	root := t.TempDir()
+	checkout := filepath.Join(root, "investigations", "kunchenguid__no-mistakes")
+	var preparedRoot, preparedRepo string
+	prepareInvestigationCheckout = func(_ context.Context, gotRoot string, gotRepo string) (string, error) {
+		preparedRoot = gotRoot
+		preparedRepo = gotRepo
+		return checkout, nil
+	}
+
+	var gotOpts agent.RunOpts
+	newAgent = func(_ sharedtypes.AgentName, _ string) (triageAgent, error) {
+		return stubTriageAgent{result: &agent.Result{
+			Output: mustJSON(t, triage.Recommendation{Options: []triage.RecommendationOption{{
+				StateChange: sharedtypes.StateChangeNone,
+				Rationale:   "ok",
+				WaitingOn:   sharedtypes.WaitingOnNone,
+				Confidence:  sharedtypes.ConfidenceHigh,
+			}}}),
+		}, onRun: func(opts agent.RunOpts) {
+			gotOpts = opts
+		}}, nil
+	}
+
+	runner := &liveTriageRunner{name: sharedtypes.AgentClaude, bin: "claude", cwd: t.TempDir(), stateRoot: root}
+	_, err := runner.Triage(context.Background(), daemon.TriageRequest{
+		Item:   ghclient.Item{Repo: "kunchenguid/no-mistakes"},
+		Prompt: "base prompt",
+	})
+	if err != nil {
+		t.Fatalf("Triage() error = %v", err)
+	}
+
+	if preparedRoot != root || preparedRepo != "kunchenguid/no-mistakes" {
+		t.Fatalf("prepareInvestigationCheckout(root, repo) = (%q, %q), want (%q, %q)", preparedRoot, preparedRepo, root, "kunchenguid/no-mistakes")
+	}
+	if gotOpts.CWD != checkout {
+		t.Fatalf("RunOpts.CWD = %q, want checkout %q", gotOpts.CWD, checkout)
+	}
+	for _, want := range []string{"Repository checkout for investigation:", checkout, "Do not push", "Local edits are scratch"} {
+		if !strings.Contains(gotOpts.Prompt, want) {
+			t.Fatalf("RunOpts.Prompt = %q, missing %q", gotOpts.Prompt, want)
+		}
+	}
+}
+
+func TestLiveTriageRunnerSerializesInvestigationCheckoutUse(t *testing.T) {
+	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
+	t.Cleanup(func() {
+		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
+	})
+
+	root := t.TempDir()
+	checkout := filepath.Join(root, "investigations", "kunchenguid__no-mistakes")
+	prepared := make(chan struct{}, 2)
+	prepareInvestigationCheckout = func(_ context.Context, _ string, _ string) (string, error) {
+		prepared <- struct{}{}
+		return checkout, nil
+	}
+
+	firstRunStarted := make(chan struct{})
+	releaseFirstRun := make(chan struct{})
+	var mu sync.Mutex
+	runCount := 0
+	newAgent = func(_ sharedtypes.AgentName, _ string) (triageAgent, error) {
+		return stubTriageAgent{result: &agent.Result{
+			Output: mustJSON(t, triage.Recommendation{Options: []triage.RecommendationOption{{
+				StateChange: sharedtypes.StateChangeNone,
+				Rationale:   "ok",
+				WaitingOn:   sharedtypes.WaitingOnNone,
+				Confidence:  sharedtypes.ConfidenceHigh,
+			}}}),
+		}, onRun: func(agent.RunOpts) {
+			mu.Lock()
+			runCount++
+			currentRun := runCount
+			mu.Unlock()
+			if currentRun == 1 {
+				close(firstRunStarted)
+				<-releaseFirstRun
+			}
+		}}, nil
+	}
+
+	runner := &liveTriageRunner{name: sharedtypes.AgentClaude, bin: "claude", cwd: t.TempDir(), stateRoot: root}
+	errCh := make(chan error, 2)
+	req := daemon.TriageRequest{Item: ghclient.Item{Repo: "kunchenguid/no-mistakes"}, Prompt: "base prompt"}
+	go func() {
+		_, err := runner.Triage(context.Background(), req)
+		errCh <- err
+	}()
+
+	<-prepared
+	<-firstRunStarted
+	go func() {
+		_, err := runner.Triage(context.Background(), req)
+		errCh <- err
+	}()
+
+	select {
+	case <-prepared:
+		t.Fatal("second triage prepared checkout while first agent still held it")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirstRun)
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("Triage() error = %v", err)
+		}
+	}
+}
+
+func TestAcquireInvestigationCheckoutLockRecoversStaleLock(t *testing.T) {
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "investigations", ".locks", "kunchenguid__no-mistakes.lock")
+	if err := os.MkdirAll(lockPath, 0o755); err != nil {
+		t.Fatalf("create stale lock: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	t.Cleanup(cancel)
+	release, err := acquireInvestigationCheckoutLock(ctx, root, "kunchenguid/no-mistakes")
+	if err != nil {
+		t.Fatalf("acquireInvestigationCheckoutLock() error = %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release() error = %v", err)
+	}
+}
+
+func TestAcquireInvestigationCheckoutLockRecoversStalePIDLock(t *testing.T) {
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "investigations", ".locks", "kunchenguid__no-mistakes.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("create lock dir: %v", err)
+	}
+	if err := os.WriteFile(lockPath, []byte("999999\n"), 0o644); err != nil {
+		t.Fatalf("create stale lock: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	t.Cleanup(cancel)
+	release, err := acquireInvestigationCheckoutLock(ctx, root, "kunchenguid/no-mistakes")
+	if err != nil {
+		t.Fatalf("acquireInvestigationCheckoutLock() error = %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release() error = %v", err)
+	}
+}
+
+func TestPreparePersistentInvestigationCheckoutCreatesAndCleansClone(t *testing.T) {
+	root := t.TempDir()
+	originalGitHubAuthToken := gitHubAuthToken
+	t.Cleanup(func() {
+		gitHubAuthToken = originalGitHubAuthToken
+	})
+	gitHubAuthToken = func(_ context.Context) (string, error) {
+		return "", nil
+	}
+
+	var calls []gitCommandCall
+	runner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
+		calls = append(calls, gitCommandCall{dir: dir, env: append([]string(nil), env...), args: append([]string(nil), args...)})
+		if len(args) > 0 && args[0] == "clone" {
+			if err := os.MkdirAll(filepath.Join(root, "investigations", "kunchenguid__no-mistakes", ".git"), 0o755); err != nil {
+				return nil, err
+			}
+		}
+		if len(args) >= 3 && args[0] == "rev-parse" && args[1] == "--abbrev-ref" {
+			return []byte("origin/main\n"), nil
+		}
+		return nil, nil
+	}
+
+	checkout, err := preparePersistentInvestigationCheckout(context.Background(), root, "kunchenguid/no-mistakes", runner)
+	if err != nil {
+		t.Fatalf("preparePersistentInvestigationCheckout() error = %v", err)
+	}
+
+	wantCheckout := filepath.Join(root, "investigations", "kunchenguid__no-mistakes")
+	if checkout != wantCheckout {
+		t.Fatalf("checkout = %q, want %q", checkout, wantCheckout)
+	}
+	want := []gitCommandCall{
+		{dir: filepath.Join(root, "investigations"), args: []string{"clone", "https://github.com/kunchenguid/no-mistakes.git", wantCheckout}},
+		{dir: wantCheckout, args: []string{"fetch", "--prune", "origin"}},
+		{dir: wantCheckout, args: []string{"remote", "set-head", "origin", "-a"}},
+		{dir: wantCheckout, args: []string{"rev-parse", "--abbrev-ref", "origin/HEAD"}},
+		{dir: wantCheckout, args: []string{"reset", "--hard"}},
+		{dir: wantCheckout, args: []string{"clean", "-fdx"}},
+		{dir: wantCheckout, args: []string{"checkout", "--detach", "origin/main"}},
+		{dir: wantCheckout, args: []string{"reset", "--hard", "origin/main"}},
+		{dir: wantCheckout, args: []string{"clean", "-fdx"}},
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("git calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestPreparePersistentInvestigationCheckoutUsesGhTokenForGitHubGit(t *testing.T) {
+	root := t.TempDir()
+	originalGitHubAuthToken := gitHubAuthToken
+	t.Cleanup(func() {
+		gitHubAuthToken = originalGitHubAuthToken
+	})
+	gitHubAuthToken = func(_ context.Context) (string, error) {
+		return "gho_private", nil
+	}
+
+	var calls []gitCommandCall
+	runner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
+		calls = append(calls, gitCommandCall{dir: dir, env: append([]string(nil), env...), args: append([]string(nil), args...)})
+		if len(args) > 0 && args[0] == "clone" {
+			if err := os.MkdirAll(filepath.Join(root, "investigations", "kunchenguid__no-mistakes", ".git"), 0o755); err != nil {
+				return nil, err
+			}
+		}
+		if len(args) >= 3 && args[0] == "rev-parse" && args[1] == "--abbrev-ref" {
+			return []byte("origin/main\n"), nil
+		}
+		return nil, nil
+	}
+
+	_, err := preparePersistentInvestigationCheckout(context.Background(), root, "kunchenguid/no-mistakes", runner)
+	if err != nil {
+		t.Fatalf("preparePersistentInvestigationCheckout() error = %v", err)
+	}
+
+	wantEnv := []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: bearer gho_private",
+	}
+	for _, call := range calls {
+		if !reflect.DeepEqual(call.env, wantEnv) {
+			t.Fatalf("git call env = %#v, want %#v", call.env, wantEnv)
+		}
+	}
+}
+
+type gitCommandCall struct {
+	dir  string
+	env  []string
+	args []string
 }
 
 type stubTriageAgent struct {

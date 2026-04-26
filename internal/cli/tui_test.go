@@ -1917,16 +1917,24 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 	originalNewPaths := newPaths
 	originalNewGitHubClient := newGitHubClient
 	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
 	t.Cleanup(func() {
 		newPaths = originalNewPaths
 		newGitHubClient = originalNewGitHubClient
 		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
 	})
 	stubAgentLookPath(t, map[string]string{
 		"codex": "/usr/local/bin/codex",
 	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, root string, repo string) (string, error) {
+		if root != tempRoot || repo != "acme/widgets" {
+			t.Fatalf("prepareInvestigationCheckout(root, repo) = (%q, %q), want (%q, %q)", root, repo, tempRoot, "acme/widgets")
+		}
+		return t.TempDir(), nil
 	}
 
 	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
@@ -2061,6 +2069,7 @@ func TestRerunInboxEntriesPrefersRepoAgentOverride(t *testing.T) {
 	originalNewPaths := newPaths
 	originalNewGitHubClient := newGitHubClient
 	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -2072,6 +2081,7 @@ func TestRerunInboxEntriesPrefersRepoAgentOverride(t *testing.T) {
 		newPaths = originalNewPaths
 		newGitHubClient = originalNewGitHubClient
 		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
 		if err := os.Chdir(oldWD); err != nil {
 			t.Fatalf("restore Chdir() error = %v", err)
 		}
@@ -2082,6 +2092,12 @@ func TestRerunInboxEntriesPrefersRepoAgentOverride(t *testing.T) {
 	})
 	newPaths = func() (*paths.Paths, error) {
 		return paths.WithRoot(tempRoot), nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, root string, repo string) (string, error) {
+		if root != tempRoot || repo != "acme/widgets" {
+			t.Fatalf("prepareInvestigationCheckout(root, repo) = (%q, %q), want (%q, %q)", root, repo, tempRoot, "acme/widgets")
+		}
+		return workingDir, nil
 	}
 
 	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{

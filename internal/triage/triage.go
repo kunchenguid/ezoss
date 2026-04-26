@@ -86,7 +86,7 @@ func Prompt(itemURL string, agentsInstructions string) string {
 	b.WriteString("Item URL:\n")
 	b.WriteString(itemURL)
 	b.WriteString("\n\n")
-	b.WriteString("You can clone the repository and inspect any code, issue comments, pull request diff, linked issues, or CI context you need before deciding.\n\n")
+	b.WriteString("Inspect the managed repository checkout provided in the execution context, plus any issue comments, pull request diff, linked issues, or CI context you need before deciding. Do not create ad hoc clones unless the provided checkout is unavailable.\n\n")
 	b.WriteString("Return one or more options. Each option is a self-contained proposed resolution with these fields:\n")
 	b.WriteString("- draft_comment: the comment to post on the item, or empty string if no comment.\n")
 	b.WriteString("- state_change: the state transition to apply: 'none', 'close', 'merge', or 'request_changes'.\n")

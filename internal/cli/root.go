@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -85,6 +86,9 @@ var newDaemonTriageLister = func() daemonTriageLister {
 var lookPath = exec.LookPath
 var newAgent = func(name sharedtypes.AgentName, bin string) (triageAgent, error) {
 	return agent.New(name, bin)
+}
+var prepareInvestigationCheckout = func(ctx context.Context, root string, repoID string) (string, error) {
+	return preparePersistentInvestigationCheckout(ctx, root, repoID, runGitCommand)
 }
 var newLabelEditor = func() labelEditor {
 	return ghclient.New(nil)
@@ -387,7 +391,7 @@ func newDaemonRunCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("load daemon triage config: %w", err)
 				}
-				runner, err := newLiveTriageRunner(triageCfg.Agent)
+				runner, err := newLiveTriageRunner(p.Root(), triageCfg.Agent)
 				if err != nil {
 					return fmt.Errorf("create triage runner: %w", err)
 				}
@@ -2474,7 +2478,7 @@ func newManualTriagePoller(ctx context.Context, root string, database *db.DB, re
 		return daemon.Poller{}, fmt.Errorf("load item: %w", err)
 	}
 
-	runner, err := newLiveTriageRunner(cfg.Agent)
+	runner, err := newLiveTriageRunner(root, cfg.Agent)
 	if err != nil {
 		return daemon.Poller{}, fmt.Errorf("create triage runner: %w", err)
 	}
@@ -2547,7 +2551,7 @@ func loadNearestRepoConfig(dir string) (*config.RepoConfig, error) {
 	}
 }
 
-func newLiveTriageRunner(agentName sharedtypes.AgentName) (*liveTriageRunner, error) {
+func newLiveTriageRunner(stateRoot string, agentName sharedtypes.AgentName) (*liveTriageRunner, error) {
 	resolvedName, bin, err := agent.Resolve(agentName, lookPath)
 	if err != nil {
 		return nil, err
@@ -2556,13 +2560,14 @@ func newLiveTriageRunner(agentName sharedtypes.AgentName) (*liveTriageRunner, er
 	if err != nil {
 		return nil, fmt.Errorf("resolve working directory: %w", err)
 	}
-	return &liveTriageRunner{name: resolvedName, bin: bin, cwd: cwd}, nil
+	return &liveTriageRunner{name: resolvedName, bin: bin, cwd: cwd, stateRoot: stateRoot}, nil
 }
 
 type liveTriageRunner struct {
-	name sharedtypes.AgentName
-	bin  string
-	cwd  string
+	name      sharedtypes.AgentName
+	bin       string
+	cwd       string
+	stateRoot string
 }
 
 func (r *liveTriageRunner) Triage(ctx context.Context, req daemon.TriageRequest) (*daemon.TriageResult, error) {
@@ -2572,9 +2577,30 @@ func (r *liveTriageRunner) Triage(ctx context.Context, req daemon.TriageRequest)
 	}
 	defer agentRunner.Close()
 
+	cwd := r.cwd
+	prompt := req.Prompt
+	var releaseCheckoutLock func() error
+	if r.stateRoot != "" && strings.TrimSpace(req.Item.Repo) != "" {
+		release, err := acquireInvestigationCheckoutLock(ctx, r.stateRoot, req.Item.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("lock investigation checkout: %w", err)
+		}
+		releaseCheckoutLock = release
+		defer func() { _ = releaseCheckoutLock() }()
+
+		checkout, err := prepareInvestigationCheckout(ctx, r.stateRoot, req.Item.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("prepare investigation checkout: %w", err)
+		}
+		if checkout != "" {
+			cwd = checkout
+			prompt = promptWithInvestigationCheckout(prompt, checkout)
+		}
+	}
+
 	result, err := agentRunner.Run(ctx, agent.RunOpts{
-		Prompt:     req.Prompt,
-		CWD:        r.cwd,
+		Prompt:     prompt,
+		CWD:        cwd,
 		JSONSchema: cloneJSON(req.Schema),
 	})
 	if err != nil {
@@ -2596,6 +2622,200 @@ func (r *liveTriageRunner) Triage(ctx context.Context, req daemon.TriageRequest)
 		TokensIn:       result.Usage.TotalInputTokens(),
 		TokensOut:      result.Usage.OutputTokens,
 	}, nil
+}
+
+func acquireInvestigationCheckoutLock(ctx context.Context, root string, repoID string) (func() error, error) {
+	lockDir := filepath.Join(root, "investigations", ".locks")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create lock dir: %w", err)
+	}
+	lockPath := filepath.Join(lockDir, investigationRepoDirName(repoID)+".lock")
+
+	for {
+		file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
+				_ = file.Close()
+				_ = os.Remove(lockPath)
+				return nil, fmt.Errorf("write lock owner: %w", err)
+			}
+			if err := file.Close(); err != nil {
+				_ = os.Remove(lockPath)
+				return nil, fmt.Errorf("close lock owner: %w", err)
+			}
+			return func() error {
+				return os.Remove(lockPath)
+			}, nil
+		}
+		if !os.IsExist(err) {
+			if _, statErr := os.Stat(lockPath); statErr != nil {
+				return nil, fmt.Errorf("acquire lock: %w", err)
+			}
+		}
+		removed, staleErr := removeStaleInvestigationCheckoutLock(lockPath)
+		if staleErr != nil {
+			return nil, staleErr
+		}
+		if removed {
+			continue
+		}
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("acquire lock: %w", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func removeStaleInvestigationCheckoutLock(lockPath string) (bool, error) {
+	info, err := os.Stat(lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("inspect lock: %w", err)
+	}
+	if info.IsDir() {
+		if err := os.RemoveAll(lockPath); err != nil {
+			return false, fmt.Errorf("remove stale lock: %w", err)
+		}
+		return true, nil
+	}
+
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("read lock owner: %w", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			return false, fmt.Errorf("remove stale lock: %w", err)
+		}
+		return true, nil
+	}
+	if processExists(pid) {
+		return false, nil
+	}
+	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("remove stale lock: %w", err)
+	}
+	return true, nil
+}
+
+func processExists(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = process.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+type gitCommandRunner func(ctx context.Context, dir string, env []string, args ...string) ([]byte, error)
+
+var gitHubAuthToken = func(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func runGitCommand(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+func gitHubGitAuthEnv(ctx context.Context) []string {
+	token, err := gitHubAuthToken(ctx)
+	if err != nil || token == "" {
+		return nil
+	}
+	return []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: bearer " + token,
+	}
+}
+
+func preparePersistentInvestigationCheckout(ctx context.Context, root string, repoID string, run gitCommandRunner) (string, error) {
+	repoID = strings.TrimSpace(repoID)
+	if repoID == "" || !strings.Contains(repoID, "/") {
+		return "", fmt.Errorf("invalid repo %q", repoID)
+	}
+	if run == nil {
+		run = runGitCommand
+	}
+	gitEnv := gitHubGitAuthEnv(ctx)
+
+	investigationsDir := filepath.Join(root, "investigations")
+	checkout := filepath.Join(investigationsDir, investigationRepoDirName(repoID))
+	if err := os.MkdirAll(investigationsDir, 0o755); err != nil {
+		return "", fmt.Errorf("create investigations dir: %w", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(checkout, ".git")); err != nil {
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("inspect checkout: %w", err)
+		}
+		if err := os.RemoveAll(checkout); err != nil {
+			return "", fmt.Errorf("remove invalid checkout: %w", err)
+		}
+		cloneURL := "https://github.com/" + repoID + ".git"
+		if _, err := run(ctx, investigationsDir, gitEnv, "clone", cloneURL, checkout); err != nil {
+			return "", err
+		}
+	}
+
+	if _, err := run(ctx, checkout, gitEnv, "fetch", "--prune", "origin"); err != nil {
+		return "", err
+	}
+	_, _ = run(ctx, checkout, gitEnv, "remote", "set-head", "origin", "-a")
+	defaultRef := "origin/main"
+	if out, err := run(ctx, checkout, gitEnv, "rev-parse", "--abbrev-ref", "origin/HEAD"); err == nil {
+		ref := strings.TrimSpace(string(out))
+		if ref != "" && ref != "origin/HEAD" {
+			defaultRef = ref
+		}
+	}
+	if _, err := run(ctx, checkout, gitEnv, "reset", "--hard"); err != nil {
+		return "", err
+	}
+	if _, err := run(ctx, checkout, gitEnv, "clean", "-fdx"); err != nil {
+		return "", err
+	}
+	if _, err := run(ctx, checkout, gitEnv, "checkout", "--detach", defaultRef); err != nil {
+		return "", err
+	}
+	if _, err := run(ctx, checkout, gitEnv, "reset", "--hard", defaultRef); err != nil {
+		return "", err
+	}
+	if _, err := run(ctx, checkout, gitEnv, "clean", "-fdx"); err != nil {
+		return "", err
+	}
+	return checkout, nil
+}
+
+func investigationRepoDirName(repoID string) string {
+	return strings.NewReplacer("/", "__", "\\", "__", ":", "_").Replace(repoID)
+}
+
+func promptWithInvestigationCheckout(prompt string, checkout string) string {
+	return strings.TrimSpace(prompt) + "\n\nRepository checkout for investigation:\n" + checkout + "\n\nThis checkout is managed by ezoss for daemon-initiated agent work. Use it as the local repository context for code investigation. Do not push, publish branches, open pull requests, or mutate GitHub from this checkout. Local edits are scratch and will be discarded before a future agent run."
 }
 
 func cloneJSON(data json.RawMessage) json.RawMessage {
