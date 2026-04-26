@@ -291,6 +291,12 @@ type actionFinishedMsg struct {
 	updatedEntries   []Entry // non-nil for rerun; replaces the entry in-place on success
 }
 
+type copyPromptFinishedMsg struct {
+	repoID string
+	number int
+	err    error
+}
+
 // spinnerTickMsg drives spinner animation while at least one action is
 // pending. The handler advances the frame and reschedules itself; once
 // pendingActions is empty, ticks stop.
@@ -376,6 +382,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionFinishedMsg:
 		m.applyActionFinished(msg)
 		return m, nil
+	case copyPromptFinishedMsg:
+		if msg.err != nil {
+			m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("copy prompt failed: %v", msg.err)})
+			return m, nil
+		}
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("copied prompt for %s #%d", msg.repoID, msg.number)})
+		return m, nil
 	case spinnerTickMsg:
 		m.spinnerFrame++
 		if len(m.pendingActions) > 0 {
@@ -415,7 +428,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		case "c":
-			m.copyPromptCurrent()
+			if cmd := m.copyPromptCurrent(); cmd != nil {
+				return m, cmd
+			}
 		case "r":
 			if cmd := m.rerunCurrent(); cmd != nil {
 				return m, withSpinner(cmd, m.kickSpinnerIfPending())
@@ -583,27 +598,30 @@ func (m *Model) editCurrent() tea.Cmd {
 	return nil
 }
 
-func (m *Model) copyPromptCurrent() {
+func (m *Model) copyPromptCurrent() tea.Cmd {
 	if len(m.entries) == 0 {
-		return
+		return nil
 	}
 	entry := m.entries[m.cursor]
 	if _, blocked := m.guardConflict(entry, "copy prompt"); blocked {
-		return
+		return nil
 	}
 	if strings.TrimSpace(entry.FixPrompt) == "" {
 		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("no fix prompt for %s #%d", entry.RepoID, entry.Number)})
-		return
+		return nil
 	}
 	if m.copyPrompt == nil {
 		m.pushLog(logEntry{state: logStateInfo, note: "copy prompt unavailable"})
-		return
+		return nil
 	}
-	if err := m.copyPrompt(entry); err != nil {
-		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("copy prompt failed: %v", err)})
-		return
+	copyPrompt := m.copyPrompt
+	return func() tea.Msg {
+		return copyPromptFinishedMsg{
+			repoID: entry.RepoID,
+			number: entry.Number,
+			err:    copyPrompt(entry),
+		}
 	}
-	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("copied prompt for %s #%d", entry.RepoID, entry.Number)})
 }
 
 // guardConflict reports whether an action on entry should be refused

@@ -378,7 +378,14 @@ func TestModelCopyPromptCopiesCurrentEntryPrompt(t *testing.T) {
 	})
 	m.width = 100
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if cmd == nil {
+		t.Fatal("expected copy prompt command")
+	}
+	if len(copied) != 0 {
+		t.Fatalf("copy prompt ran synchronously, copied = %#v", copied)
+	}
+	updated, _ = updated.(Model).Update(cmd())
 	next := updated.(Model)
 	if len(copied) != 1 || copied[0] != "Fix https://github.com/acme/widgets/issues/42 by adding a regression test." {
 		t.Fatalf("copied = %#v", copied)
