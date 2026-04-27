@@ -699,6 +699,104 @@ func TestPollOnceSupersedesActiveRecommendationForMergedPR(t *testing.T) {
 	}
 }
 
+func TestPollOnceSupersedesActiveRecommendationForExternallyTriagedItem(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	oldEvent := time.Now().UTC().Add(-1 * time.Hour).Truncate(time.Second)
+	if err := database.UpsertItem(db.Item{
+		ID:          "acme/widgets#42",
+		RepoID:      "acme/widgets",
+		Kind:        sharedtypes.ItemKindIssue,
+		Number:      42,
+		Title:       "needs maintainer review",
+		Author:      "alice",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   false,
+		WaitingOn:   sharedtypes.WaitingOnMaintainer,
+		LastEventAt: &oldEvent,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	oldRec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#42",
+		Agent:  sharedtypes.AgentClaude,
+		Model:  "sonnet",
+		Options: []db.NewRecommendationOption{{
+			StateChange:  sharedtypes.StateChangeNone,
+			Rationale:    "Needs maintainer review.",
+			DraftComment: "",
+			Confidence:   sharedtypes.ConfidenceHigh,
+			WaitingOn:    sharedtypes.WaitingOnMaintainer,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	triagedAt := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
+	client := &stubTriageClient{
+		itemsByRepo: map[string][]ghclient.Item{"acme/widgets": nil},
+		itemByKey: map[string]ghclient.Item{
+			"acme/widgets#42": {
+				Repo:      "acme/widgets",
+				Kind:      sharedtypes.ItemKindIssue,
+				Number:    42,
+				Title:     "needs maintainer review",
+				Author:    "alice",
+				State:     sharedtypes.ItemStateOpen,
+				Labels:    []string{triagedLabel},
+				URL:       "https://github.com/acme/widgets/issues/42",
+				UpdatedAt: triagedAt,
+			},
+		},
+	}
+	runner := &stubRecommendationRunner{
+		result: &TriageResult{
+			Agent: sharedtypes.AgentCodex,
+			Model: "gpt-5.4",
+			Recommendation: &triage.Recommendation{Options: []triage.RecommendationOption{{
+				StateChange:  sharedtypes.StateChangeNone,
+				Rationale:    "Should not be called for an externally triaged item.",
+				DraftComment: "",
+				Confidence:   sharedtypes.ConfidenceHigh,
+			}}},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client, Triage: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	if len(runner.calls) != 0 {
+		t.Fatalf("triage runner calls = %d, want 0 for externally triaged item", len(runner.calls))
+	}
+	updatedRec, err := database.GetRecommendation(oldRec.ID)
+	if err != nil {
+		t.Fatalf("GetRecommendation() error = %v", err)
+	}
+	if updatedRec == nil || updatedRec.SupersededAt == nil {
+		t.Fatalf("expected active recommendation to be superseded, got %#v", updatedRec)
+	}
+	active, err := database.ListActiveRecommendations()
+	if err != nil {
+		t.Fatalf("ListActiveRecommendations() error = %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active recommendations = %d, want 0 for externally triaged item", len(active))
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || !item.GHTriaged {
+		t.Fatalf("item gh_triaged after reconciliation = %#v, want true", item)
+	}
+}
+
 // TestPollOnceSkipsStaleRecommendationForClosedContributorItem covers the
 // regression where an item closed via approval (local state=closed,
 // gh_triaged=true, waiting_on=contributor) would otherwise re-trigger the

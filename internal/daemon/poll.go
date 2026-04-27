@@ -252,7 +252,7 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 		if err := poller.DB.UpsertItem(itemRecord); err != nil {
 			return fmt.Errorf("upsert item %d: %w", cached.Number, err)
 		}
-		if current.State != sharedtypes.ItemStateOpen {
+		if current.State != sharedtypes.ItemStateOpen || itemRecord.GHTriaged {
 			if err := poller.DB.MarkRecommendationSuperseded(recommendation.ID, polledAt); err != nil {
 				return fmt.Errorf("supersede recommendation for item %d: %w", cached.Number, err)
 			}
