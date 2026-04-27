@@ -1772,18 +1772,38 @@ func newStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show daemon and sync status",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			data, err := collectStatusData(cmd)
-			if err != nil {
-				return err
-			}
+		Long: `Show daemon and sync status.
 
+In an interactive terminal, status opens a realtime TUI. In non-interactive
+output, status prints rich text status. Use --short for the script-friendly
+one-line key=value summary.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			telemetry.Track("command", telemetry.Fields{"command": "status", "entrypoint": "status"})
+
+			collect := func() (statusData, error) {
+				return collectStatusData(cmd)
+			}
 
 			out := cmd.OutOrStdout()
 			if short {
+				data, err := collect()
+				if err != nil {
+					return err
+				}
 				_, err = fmt.Fprintln(out, renderShortStatus(data))
+				return err
+			}
+			if isInteractiveTerminal() {
+				return runStatusTUI(cmd.Context(), out, cmd.ErrOrStderr(), statusTUIOptions{
+					RefreshInterval: statusTUIRefreshInterval,
+					Collect:         collect,
+					Now:             time.Now,
+				})
+			}
+
+			data, err := collect()
+			if err != nil {
 				return err
 			}
 			_, err = fmt.Fprint(out, renderRichStatus(data, time.Now()))
@@ -2015,11 +2035,7 @@ func repoStatusLine(state ipc.RepoSyncStatus, present bool, now time.Time) (stri
 	case present && state.LastError != "":
 		return "✗", "error: " + truncateErr(state.LastError, 80) + " " + formatRelativeTime(now, state.LastSyncEnd)
 	case present && !state.LastSyncEnd.IsZero():
-		dur := ""
-		if !state.LastSyncStart.IsZero() {
-			dur = " (" + formatDuration(state.LastSyncEnd.Sub(state.LastSyncStart)) + ")"
-		}
-		return "✓", "synced " + formatRelativeTime(now, state.LastSyncEnd) + dur
+		return "✓", "synced"
 	default:
 		return "·", "pending first sync"
 	}

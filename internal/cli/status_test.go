@@ -2,14 +2,18 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/kunchenguid/ezoss/internal/config"
 	"github.com/kunchenguid/ezoss/internal/daemon"
 	"github.com/kunchenguid/ezoss/internal/db"
@@ -18,6 +22,12 @@ import (
 	"github.com/kunchenguid/ezoss/internal/telemetry"
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
 )
+
+var statusANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripStatusANSI(s string) string {
+	return statusANSIPattern.ReplaceAllString(s, "")
+}
 
 func TestRootCommandIncludesStatusSubcommand(t *testing.T) {
 	cmd := NewRootCmd()
@@ -461,6 +471,229 @@ func TestStatusCommandTracksTelemetryEvent(t *testing.T) {
 	}
 }
 
+func TestStatusCommandLaunchesRealtimeTUIWhenInteractive(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalRunStatusTUI := runStatusTUI
+	originalIsInteractiveTerminal := isInteractiveTerminal
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		runStatusTUI = originalRunStatusTUI
+		isInteractiveTerminal = originalIsInteractiveTerminal
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	isInteractiveTerminal = func() bool { return true }
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
+		Repos: []string{"acme/widgets"},
+	}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	var gotInterval time.Duration
+	runStatusTUI = func(_ context.Context, _ io.Writer, _ io.Writer, opts statusTUIOptions) error {
+		gotInterval = opts.RefreshInterval
+		data, err := opts.Collect()
+		if err != nil {
+			return err
+		}
+		if len(data.repos) != 1 || data.repos[0] != "acme/widgets" {
+			t.Fatalf("collected repos = %#v, want acme/widgets", data.repos)
+		}
+		return nil
+	}
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"status"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if gotInterval != 100*time.Millisecond {
+		t.Fatalf("refresh interval = %s, want 100ms", gotInterval)
+	}
+	if got := buf.String(); got != "" {
+		t.Fatalf("output = %q, want TUI to own rendering", got)
+	}
+}
+
+func TestStatusTUIViewUsesMainTUIBoxStyle(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	m := newStatusTUIModel(statusTUIOptions{Now: func() time.Time { return now }})
+	m.data = statusData{
+		daemonState: daemon.StateRunning,
+		daemonPID:   12345,
+		repos:       []string{"acme/widgets"},
+		sync: &ipc.SyncStatusResult{
+			Repos: []ipc.RepoSyncStatus{{Repo: "acme/widgets", LastSyncEnd: now.Add(-time.Minute)}},
+		},
+	}
+	m.hasData = true
+	m.width = 80
+
+	view := stripStatusANSI(m.View())
+	for _, want := range []string{
+		"╭─ Status ",
+		"│ daemon: running (pid 12345)",
+		"│   ✓ acme/widgets  synced",
+		"╰── q quit  ? help ",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing %q in:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{
+		"ezoss status",
+		"refresh 10fps",
+	} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("View() should not include standalone header %q in:\n%s", unwanted, view)
+		}
+	}
+}
+
+func TestStatusTUITickOnlySchedulesRenderRefresh(t *testing.T) {
+	m := newStatusTUIModel(statusTUIOptions{
+		RefreshInterval: time.Nanosecond,
+		Collect: func() (statusData, error) {
+			t.Fatal("tick should not collect status data")
+			return statusData{}, nil
+		},
+	})
+
+	_, cmd := m.Update(statusTUITickMsg{})
+	if cmd == nil {
+		t.Fatal("Update(statusTUITickMsg) cmd = nil, want render refresh tick")
+	}
+	if _, ok := cmd().(statusTUITickMsg); !ok {
+		t.Fatalf("Update(statusTUITickMsg) cmd returned %T, want statusTUITickMsg", cmd())
+	}
+}
+
+func TestStatusTUIViewConstrainedToTerminalHeight(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	repos := []string{
+		"acme/repo-01",
+		"acme/repo-02",
+		"acme/repo-03",
+		"acme/repo-04",
+		"acme/repo-05",
+		"acme/repo-06",
+		"acme/repo-07",
+		"acme/repo-08",
+	}
+	m := newStatusTUIModel(statusTUIOptions{Now: func() time.Time { return now }})
+	m.data = statusData{
+		daemonState: daemon.StateRunning,
+		daemonPID:   12345,
+		repos:       repos,
+		sync:        &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{}},
+	}
+	m.hasData = true
+	m.width = 80
+	m.height = 8
+
+	view := stripStatusANSI(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(lines) > m.height {
+		t.Fatalf("View() rendered %d lines, want at most %d:\n%s", len(lines), m.height, view)
+	}
+	if !strings.Contains(view, "more lines") {
+		t.Fatalf("View() missing overflow indicator:\n%s", view)
+	}
+}
+
+func TestStatusTUIViewHonorsNarrowTerminalWidth(t *testing.T) {
+	m := newStatusTUIModel(statusTUIOptions{})
+	m.hasData = true
+	m.data = statusData{daemonState: daemon.StateStopped}
+	m.width = 40
+
+	view := stripStatusANSI(m.View())
+	for _, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Fatalf("View() line width = %d, want at most %d:\n%s", got, m.width, view)
+		}
+	}
+}
+
+func TestStatusTUIViewClipsTitlesAndFootersToNarrowTerminalWidth(t *testing.T) {
+	m := newStatusTUIModel(statusTUIOptions{})
+	m.hasData = true
+	m.data = statusData{daemonState: daemon.StateStopped}
+	m.width = 10
+	m.showHelp = true
+
+	view := stripStatusANSI(m.View())
+	for _, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Fatalf("View() line width = %d, want at most %d:\n%s", got, m.width, view)
+		}
+	}
+}
+
+func TestStatusTUIViewFitsTinyTerminalHeight(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		height   int
+		showHelp bool
+	}{
+		{name: "without help", height: 2},
+		{name: "with help", height: 7, showHelp: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newStatusTUIModel(statusTUIOptions{})
+			m.hasData = true
+			m.data = statusData{daemonState: daemon.StateStopped}
+			m.width = 40
+			m.height = tc.height
+			m.showHelp = tc.showHelp
+
+			view := stripStatusANSI(m.View())
+			lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+			if len(lines) > m.height {
+				t.Fatalf("View() rendered %d lines, want at most %d:\n%s", len(lines), m.height, view)
+			}
+		})
+	}
+}
+
+func TestStatusTUIViewHelpConstrainedToTerminalHeight(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	repos := []string{
+		"acme/repo-01",
+		"acme/repo-02",
+		"acme/repo-03",
+		"acme/repo-04",
+		"acme/repo-05",
+	}
+	m := newStatusTUIModel(statusTUIOptions{Now: func() time.Time { return now }})
+	m.data = statusData{
+		daemonState: daemon.StateRunning,
+		daemonPID:   12345,
+		repos:       repos,
+		sync:        &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{}},
+	}
+	m.hasData = true
+	m.width = 80
+	m.height = 8
+	m.showHelp = true
+
+	view := stripStatusANSI(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(lines) > m.height {
+		t.Fatalf("View() rendered %d lines, want at most %d:\n%s", len(lines), m.height, view)
+	}
+	if !strings.Contains(view, "Keyboard shortcuts") {
+		t.Fatalf("View() missing help:\n%s", view)
+	}
+}
+
 func TestRenderRichStatusDaemonStoppedShowsHint(t *testing.T) {
 	d := statusData{
 		daemonState: daemon.StateStopped,
@@ -526,7 +759,7 @@ func TestRenderRichStatusPerRepoLines(t *testing.T) {
 		"Sync: cycle 4 finished 2m ago",
 		"next in 8m",
 		"✓ acme/done",
-		"synced 2m ago (450ms)",
+		"synced",
 		"→ acme/syncing",
 		"syncing... (3s in)",
 		"·",          // pending marker for never-synced
@@ -537,6 +770,14 @@ func TestRenderRichStatusPerRepoLines(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("render missing %q\n--- got ---\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"synced 2m ago",
+		"(450ms)",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("render should not include %q\n--- got ---\n%s", unwanted, got)
 		}
 	}
 }
