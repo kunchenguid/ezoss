@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -1519,7 +1518,7 @@ func newInitCmd() *cobra.Command {
 				return fmt.Errorf("create state directories: %w", err)
 			}
 
-			configPath := p.Root() + "/config.yaml"
+			configPath := filepath.Join(p.Root(), "config.yaml")
 			cfg, err := config.LoadGlobal(configPath)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
@@ -2763,15 +2762,6 @@ func removeStaleInvestigationCheckoutLock(lockPath string) (bool, error) {
 		return false, fmt.Errorf("remove stale lock: %w", err)
 	}
 	return true, nil
-}
-
-func processExists(pid int) bool {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = process.Signal(syscall.Signal(0))
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 type gitCommandRunner func(ctx context.Context, dir string, env []string, args ...string) ([]byte, error)

@@ -357,11 +357,13 @@ func TestDaemonRunCommandLoadsConfigAndStartsRuntime(t *testing.T) {
 	called := false
 	runDaemonWithOptions = func(pidFile string, sigCh <-chan os.Signal, opts daemon.RunOptions) error {
 		called = true
-		if pidFile != tempRoot+"/daemon.pid" {
-			t.Fatalf("pidFile = %q, want %q", pidFile, tempRoot+"/daemon.pid")
+		wantPidFile := filepath.Join(tempRoot, "daemon.pid")
+		if pidFile != wantPidFile {
+			t.Fatalf("pidFile = %q, want %q", pidFile, wantPidFile)
 		}
-		if opts.IPCPath != tempRoot+"/daemon.sock" {
-			t.Fatalf("IPCPath = %q, want %q", opts.IPCPath, tempRoot+"/daemon.sock")
+		wantIPCPath := filepath.Join(tempRoot, "daemon.sock")
+		if opts.IPCPath != wantIPCPath {
+			t.Fatalf("IPCPath = %q, want %q", opts.IPCPath, wantIPCPath)
 		}
 		if sigCh != nil {
 			t.Fatal("expected CLI to let daemon own signal channel")
