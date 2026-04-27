@@ -196,7 +196,7 @@ Polling strategy:
 - Skip items where `isDraft=true` or the title matches a WIP pattern (`WIP:`, `[WIP]`, `[draft]`).
 - Items that had the label and no longer do come back into the queue automatically - the query is the trigger.
 - For re-computing `waiting_on` and stale detection, also fetch items with the label on a slower cadence (default 1h).
-- Backoff on rate limit (`x-ratelimit-remaining` from `gh api`).
+- Backoff on poll errors, including rate limits (`x-ratelimit-remaining` from `gh api`) and transient GitHub/network failures.
 
 **Webhooks are deliberately out of scope for v1.** They need a public endpoint or a tunnel service, which is a big complexity jump. Polling gets us 90% of the value.
 

@@ -70,6 +70,7 @@ install: build
 	@if [ "$${EZOSS_SKIP_DAEMON:-}" != "1" ]; then \
 		install_bin="$$($(GO) env GOBIN)"; \
 		if [ -z "$$install_bin" ]; then install_bin="$$($(GO) env GOPATH)/bin"; fi; \
+		"$$install_bin/$(HOST_BINARY)" daemon install >/dev/null 2>&1 || true; \
 		"$$install_bin/$(HOST_BINARY)" daemon restart >/dev/null 2>&1 || true; \
 	fi
 

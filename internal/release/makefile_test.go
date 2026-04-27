@@ -15,6 +15,8 @@ import (
 )
 
 func TestMakeBuildSucceedsWithoutPreexistingBinDirectory(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -41,6 +43,8 @@ func TestMakeBuildSucceedsWithoutPreexistingBinDirectory(t *testing.T) {
 }
 
 func TestMakeBuildEmbedsRequestedVersion(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -68,6 +72,8 @@ func TestMakeBuildEmbedsRequestedVersion(t *testing.T) {
 }
 
 func TestMakeInstallSucceedsWithFreshGOBIN(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -96,6 +102,8 @@ func TestMakeInstallSucceedsWithFreshGOBIN(t *testing.T) {
 }
 
 func TestMakeInstallEmbedsRequestedVersion(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -125,7 +133,31 @@ func TestMakeInstallEmbedsRequestedVersion(t *testing.T) {
 	}
 }
 
+func TestMakeInstallInstallsDaemonServiceBeforeRestarting(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatalf("ReadFile(Makefile) error = %v", err)
+	}
+
+	text := string(data)
+	installCmd := `"$$install_bin/$(HOST_BINARY)" daemon install >/dev/null 2>&1 || true`
+	restartCmd := `"$$install_bin/$(HOST_BINARY)" daemon restart >/dev/null 2>&1 || true`
+	installIdx := strings.Index(text, installCmd)
+	if installIdx < 0 {
+		t.Fatalf("make install does not install the daemon service before restart; missing %q", installCmd)
+	}
+	restartIdx := strings.Index(text, restartCmd)
+	if restartIdx < 0 {
+		t.Fatalf("make install does not restart the daemon; missing %q", restartCmd)
+	}
+	if installIdx > restartIdx {
+		t.Fatalf("make install restarts daemon before installing supervised service")
+	}
+}
+
 func TestMakeDistProducesExpectedReleaseArtifacts(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -210,6 +242,8 @@ func TestMakeDistProducesExpectedReleaseArtifacts(t *testing.T) {
 }
 
 func TestMakeDistFallsBackToSHA256SumWhenShasumIsUnavailable(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -267,6 +301,16 @@ func hostBinaryName() string {
 		return "ezoss.exe"
 	}
 	return "ezoss"
+}
+
+func requirePOSIXMake(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Makefile integration tests require POSIX make and shell")
+	}
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skipf("Makefile integration tests require make: %v", err)
+	}
 }
 
 func extractTarGz(t *testing.T, archivePath, dstDir string) {
