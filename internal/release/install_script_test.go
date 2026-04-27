@@ -4,9 +4,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func skipIfNoPosixSh(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh requires POSIX sh; skipping on Windows")
+	}
+}
 
 func TestInstallPowerShellScriptHasTopLevelParamBlock(t *testing.T) {
 	installPath := filepath.Join("..", "..", "install.ps1")
@@ -191,6 +199,8 @@ func TestInstallPowerShellScriptSelectsArchiveFromOSArchitecture(t *testing.T) {
 }
 
 func TestInstallShellScriptReportsMissingVersionValue(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath, "--version")
 	output, err := cmd.CombinedOutput()
@@ -208,6 +218,8 @@ func TestInstallShellScriptReportsMissingVersionValue(t *testing.T) {
 }
 
 func TestInstallShellScriptRejectsFlagAsVersionValue(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath, "--version", "--help")
 	output, err := cmd.CombinedOutput()
@@ -225,6 +237,8 @@ func TestInstallShellScriptRejectsFlagAsVersionValue(t *testing.T) {
 }
 
 func TestInstallShellScriptReportsMissingBinDirValue(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath, "--bin-dir")
 	output, err := cmd.CombinedOutput()
@@ -242,6 +256,8 @@ func TestInstallShellScriptReportsMissingBinDirValue(t *testing.T) {
 }
 
 func TestInstallShellScriptRejectsFlagAsBinDirValue(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath, "--bin-dir", "--help")
 	output, err := cmd.CombinedOutput()
@@ -259,6 +275,8 @@ func TestInstallShellScriptRejectsFlagAsBinDirValue(t *testing.T) {
 }
 
 func TestInstallShellScriptRejectsEmptyVersionValue(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath, "--version", "")
 	cmd.Env = append(os.Environ(), "PATH=")
@@ -274,6 +292,8 @@ func TestInstallShellScriptRejectsEmptyVersionValue(t *testing.T) {
 }
 
 func TestInstallShellScriptRejectsEmptyBinDirValue(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath, "--version", "v1.2.3", "--bin-dir", "")
 	cmd.Env = append(os.Environ(), "PATH=")
@@ -289,6 +309,8 @@ func TestInstallShellScriptRejectsEmptyBinDirValue(t *testing.T) {
 }
 
 func TestInstallShellScriptRejectsEmptyVersionEnv(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath)
 	cmd.Env = append(os.Environ(), "PATH=", "VERSION=")
@@ -304,6 +326,8 @@ func TestInstallShellScriptRejectsEmptyVersionEnv(t *testing.T) {
 }
 
 func TestInstallShellScriptRejectsEmptyBinDirEnv(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath, "--version", "v1.2.3")
 	cmd.Env = append(os.Environ(), "PATH=", "BIN_DIR=")
@@ -319,6 +343,8 @@ func TestInstallShellScriptRejectsEmptyBinDirEnv(t *testing.T) {
 }
 
 func TestInstallShellScriptHelpMentionsHelpFlag(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath, "--help")
 	output, err := cmd.CombinedOutput()
@@ -336,6 +362,8 @@ func TestInstallShellScriptHelpMentionsHelpFlag(t *testing.T) {
 }
 
 func TestInstallShellScriptHelpDocumentsSupportedEnvironmentOverrides(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	cmd := exec.Command("sh", installPath, "--help")
 	output, err := cmd.CombinedOutput()
@@ -352,6 +380,8 @@ func TestInstallShellScriptHelpDocumentsSupportedEnvironmentOverrides(t *testing
 }
 
 func TestInstallShellScriptSupportsGitHubBaseOverrides(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	contents, err := os.ReadFile(installPath)
 	if err != nil {
@@ -375,6 +405,8 @@ func TestInstallShellScriptSupportsGitHubBaseOverrides(t *testing.T) {
 }
 
 func TestInstallShellScriptResolvesLatestVersionAndInstallsBinary(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	stubDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(stubDir, 0o755); err != nil {
@@ -503,6 +535,8 @@ chmod 0755 "$dst"
 }
 
 func TestInstallShellScriptDownloadsAndVerifiesChecksumsBeforeInstall(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	stubDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(stubDir, 0o755); err != nil {
@@ -609,6 +643,8 @@ chmod 0755 "$dst"
 }
 
 func TestInstallShellScriptVerifiesChecksumAgainstDownloadedArchivePath(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath, err := filepath.Abs(filepath.Join("..", "..", "install.sh"))
 	if err != nil {
 		t.Fatalf("Abs(install.sh) error = %v", err)
@@ -698,6 +734,8 @@ chmod 0755 "$dst"
 }
 
 func TestInstallShellScriptFallsBackToSha256sumWhenShasumIsUnavailable(t *testing.T) {
+	skipIfNoPosixSh(t)
+
 	installPath := filepath.Join("..", "..", "install.sh")
 	stubDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(stubDir, 0o755); err != nil {
