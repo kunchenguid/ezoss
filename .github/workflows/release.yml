@@ -64,12 +64,26 @@ jobs:
           Compress-Archive -Path $archiveRoot -DestinationPath $archivePath -Force
           $checksum = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLowerInvariant()
           Set-Content -Path $checksumsPath -Value "$checksum  ezoss-$version-windows-amd64.zip"
-          $server = Start-ThreadJob -ScriptBlock {
-            param($root)
-            python -m http.server 8768 --bind 127.0.0.1 --directory $root
-          } -ArgumentList $releaseRoot
+          $serverLog = Join-Path $releaseRoot 'http-server.log'
+          $serverErr = Join-Path $releaseRoot 'http-server.err.log'
+          $python = (Get-Command python).Source
+          $server = Start-Process -FilePath $python -ArgumentList @('-m', 'http.server', '8768', '--bind', '127.0.0.1', '--directory', $releaseRoot) -PassThru -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr
           try {
-            Start-Sleep -Seconds 2
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              if ($server.HasExited) { break }
+              try {
+                Invoke-RestMethod -Uri 'http://127.0.0.1:8768/repos/fixture/repo/releases/latest' | Out-Null
+                $ready = $true
+                break
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $ready) {
+              $log = (@($serverLog, $serverErr) | Where-Object { Test-Path $_ } | ForEach-Object { Get-Content -Raw -Path $_ }) -join "`n"
+              throw "fixture server did not become ready. Log: $log"
+            }
             $env:OWNER = 'fixture'
             $env:REPO = 'repo'
             $env:GITHUB_API_BASE = 'http://127.0.0.1:8768'
@@ -88,8 +102,7 @@ jobs:
             Remove-Item Env:GITHUB_DOWNLOAD_BASE -ErrorAction SilentlyContinue
             Remove-Item Env:EZOSS_SKIP_DAEMON -ErrorAction SilentlyContinue
             Remove-Item Env:EZOSS_NO_UPDATE_CHECK -ErrorAction SilentlyContinue
-            Stop-Job $server -ErrorAction SilentlyContinue
-            Remove-Job $server -Force -ErrorAction SilentlyContinue
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
           }
 
   smoke-archive-macos:
