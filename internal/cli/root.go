@@ -2791,15 +2791,6 @@ var runGhCommand ghCommandRunner = func(ctx context.Context, dir string, args ..
 	return out, nil
 }
 
-var gitHubAuthToken = func(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
 // gitNoPromptEnv disables git's interactive credential fallbacks so a
 // missing or unauthorized token surfaces as a clean exit code instead
 // of git opening /dev/tty to prompt for a username/password. Git
@@ -2825,18 +2816,6 @@ func runGitCommand(ctx context.Context, dir string, env []string, args ...string
 	return out, nil
 }
 
-func gitHubGitAuthEnv(ctx context.Context) []string {
-	token, err := gitHubAuthToken(ctx)
-	if err != nil || token == "" {
-		return nil
-	}
-	return []string{
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
-		"GIT_CONFIG_VALUE_0=AUTHORIZATION: bearer " + token,
-	}
-}
-
 func preparePersistentInvestigationCheckout(ctx context.Context, root string, repoID string, run gitCommandRunner, runGh ghCommandRunner) (string, error) {
 	repoID = strings.TrimSpace(repoID)
 	if repoID == "" || !strings.Contains(repoID, "/") {
@@ -2848,7 +2827,6 @@ func preparePersistentInvestigationCheckout(ctx context.Context, root string, re
 	if runGh == nil {
 		runGh = runGhCommand
 	}
-	gitEnv := gitHubGitAuthEnv(ctx)
 
 	investigationsDir := filepath.Join(root, "investigations")
 	checkout := filepath.Join(investigationsDir, investigationRepoDirName(repoID))
@@ -2874,30 +2852,30 @@ func preparePersistentInvestigationCheckout(ctx context.Context, root string, re
 		}
 	}
 
-	if _, err := run(ctx, checkout, gitEnv, "fetch", "--prune", "origin"); err != nil {
+	if _, err := run(ctx, checkout, nil, "fetch", "--prune", "origin"); err != nil {
 		return "", err
 	}
-	_, _ = run(ctx, checkout, gitEnv, "remote", "set-head", "origin", "-a")
+	_, _ = run(ctx, checkout, nil, "remote", "set-head", "origin", "-a")
 	defaultRef := "origin/main"
-	if out, err := run(ctx, checkout, gitEnv, "rev-parse", "--abbrev-ref", "origin/HEAD"); err == nil {
+	if out, err := run(ctx, checkout, nil, "rev-parse", "--abbrev-ref", "origin/HEAD"); err == nil {
 		ref := strings.TrimSpace(string(out))
 		if ref != "" && ref != "origin/HEAD" {
 			defaultRef = ref
 		}
 	}
-	if _, err := run(ctx, checkout, gitEnv, "reset", "--hard"); err != nil {
+	if _, err := run(ctx, checkout, nil, "reset", "--hard"); err != nil {
 		return "", err
 	}
-	if _, err := run(ctx, checkout, gitEnv, "clean", "-fdx"); err != nil {
+	if _, err := run(ctx, checkout, nil, "clean", "-fdx"); err != nil {
 		return "", err
 	}
-	if _, err := run(ctx, checkout, gitEnv, "checkout", "--detach", defaultRef); err != nil {
+	if _, err := run(ctx, checkout, nil, "checkout", "--detach", defaultRef); err != nil {
 		return "", err
 	}
-	if _, err := run(ctx, checkout, gitEnv, "reset", "--hard", defaultRef); err != nil {
+	if _, err := run(ctx, checkout, nil, "reset", "--hard", defaultRef); err != nil {
 		return "", err
 	}
-	if _, err := run(ctx, checkout, gitEnv, "clean", "-fdx"); err != nil {
+	if _, err := run(ctx, checkout, nil, "clean", "-fdx"); err != nil {
 		return "", err
 	}
 	return checkout, nil

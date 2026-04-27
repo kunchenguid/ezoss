@@ -920,13 +920,6 @@ func TestAcquireInvestigationCheckoutLockRecoversStalePIDLock(t *testing.T) {
 
 func TestPreparePersistentInvestigationCheckoutCreatesAndCleansClone(t *testing.T) {
 	root := t.TempDir()
-	originalGitHubAuthToken := gitHubAuthToken
-	t.Cleanup(func() {
-		gitHubAuthToken = originalGitHubAuthToken
-	})
-	gitHubAuthToken = func(_ context.Context) (string, error) {
-		return "", nil
-	}
 
 	var gitCalls []gitCommandCall
 	gitRunner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
@@ -980,15 +973,8 @@ func TestPreparePersistentInvestigationCheckoutCreatesAndCleansClone(t *testing.
 	}
 }
 
-func TestPreparePersistentInvestigationCheckoutUsesGhTokenForGitHubGit(t *testing.T) {
+func TestPreparePersistentInvestigationCheckoutUsesGhCredentialsForPostCloneGit(t *testing.T) {
 	root := t.TempDir()
-	originalGitHubAuthToken := gitHubAuthToken
-	t.Cleanup(func() {
-		gitHubAuthToken = originalGitHubAuthToken
-	})
-	gitHubAuthToken = func(_ context.Context) (string, error) {
-		return "gho_private", nil
-	}
 
 	var gitCalls []gitCommandCall
 	gitRunner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
@@ -1012,21 +998,12 @@ func TestPreparePersistentInvestigationCheckoutUsesGhTokenForGitHubGit(t *testin
 		t.Fatalf("preparePersistentInvestigationCheckout() error = %v", err)
 	}
 
-	// Subsequent fetch/reset calls (post-clone) should still get the
-	// bearer-header env so they reuse the existing remote without
-	// re-prompting. The clone itself goes through gh and doesn't need
-	// the env at all.
-	wantEnv := []string{
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
-		"GIT_CONFIG_VALUE_0=AUTHORIZATION: bearer gho_private",
-	}
 	if len(gitCalls) == 0 {
 		t.Fatal("expected at least one post-clone git call")
 	}
 	for _, call := range gitCalls {
-		if !reflect.DeepEqual(call.env, wantEnv) {
-			t.Fatalf("git call %v env = %#v, want %#v", call.args, call.env, wantEnv)
+		if len(call.env) != 0 {
+			t.Fatalf("git call %v env = %#v, want no injected bearer header", call.args, call.env)
 		}
 	}
 }
@@ -1037,9 +1014,6 @@ func TestPreparePersistentInvestigationCheckoutDoesNotInjectBearerHeaderIntoClon
 	// SSO-required orgs. Now `gh repo clone` handles auth - the git
 	// runner must not see a clone command at all.
 	root := t.TempDir()
-	originalGitHubAuthToken := gitHubAuthToken
-	t.Cleanup(func() { gitHubAuthToken = originalGitHubAuthToken })
-	gitHubAuthToken = func(_ context.Context) (string, error) { return "gho_private", nil }
 
 	gitRunner := func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
 		if len(args) > 0 && args[0] == "clone" {
