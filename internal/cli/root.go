@@ -88,7 +88,7 @@ var newAgent = func(name sharedtypes.AgentName, bin string) (triageAgent, error)
 	return agent.New(name, bin)
 }
 var prepareInvestigationCheckout = func(ctx context.Context, root string, repoID string) (string, error) {
-	return preparePersistentInvestigationCheckout(ctx, root, repoID, runGitCommand)
+	return preparePersistentInvestigationCheckout(ctx, root, repoID, runGitCommand, runGhCommand)
 }
 var newLabelEditor = func() labelEditor {
 	return ghclient.New(nil)
@@ -370,8 +370,9 @@ func newDaemonRunCmd() *cobra.Command {
 			}
 			defer database.Close()
 
-			daemonLogger := func(format string, args ...any) {
-				fmt.Fprintf(os.Stderr, format+"\n", args...)
+			daemonLogger := daemon.NewLogger(os.Stderr)
+			if applied := database.MigrationsApplied(); len(applied) > 0 {
+				daemonLogger.Info("schema upgraded", "migrations", applied)
 			}
 
 			syncState := daemon.NewSyncState(cfg.PollInterval)
@@ -407,6 +408,11 @@ func newDaemonRunCmd() *cobra.Command {
 				IgnoreOlderThan: cfg.IgnoreOlderThan,
 				IPCPath:         p.IPCPath(),
 				SyncState:       syncState,
+				Logger:          daemonLogger,
+				StartupAttrs: []any{
+					"version", buildinfo.Version,
+					"mock", useMock,
+				},
 				PollOnce: func(ctx context.Context, repos []string) error {
 					return daemon.PollOnce(ctx, poller, repos)
 				},
@@ -1349,6 +1355,7 @@ func launchDaemonProcess(pidFile string, useMock bool) error {
 	proc.Stdout = logFile
 	proc.Stderr = logFile
 	proc.Env = os.Environ()
+	proc.SysProcAttr = detachedDaemonProcAttr()
 
 	if err := proc.Start(); err != nil {
 		return fmt.Errorf("start process: %w", err)
@@ -2766,6 +2773,24 @@ func removeStaleInvestigationCheckoutLock(lockPath string) (bool, error) {
 
 type gitCommandRunner func(ctx context.Context, dir string, env []string, args ...string) ([]byte, error)
 
+// ghCommandRunner runs a `gh` subcommand. Used for the initial repo
+// clone so we go through gh's credential helper (which understands
+// SSO grants, fine-grained tokens, and token refresh) instead of
+// reusing `gh auth token` as a bearer header on a raw `git clone`,
+// which silently breaks for SSO-required orgs and fine-grained tokens.
+type ghCommandRunner func(ctx context.Context, dir string, args ...string) ([]byte, error)
+
+var runGhCommand ghCommandRunner = func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), gitNoPromptEnv()...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
 var gitHubAuthToken = func(ctx context.Context) (string, error) {
 	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
 	out, err := cmd.Output()
@@ -2775,10 +2800,24 @@ var gitHubAuthToken = func(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// gitNoPromptEnv disables git's interactive credential fallbacks so a
+// missing or unauthorized token surfaces as a clean exit code instead
+// of git opening /dev/tty to prompt for a username/password. Git
+// ignores stdin and opens /dev/tty directly when one is available,
+// so closing stdin is not enough on its own.
+func gitNoPromptEnv() []string {
+	return []string{
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ASKPASS=true",
+		"GCM_INTERACTIVE=never",
+	}
+}
+
 func runGitCommand(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(os.Environ(), gitNoPromptEnv()...)
+	cmd.Env = append(cmd.Env, env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
@@ -2798,13 +2837,16 @@ func gitHubGitAuthEnv(ctx context.Context) []string {
 	}
 }
 
-func preparePersistentInvestigationCheckout(ctx context.Context, root string, repoID string, run gitCommandRunner) (string, error) {
+func preparePersistentInvestigationCheckout(ctx context.Context, root string, repoID string, run gitCommandRunner, runGh ghCommandRunner) (string, error) {
 	repoID = strings.TrimSpace(repoID)
 	if repoID == "" || !strings.Contains(repoID, "/") {
 		return "", fmt.Errorf("invalid repo %q", repoID)
 	}
 	if run == nil {
 		run = runGitCommand
+	}
+	if runGh == nil {
+		runGh = runGhCommand
 	}
 	gitEnv := gitHubGitAuthEnv(ctx)
 
@@ -2821,8 +2863,13 @@ func preparePersistentInvestigationCheckout(ctx context.Context, root string, re
 		if err := os.RemoveAll(checkout); err != nil {
 			return "", fmt.Errorf("remove invalid checkout: %w", err)
 		}
-		cloneURL := "https://github.com/" + repoID + ".git"
-		if _, err := run(ctx, investigationsDir, gitEnv, "clone", cloneURL, checkout); err != nil {
+		// Use `gh repo clone` so the clone authenticates via gh's
+		// credential helper (which handles SSO grants, fine-grained
+		// tokens, and token refresh) rather than reusing `gh auth
+		// token` as a bare bearer header. The bearer-header path
+		// fails silently for SSO-required orgs because gh's session
+		// authorization is not carried by the OAuth token alone.
+		if _, err := runGh(ctx, investigationsDir, "repo", "clone", repoID, checkout); err != nil {
 			return "", err
 		}
 	}

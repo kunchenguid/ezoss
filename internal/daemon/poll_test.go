@@ -1,9 +1,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -601,6 +601,104 @@ func TestPollOnceReconcilesLocalStateForOutOfBandClose(t *testing.T) {
 	}
 }
 
+func TestPollOnceSupersedesActiveRecommendationForMergedPR(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	oldEvent := time.Now().UTC().Add(-1 * time.Hour).Truncate(time.Second)
+	if err := database.UpsertItem(db.Item{
+		ID:          "acme/widgets#42",
+		RepoID:      "acme/widgets",
+		Kind:        sharedtypes.ItemKindPR,
+		Number:      42,
+		Title:       "feat: already merged",
+		Author:      "alice",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   false,
+		WaitingOn:   sharedtypes.WaitingOnMaintainer,
+		LastEventAt: &oldEvent,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	oldRec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#42",
+		Agent:  sharedtypes.AgentClaude,
+		Model:  "sonnet",
+		Options: []db.NewRecommendationOption{{
+			StateChange:  sharedtypes.StateChangeNone,
+			Rationale:    "Needs maintainer review.",
+			DraftComment: "",
+			Confidence:   sharedtypes.ConfidenceHigh,
+			WaitingOn:    sharedtypes.WaitingOnMaintainer,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	mergedAt := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
+	client := &stubTriageClient{
+		itemsByRepo: map[string][]ghclient.Item{"acme/widgets": nil},
+		itemByKey: map[string]ghclient.Item{
+			"acme/widgets#42": {
+				Repo:      "acme/widgets",
+				Kind:      sharedtypes.ItemKindPR,
+				Number:    42,
+				Title:     "feat: already merged",
+				Author:    "alice",
+				State:     sharedtypes.ItemStateMerged,
+				Labels:    nil,
+				URL:       "https://github.com/acme/widgets/pull/42",
+				UpdatedAt: mergedAt,
+			},
+		},
+	}
+	runner := &stubRecommendationRunner{
+		result: &TriageResult{
+			Agent: sharedtypes.AgentCodex,
+			Model: "gpt-5.4",
+			Recommendation: &triage.Recommendation{Options: []triage.RecommendationOption{{
+				StateChange:  sharedtypes.StateChangeNone,
+				Rationale:    "Should not be called for a merged PR.",
+				DraftComment: "",
+				Confidence:   sharedtypes.ConfidenceHigh,
+			}}},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client, Triage: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	if len(runner.calls) != 0 {
+		t.Fatalf("triage runner calls = %d, want 0 for merged PR", len(runner.calls))
+	}
+	updatedRec, err := database.GetRecommendation(oldRec.ID)
+	if err != nil {
+		t.Fatalf("GetRecommendation() error = %v", err)
+	}
+	if updatedRec == nil || updatedRec.SupersededAt == nil {
+		t.Fatalf("expected active recommendation to be superseded, got %#v", updatedRec)
+	}
+	active, err := database.ListActiveRecommendations()
+	if err != nil {
+		t.Fatalf("ListActiveRecommendations() error = %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("active recommendations = %d, want 0 for merged PR", len(active))
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || item.State != sharedtypes.ItemStateMerged {
+		t.Fatalf("item state after reconciliation = %#v, want merged", item)
+	}
+}
+
 // TestPollOnceSkipsStaleRecommendationForClosedContributorItem covers the
 // regression where an item closed via approval (local state=closed,
 // gh_triaged=true, waiting_on=contributor) would otherwise re-trigger the
@@ -1055,15 +1153,13 @@ func TestPollOnceTimesOutSlowTriageAndContinues(t *testing.T) {
 		result:     successResult,
 	}
 
-	var logged []string
+	var logBuf bytes.Buffer
 	poller := Poller{
 		DB:                   database,
 		GitHub:               client,
 		Triage:               hangingRunner,
 		PerItemTriageTimeout: 50 * time.Millisecond,
-		Logger: func(format string, args ...any) {
-			logged = append(logged, fmt.Sprintf(format, args...))
-		},
+		Logger:               NewLogger(&logBuf),
 	}
 
 	if err := PollOnce(context.Background(), poller, []string{"acme/widgets"}); err != nil {
@@ -1085,9 +1181,12 @@ func TestPollOnceTimesOutSlowTriageAndContinues(t *testing.T) {
 		t.Fatalf("recommendation item_id = %q, want acme/widgets#2", recommendations[0].ItemID)
 	}
 
-	joined := strings.Join(logged, "\n")
-	if !strings.Contains(joined, "deadline") && !strings.Contains(joined, "context deadline") {
-		t.Fatalf("logger output should mention deadline/timeout: %s", joined)
+	logOut := logBuf.String()
+	if !strings.Contains(logOut, "reason=timeout") {
+		t.Fatalf("logger output should classify failure as timeout: %s", logOut)
+	}
+	if !strings.Contains(logOut, "msg=\"triage failed\"") {
+		t.Fatalf("logger output should contain triage failed message: %s", logOut)
 	}
 }
 
@@ -1142,14 +1241,12 @@ func TestPollOnceContinuesAfterPerItemTriageFailure(t *testing.T) {
 		},
 	}
 
-	var logged []string
+	var logBuf bytes.Buffer
 	poller := Poller{
 		DB:     database,
 		GitHub: client,
 		Triage: runner,
-		Logger: func(format string, args ...any) {
-			logged = append(logged, fmt.Sprintf(format, args...))
-		},
+		Logger: NewLogger(&logBuf),
 	}
 
 	if err := PollOnce(context.Background(), poller, []string{"acme/widgets"}); err != nil {
@@ -1171,21 +1268,130 @@ func TestPollOnceContinuesAfterPerItemTriageFailure(t *testing.T) {
 		t.Fatalf("recommendation item_id = %q, want acme/widgets#2", recommendations[0].ItemID)
 	}
 
-	if len(logged) == 0 {
-		t.Fatal("expected logger to receive a message for the failed item")
+	logOut := logBuf.String()
+	if !strings.Contains(logOut, "msg=\"triage failed\"") {
+		t.Fatalf("expected a triage failed log line: %s", logOut)
 	}
-	joined := strings.Join(logged, "\n")
-	if !strings.Contains(joined, "acme/widgets") || !strings.Contains(joined, "1") {
-		t.Fatalf("logger output missing repo/item context: %s", joined)
+	if !strings.Contains(logOut, "item=acme/widgets#1") {
+		t.Fatalf("logger output missing item context: %s", logOut)
 	}
-	if !strings.Contains(joined, "claude exited: exit status 1") {
-		t.Fatalf("logger output missing underlying error: %s", joined)
+	if !strings.Contains(logOut, "reason=error") {
+		t.Fatalf("non-timeout failure should be classified reason=error: %s", logOut)
+	}
+	if !strings.Contains(logOut, "claude exited: exit status 1") {
+		t.Fatalf("logger output missing underlying error: %s", logOut)
+	}
+}
+
+func TestPollOnceLogsRepoSyncAndTriageSuccess(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	client := &stubTriageClient{
+		itemsByRepo: map[string][]ghclient.Item{
+			"acme/widgets": {{
+				Repo:      "acme/widgets",
+				Kind:      sharedtypes.ItemKindIssue,
+				Number:    7,
+				Title:     "log audit",
+				Author:    "alice",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/acme/widgets/issues/7",
+				UpdatedAt: time.Unix(1713511200, 0).UTC(),
+			}},
+		},
+	}
+	runner := &stubRecommendationRunner{
+		result: &TriageResult{
+			Agent: sharedtypes.AgentClaude,
+			Model: "sonnet",
+			Recommendation: &triage.Recommendation{
+				Options: []triage.RecommendationOption{{
+					StateChange: sharedtypes.StateChangeNone,
+					Rationale:   "needs repro",
+					WaitingOn:   sharedtypes.WaitingOnContributor,
+					Confidence:  sharedtypes.ConfidenceMedium,
+				}},
+			},
+			TokensIn:  1234,
+			TokensOut: 56,
+		},
+	}
+
+	var logBuf bytes.Buffer
+	poller := Poller{
+		DB:     database,
+		GitHub: client,
+		Triage: runner,
+		Logger: NewLogger(&logBuf),
+	}
+	if err := PollOnce(context.Background(), poller, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	out := logBuf.String()
+	if !strings.Contains(out, `msg="repo synced"`) || !strings.Contains(out, "repo=acme/widgets") {
+		t.Fatalf("expected repo synced log: %s", out)
+	}
+	if !strings.Contains(out, `msg="triage done"`) {
+		t.Fatalf("expected triage done log: %s", out)
+	}
+	for _, want := range []string{"item=acme/widgets#7", "agent=claude", "model=sonnet", "tokens_in=1234", "tokens_out=56", "options=1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("triage done log missing %q\nfull log:\n%s", want, out)
+		}
+	}
+}
+
+func TestPollOnceLogsStaleAutoRecommendation(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	threshold := 24 * time.Hour
+	now := time.Unix(1713600000, 0).UTC()
+	lastEvent := now.Add(-2 * threshold)
+
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:          "acme/widgets#11",
+		RepoID:      "acme/widgets",
+		Kind:        sharedtypes.ItemKindIssue,
+		Number:      11,
+		Title:       "ghosted",
+		Author:      "alice",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   true,
+		WaitingOn:   sharedtypes.WaitingOnContributor,
+		LastEventAt: &lastEvent,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	poller := Poller{
+		DB:             database,
+		StaleThreshold: threshold,
+		Logger:         NewLogger(&logBuf),
+	}
+	if err := surfaceStaleRecommendations(poller, "acme/widgets", now); err != nil {
+		t.Fatalf("surfaceStaleRecommendations() error = %v", err)
+	}
+
+	out := logBuf.String()
+	if !strings.Contains(out, `msg="auto-recommended close (stale)"`) {
+		t.Fatalf("expected stale auto-rec log line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "item=acme/widgets#11") {
+		t.Fatalf("stale log missing item id: %s", out)
 	}
 }
 
 type stubTriageClient struct {
 	itemsByRepo        map[string][]ghclient.Item
 	triagedItemsByRepo map[string][]ghclient.Item
+	itemByKey          map[string]ghclient.Item
 	errByRepo          map[string]error
 	triagedErrByRepo   map[string]error
 	calls              []string
@@ -1233,6 +1439,14 @@ func (s *stubTriageClient) ListTriaged(_ context.Context, repo string, sinceUpda
 		return nil, err
 	}
 	return append([]ghclient.Item(nil), s.triagedItemsByRepo[repo]...), nil
+}
+
+func (s *stubTriageClient) GetItem(_ context.Context, repo string, _ sharedtypes.ItemKind, number int) (ghclient.Item, error) {
+	item, ok := s.itemByKey[itemID(repo, number)]
+	if !ok {
+		return ghclient.Item{}, errors.New("item not found")
+	}
+	return item, nil
 }
 
 func (s *stubRecommendationRunner) Triage(_ context.Context, req TriageRequest) (*TriageResult, error) {

@@ -47,6 +47,70 @@ func TestOpenCreatesSchema(t *testing.T) {
 	}
 }
 
+func TestOpenReportsNoMigrationsForFreshDatabase(t *testing.T) {
+	database := openTestDB(t)
+	if applied := database.MigrationsApplied(); len(applied) != 0 {
+		t.Fatalf("MigrationsApplied() on fresh DB = %v, want empty", applied)
+	}
+}
+
+func TestOpenReportsAppliedColumnMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "old.sqlite")
+	rawDB, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)")
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	rawDB.SetMaxOpenConns(1)
+
+	// Create a table missing the recommendations.followups column so
+	// Open's ensureColumnExists fires for the first time.
+	legacySchema := `
+CREATE TABLE repos (id TEXT PRIMARY KEY, default_branch TEXT, last_poll_at INTEGER, created_at INTEGER NOT NULL);
+CREATE TABLE items (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL REFERENCES repos(id), kind TEXT NOT NULL, number INTEGER NOT NULL, title TEXT, author TEXT, state TEXT, is_draft INTEGER NOT NULL DEFAULT 0, gh_triaged INTEGER NOT NULL DEFAULT 0, waiting_on TEXT, last_event_at INTEGER, stale_since INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE recommendations (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, agent TEXT NOT NULL, model TEXT, rationale TEXT, draft_comment TEXT, proposed_labels TEXT, state_change TEXT, confidence TEXT, tokens_in INTEGER, tokens_out INTEGER, created_at INTEGER NOT NULL, superseded_at INTEGER);
+CREATE TABLE approvals (id TEXT PRIMARY KEY, recommendation_id TEXT NOT NULL REFERENCES recommendations(id) ON DELETE CASCADE, decision TEXT NOT NULL, final_comment TEXT, final_labels TEXT, final_state_change TEXT, acted_at INTEGER, acted_error TEXT, created_at INTEGER NOT NULL);
+`
+	if _, err := rawDB.Exec(legacySchema); err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	migrated, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer migrated.Close()
+
+	applied := migrated.MigrationsApplied()
+	if len(applied) == 0 {
+		t.Fatalf("MigrationsApplied() = empty, want at least one entry naming a column migration")
+	}
+	hasFollowups := false
+	for _, name := range applied {
+		if name == "recommendations.followups" {
+			hasFollowups = true
+		}
+	}
+	if !hasFollowups {
+		t.Errorf("MigrationsApplied() = %v, missing recommendations.followups", applied)
+	}
+
+	// Re-opening with the up-to-date schema should now report nothing.
+	if err := migrated.Close(); err != nil {
+		t.Fatalf("close migrated db: %v", err)
+	}
+	reopened, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() reopen error = %v", err)
+	}
+	defer reopened.Close()
+	if applied := reopened.MigrationsApplied(); len(applied) != 0 {
+		t.Errorf("MigrationsApplied() after re-open = %v, want empty", applied)
+	}
+}
+
 func TestOpenWaitsForBriefWriteLock(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
 	seed, err := Open(dbPath)

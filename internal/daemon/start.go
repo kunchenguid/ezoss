@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -40,6 +41,13 @@ type RunOptions struct {
 	// used to detect a pre-existing daemon. Tests inject a stub so they
 	// can simulate live or dead pids without spawning real processes.
 	ProcessChecker ProcessChecker
+	// Logger receives lifecycle and per-cycle events. Optional; nil
+	// silently drops every log call so tests don't have to construct one.
+	Logger *slog.Logger
+	// StartupAttrs are attached to the "daemon started" log line. Use it
+	// to surface things the loop itself can't observe (build version,
+	// config knobs, etc).
+	StartupAttrs []any
 }
 
 type Ticker interface {
@@ -124,23 +132,44 @@ func RunWithOptions(pidFile string, sigCh <-chan os.Signal, opts RunOptions) err
 		}
 	}()
 
+	startAttrs := []any{
+		"pid", os.Getpid(),
+		"repos", len(opts.Repos),
+		"poll_interval", opts.PollInterval,
+		"stale_threshold", opts.StaleThreshold,
+		"ignore_older_than", opts.IgnoreOlderThan,
+	}
+	startAttrs = append(startAttrs, opts.StartupAttrs...)
+	opts.log().Info("daemon started", startAttrs...)
+
 	var notify func(ipc.Event)
 	if opts.IPCPath != "" {
 		var stopIPC func()
 		stopIPCFn, notifyFn, err := startIPCServer(opts.IPCPath, opts.RecommendationSnapshot, opts.SyncState)
 		if err != nil {
+			opts.log().Error("ipc startup failed", "err", err)
 			return fmt.Errorf("start ipc server: %w", err)
 		}
+		opts.log().Info("ipc listening", "socket", opts.IPCPath)
 		stopIPC = stopIPCFn
 		notify = notifyFn
 		defer stopIPC()
 	}
 
 	if err := runPollLoop(sigCh, opts, notify); err != nil {
+		opts.log().Error("daemon exiting on error", "err", err)
 		return err
 	}
 
+	opts.log().Info("daemon stopped")
 	return nil
+}
+
+func (o RunOptions) log() *slog.Logger {
+	if o.Logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return o.Logger
 }
 
 func startIPCServer(socketPath string, snapshot func() ([]db.Recommendation, error), syncState *SyncState) (func(), func(ipc.Event), error) {
@@ -232,7 +261,9 @@ func startIPCServer(socketPath string, snapshot func() ([]db.Recommendation, err
 
 func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)) error {
 	if opts.PollOnce == nil || len(opts.Repos) == 0 {
+		opts.log().Info("poll loop idle", "reason", reasonForIdle(opts))
 		<-sigCh
+		opts.log().Info("received signal", "action", "stop")
 		return nil
 	}
 
@@ -252,27 +283,70 @@ func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)
 		sleep = time.Sleep
 	}
 
-	before, err := recommendationSnapshot(opts)
-	if err != nil {
-		return fmt.Errorf("snapshot recommendations: %w", err)
-	}
-	cycleStart := time.Now()
-	opts.SyncState.BeginCycle(opts.Repos)
-	if err := opts.PollOnce(context.Background(), append([]string(nil), opts.Repos...)); err != nil {
+	cycleNum := 0
+	runCycle := func(ticker Ticker) (cycleErr, fatalErr error) {
+		cycleNum++
+		before, err := recommendationSnapshot(opts)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot recommendations: %w", err)
+		}
+		opts.log().Info("cycle started", "cycle", cycleNum, "repos", len(opts.Repos))
+		cycleStart := time.Now()
+		opts.SyncState.BeginCycle(opts.Repos)
+		pollErr := opts.PollOnce(context.Background(), append([]string(nil), opts.Repos...))
 		opts.SyncState.EndCycle()
-		opts.SyncState.RecordCycleDuration(time.Since(cycleStart), interval)
-		if handled, waitErr := handlePollError(sigCh, interval, sleep, customSleep, err); handled {
+		cycleDuration := time.Since(cycleStart)
+		opts.SyncState.RecordCycleDuration(cycleDuration, interval)
+
+		newRecs := -1
+		if pollErr == nil && opts.RecommendationSnapshot != nil {
+			if after, snapErr := opts.RecommendationSnapshot(); snapErr == nil {
+				newRecs = countNewRecommendations(before, after)
+			}
+		}
+
+		attrs := []any{"cycle", cycleNum, "duration", cycleDuration}
+		if newRecs >= 0 {
+			attrs = append(attrs, "new_recs", newRecs)
+		}
+		if pollErr != nil {
+			attrs = append(attrs, "err", pollErr)
+			opts.log().Warn("cycle done", attrs...)
+		} else {
+			opts.log().Info("cycle done", attrs...)
+		}
+
+		if cycleDuration > interval && ticker != nil {
+			drained := drainOverrunTick(ticker)
+			opts.log().Warn("cycle exceeded poll interval",
+				"cycle", cycleNum,
+				"duration", cycleDuration,
+				"interval", interval,
+				"drained_queued_tick", drained,
+			)
+		}
+
+		if pollErr != nil {
+			return pollErr, nil
+		}
+		if err := emitRecommendationEvents(opts, before, notify); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	cycleErr, fatalErr := runCycle(nil)
+	if fatalErr != nil {
+		return fatalErr
+	}
+	if cycleErr != nil {
+		if handled, waitErr := handlePollError(sigCh, interval, sleep, customSleep, cycleErr, opts.log()); handled {
 			if waitErr != nil {
 				return waitErr
 			}
 			goto waitForTicker
 		}
-		return fmt.Errorf("poll daemon loop: %w", err)
-	}
-	opts.SyncState.EndCycle()
-	opts.SyncState.RecordCycleDuration(time.Since(cycleStart), interval)
-	if err := emitRecommendationEvents(opts, before, notify); err != nil {
-		return err
+		return fmt.Errorf("poll daemon loop: %w", cycleErr)
 	}
 
 waitForTicker:
@@ -282,44 +356,46 @@ waitForTicker:
 	for {
 		select {
 		case <-sigCh:
+			opts.log().Info("received signal", "action", "stop")
 			return nil
 		case <-ticker.Chan():
-			before, err := recommendationSnapshot(opts)
-			if err != nil {
-				return fmt.Errorf("snapshot recommendations: %w", err)
+			cycleErr, fatalErr := runCycle(ticker)
+			if fatalErr != nil {
+				return fatalErr
 			}
-			cycleStart := time.Now()
-			opts.SyncState.BeginCycle(opts.Repos)
-			pollErr := opts.PollOnce(context.Background(), append([]string(nil), opts.Repos...))
-			opts.SyncState.EndCycle()
-			cycleDuration := time.Since(cycleStart)
-			opts.SyncState.RecordCycleDuration(cycleDuration, interval)
-			if cycleDuration > interval {
-				// Cycle ran longer than the configured poll
-				// interval. Drop any tick that queued during
-				// the overrun so the next iteration waits for
-				// the next regular tick boundary instead of
-				// running another cycle back-to-back.
-				if drainOverrunTick(ticker) {
-					fmt.Fprintf(os.Stderr, "cycle took %s, exceeds poll interval %s; skipping queued tick\n", cycleDuration, interval)
-				} else {
-					fmt.Fprintf(os.Stderr, "cycle took %s, exceeds poll interval %s\n", cycleDuration, interval)
+			if cycleErr == nil {
+				continue
+			}
+			if handled, waitErr := handlePollError(sigCh, interval, sleep, customSleep, cycleErr, opts.log()); handled {
+				if waitErr != nil {
+					return waitErr
 				}
+				continue
 			}
-			if pollErr != nil {
-				if handled, waitErr := handlePollError(sigCh, interval, sleep, customSleep, pollErr); handled {
-					if waitErr != nil {
-						return waitErr
-					}
-					continue
-				}
-				return fmt.Errorf("poll daemon loop: %w", pollErr)
-			}
-			if err := emitRecommendationEvents(opts, before, notify); err != nil {
-				return err
-			}
+			return fmt.Errorf("poll daemon loop: %w", cycleErr)
 		}
 	}
+}
+
+func countNewRecommendations(before, after []db.Recommendation) int {
+	beforeIDs := make(map[string]struct{}, len(before))
+	for _, r := range before {
+		beforeIDs[r.ID] = struct{}{}
+	}
+	n := 0
+	for _, r := range after {
+		if _, ok := beforeIDs[r.ID]; !ok {
+			n++
+		}
+	}
+	return n
+}
+
+func reasonForIdle(opts RunOptions) string {
+	if opts.PollOnce == nil {
+		return "no poll function"
+	}
+	return "no repos configured"
 }
 
 // drainOverrunTick drops a single tick from the ticker channel if one
@@ -335,7 +411,7 @@ func drainOverrunTick(ticker Ticker) bool {
 	}
 }
 
-func handlePollError(sigCh <-chan os.Signal, fallbackDelay time.Duration, sleep func(time.Duration), customSleep bool, err error) (bool, error) {
+func handlePollError(sigCh <-chan os.Signal, fallbackDelay time.Duration, sleep func(time.Duration), customSleep bool, err error, log *slog.Logger) (bool, error) {
 	delay, ok := joinedRateLimitDelay(err)
 	if !ok {
 		return false, nil
@@ -346,6 +422,10 @@ func handlePollError(sigCh <-chan os.Signal, fallbackDelay time.Duration, sleep 
 	}
 	if delay < 0 {
 		delay = 0
+	}
+
+	if log != nil {
+		log.Warn("rate limited", "delay", delay, "err", err)
 	}
 
 	if customSleep {
