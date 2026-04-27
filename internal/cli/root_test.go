@@ -5,12 +5,26 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"testing"
 
 	"github.com/kunchenguid/ezoss/internal/buildinfo"
 	"github.com/kunchenguid/ezoss/internal/doctor"
 	"github.com/kunchenguid/ezoss/internal/update"
 )
+
+func TestGitNoPromptEnvDisablesInteractiveCredentialFallbacks(t *testing.T) {
+	env := gitNoPromptEnv()
+	for _, want := range []string{
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ASKPASS=true",
+		"GCM_INTERACTIVE=never",
+	} {
+		if !slices.Contains(env, want) {
+			t.Errorf("gitNoPromptEnv() missing %q\nfull env: %v", want, env)
+		}
+	}
+}
 
 func TestRootCommandPrintsVersion(t *testing.T) {
 	originalVersion := buildinfo.Version

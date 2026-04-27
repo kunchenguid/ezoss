@@ -18,7 +18,8 @@ var (
 )
 
 type DB struct {
-	sql *sql.DB
+	sql               *sql.DB
+	migrationsApplied []string
 }
 
 func Open(path string) (*DB, error) {
@@ -32,28 +33,48 @@ func Open(path string) (*DB, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("migrate db: %w", err)
 	}
-	if err := ensureColumnExists(sqlDB, "repos", "last_triaged_refresh_at", `ALTER TABLE repos ADD COLUMN last_triaged_refresh_at INTEGER`); err != nil {
+	var applied []string
+	migrations := []struct {
+		name, table, column, ddl string
+	}{
+		{"repos.last_triaged_refresh_at", "repos", "last_triaged_refresh_at", `ALTER TABLE repos ADD COLUMN last_triaged_refresh_at INTEGER`},
+		{"recommendations.followups", "recommendations", "followups", `ALTER TABLE recommendations ADD COLUMN followups TEXT`},
+		{"approvals.option_id", "approvals", "option_id", `ALTER TABLE approvals ADD COLUMN option_id TEXT REFERENCES recommendation_options(id) ON DELETE SET NULL`},
+		{"recommendation_options.fix_prompt", "recommendation_options", "fix_prompt", `ALTER TABLE recommendation_options ADD COLUMN fix_prompt TEXT`},
+	}
+	for _, m := range migrations {
+		ran, err := ensureColumnExists(sqlDB, m.table, m.column, m.ddl)
+		if err != nil {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("migrate db: %w", err)
+		}
+		if ran {
+			applied = append(applied, m.name)
+		}
+	}
+	backfilled, err := backfillRecommendationOptions(sqlDB)
+	if err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("migrate db: %w", err)
 	}
-	if err := ensureColumnExists(sqlDB, "recommendations", "followups", `ALTER TABLE recommendations ADD COLUMN followups TEXT`); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("migrate db: %w", err)
-	}
-	if err := ensureColumnExists(sqlDB, "approvals", "option_id", `ALTER TABLE approvals ADD COLUMN option_id TEXT REFERENCES recommendation_options(id) ON DELETE SET NULL`); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("migrate db: %w", err)
-	}
-	if err := ensureColumnExists(sqlDB, "recommendation_options", "fix_prompt", `ALTER TABLE recommendation_options ADD COLUMN fix_prompt TEXT`); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("migrate db: %w", err)
-	}
-	if err := backfillRecommendationOptions(sqlDB); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("migrate db: %w", err)
+	if backfilled > 0 {
+		applied = append(applied, fmt.Sprintf("backfill_recommendation_options(rows=%d)", backfilled))
 	}
 
-	return &DB{sql: sqlDB}, nil
+	return &DB{sql: sqlDB, migrationsApplied: applied}, nil
+}
+
+// MigrationsApplied returns the names of any schema migrations that
+// actually ran during Open. Empty on a fully up-to-date DB. Lets the
+// daemon log a one-line "schema upgraded: ..." breadcrumb without
+// every other CLI command needing a logger.
+func (d *DB) MigrationsApplied() []string {
+	if len(d.migrationsApplied) == 0 {
+		return nil
+	}
+	out := make([]string, len(d.migrationsApplied))
+	copy(out, d.migrationsApplied)
+	return out
 }
 
 func (d *DB) Close() error {
@@ -79,10 +100,13 @@ func nowUnix() int64 {
 	return time.Now().Unix()
 }
 
-func ensureColumnExists(sqlDB *sql.DB, table string, column string, ddl string) error {
+// ensureColumnExists returns (true, nil) when it actually applied the
+// DDL, (false, nil) when the column was already present, or
+// (false, err) on failure.
+func ensureColumnExists(sqlDB *sql.DB, table string, column string, ddl string) (bool, error) {
 	rows, err := sqlDB.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer rows.Close()
 
@@ -94,25 +118,28 @@ func ensureColumnExists(sqlDB *sql.DB, table string, column string, ddl string) 
 		var defaultValue sql.NullString
 		var primaryKey int
 		if err := rows.Scan(&cid, &name, &fieldType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
+			return false, err
 		}
 		if strings.EqualFold(name, column) {
-			return nil
+			return false, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return false, err
 	}
 
-	_, err = sqlDB.Exec(ddl)
-	return err
+	if _, err := sqlDB.Exec(ddl); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // backfillRecommendationOptions copies legacy single-row recommendation
 // data into recommendation_options for any recommendations that don't
 // yet have an option (position 0). It also backfills approvals.option_id
 // to point at the newly-created option for the recommendation. Idempotent.
-func backfillRecommendationOptions(sqlDB *sql.DB) error {
+// Returns the number of legacy recommendations that were backfilled.
+func backfillRecommendationOptions(sqlDB *sql.DB) (int, error) {
 	rows, err := sqlDB.Query(
 		`SELECT r.id, r.item_id, r.created_at,
 		        r.state_change, r.rationale, r.draft_comment, r.proposed_labels, r.confidence, r.followups
@@ -122,7 +149,7 @@ func backfillRecommendationOptions(sqlDB *sql.DB) error {
 		 WHERE o.id IS NULL`,
 	)
 	if err != nil {
-		return fmt.Errorf("backfill options: scan recommendations: %w", err)
+		return 0, fmt.Errorf("backfill options: scan recommendations: %w", err)
 	}
 	defer rows.Close()
 
@@ -143,21 +170,21 @@ func backfillRecommendationOptions(sqlDB *sql.DB) error {
 		if err := rows.Scan(&r.recID, &r.itemID, &r.createdAt,
 			&r.stateChange, &r.rationale, &r.draftComment, &r.proposedLabels, &r.confidence, &r.followups,
 		); err != nil {
-			return fmt.Errorf("backfill options: scan: %w", err)
+			return 0, fmt.Errorf("backfill options: scan: %w", err)
 		}
 		legacy = append(legacy, r)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("backfill options: rows err: %w", err)
+		return 0, fmt.Errorf("backfill options: rows err: %w", err)
 	}
 	if len(legacy) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	for _, r := range legacy {
 		var waitingOn sql.NullString
 		if err := sqlDB.QueryRow(`SELECT waiting_on FROM items WHERE id = ?`, r.itemID).Scan(&waitingOn); err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf("backfill options: read item waiting_on: %w", err)
+			return 0, fmt.Errorf("backfill options: read item waiting_on: %w", err)
 		}
 
 		optionID := newID()
@@ -177,17 +204,17 @@ func backfillRecommendationOptions(sqlDB *sql.DB) error {
 			nullStringValue(r.followups),
 			r.createdAt,
 		); err != nil {
-			return fmt.Errorf("backfill options: insert option for %s: %w", r.recID, err)
+			return 0, fmt.Errorf("backfill options: insert option for %s: %w", r.recID, err)
 		}
 
 		if _, err := sqlDB.Exec(
 			`UPDATE approvals SET option_id = ? WHERE recommendation_id = ? AND option_id IS NULL`,
 			optionID, r.recID,
 		); err != nil {
-			return fmt.Errorf("backfill options: update approvals for %s: %w", r.recID, err)
+			return 0, fmt.Errorf("backfill options: update approvals for %s: %w", r.recID, err)
 		}
 	}
-	return nil
+	return len(legacy), nil
 }
 
 func nullStringValue(s sql.NullString) any {

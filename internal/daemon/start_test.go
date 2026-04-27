@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -617,3 +619,164 @@ func (s stubTicker) Chan() <-chan time.Time {
 }
 
 func (stubTicker) Stop() {}
+
+// safeBuffer wraps bytes.Buffer behind a mutex so the logger goroutine
+// (slog handlers can be called from any goroutine the daemon owns) and
+// the test goroutine can both touch it without racing.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestRunWithOptionsLogsLifecycleEvents(t *testing.T) {
+	tempDir := t.TempDir()
+	pidPath := filepath.Join(tempDir, "daemon.pid")
+	sigCh := make(chan os.Signal, 1)
+	tickCh := make(chan time.Time)
+	var logBuf safeBuffer
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- RunWithOptions(pidPath, sigCh, RunOptions{
+			Repos:        []string{"acme/widgets"},
+			PollInterval: time.Hour,
+			Logger:       NewLogger(&logBuf),
+			StartupAttrs: []any{"version", "v9.9.9"},
+			PollOnce: func(context.Context, []string) error {
+				return nil
+			},
+			NewTicker: func(time.Duration) Ticker {
+				return stubTicker{ch: tickCh}
+			},
+		})
+	}()
+
+	// Wait for the initial cycle to log "cycle done" so the goroutine
+	// is parked on the ticker; otherwise the SIGTERM races the cycle.
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(logBuf.String(), `msg="cycle done"`) {
+		if time.Now().After(deadline) {
+			t.Fatalf("did not see cycle done log within deadline; got:\n%s", logBuf.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	sigCh <- syscall.SIGTERM
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunWithOptions() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunWithOptions did not exit after signal")
+	}
+
+	out := logBuf.String()
+	expected := []string{
+		`msg="daemon started"`,
+		`version=v9.9.9`,
+		`msg="cycle started"`,
+		`cycle=1`,
+		`msg="cycle done"`,
+		`msg="received signal"`,
+		`action=stop`,
+		`msg="daemon stopped"`,
+	}
+	for _, want := range expected {
+		if !strings.Contains(out, want) {
+			t.Errorf("log missing %q\nfull log:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunWithOptionsLogsRateLimitBackoff(t *testing.T) {
+	tempDir := t.TempDir()
+	pidPath := filepath.Join(tempDir, "daemon.pid")
+	sigCh := make(chan os.Signal, 1)
+	tickCh := make(chan time.Time, 1)
+	sleepCalls := make(chan time.Duration, 1)
+	pollCalls := make(chan int, 2)
+	errCh := make(chan error, 1)
+	var logBuf safeBuffer
+	callCount := 0
+
+	go func() {
+		errCh <- RunWithOptions(pidPath, sigCh, RunOptions{
+			Repos:        []string{"acme/widgets"},
+			PollInterval: time.Hour,
+			Logger:       NewLogger(&logBuf),
+			PollOnce: func(context.Context, []string) error {
+				callCount++
+				pollCalls <- callCount
+				if callCount == 1 {
+					return &ghclient.RateLimitError{Message: "secondary rate limit", RetryAfter: 90 * time.Second}
+				}
+				return nil
+			},
+			NewTicker: func(time.Duration) Ticker {
+				return stubTicker{ch: tickCh}
+			},
+			Sleep: func(delay time.Duration) {
+				sleepCalls <- delay
+			},
+		})
+	}()
+
+	<-pollCalls
+	<-sleepCalls
+	tickCh <- time.Now()
+	<-pollCalls
+
+	sigCh <- syscall.SIGTERM
+	<-errCh
+
+	out := logBuf.String()
+	if !strings.Contains(out, `msg="rate limited"`) {
+		t.Fatalf("expected rate limited log line, got:\n%s", out)
+	}
+	if !strings.Contains(out, `delay=1m30s`) {
+		t.Fatalf("expected delay=1m30s in rate-limit log, got:\n%s", out)
+	}
+}
+
+func TestRunWithOptionsLogsFatalErrorBeforeReturning(t *testing.T) {
+	tempDir := t.TempDir()
+	pidPath := filepath.Join(tempDir, "daemon.pid")
+	sigCh := make(chan os.Signal, 1)
+	var logBuf safeBuffer
+
+	err := RunWithOptions(pidPath, sigCh, RunOptions{
+		Repos:        []string{"acme/widgets"},
+		PollInterval: time.Hour,
+		Logger:       NewLogger(&logBuf),
+		PollOnce: func(context.Context, []string) error {
+			return errors.New("boom")
+		},
+		NewTicker: func(time.Duration) Ticker {
+			return stubTicker{ch: make(chan time.Time)}
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	out := logBuf.String()
+	if !strings.Contains(out, `msg="daemon exiting on error"`) {
+		t.Fatalf("expected fatal-exit log line so the failure reason lands in the log file, got:\n%s", out)
+	}
+	if !strings.Contains(out, "boom") {
+		t.Fatalf("expected underlying error in fatal-exit log: %s", out)
+	}
+}

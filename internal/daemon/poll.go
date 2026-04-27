@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/kunchenguid/ezoss/internal/db"
@@ -29,6 +30,10 @@ const defaultPerItemTriageTimeout = 30 * time.Minute
 type triageLister interface {
 	ListNeedingTriage(ctx context.Context, repo string) ([]ghclient.Item, error)
 	ListTriaged(ctx context.Context, repo string, sinceUpdated time.Time) ([]ghclient.Item, error)
+}
+
+type itemGetter interface {
+	GetItem(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int) (ghclient.Item, error)
 }
 
 type triageRunner interface {
@@ -61,19 +66,20 @@ type Poller struct {
 	// Hooks observes per-repo and per-item progress. Optional; zero
 	// value disables.
 	Hooks PollHooks
-	// Logger receives non-fatal per-item triage failures. Optional; nil
-	// drops the messages.
-	Logger func(format string, args ...any)
+	// Logger receives structured progress and failure events. Optional;
+	// nil silently drops every log call so tests and bare callers don't
+	// have to construct one.
+	Logger *slog.Logger
 	// PerItemTriageTimeout caps a single triage invocation. Zero means
 	// defaultPerItemTriageTimeout (30m).
 	PerItemTriageTimeout time.Duration
 }
 
-func (p Poller) logf(format string, args ...any) {
+func (p Poller) log() *slog.Logger {
 	if p.Logger == nil {
-		return
+		return slog.New(slog.DiscardHandler)
 	}
-	p.Logger(format, args...)
+	return p.Logger
 }
 
 // PollOnce runs a full poll cycle in two sequential stages: stage A
@@ -114,12 +120,24 @@ func runSyncStage(ctx context.Context, poller Poller, repos []string, polledAt t
 		if poller.Hooks.OnRepoBegin != nil {
 			poller.Hooks.OnRepoBegin(repoID, i, total)
 		}
+		startedAt := time.Now()
 		err := syncRepoData(ctx, poller, repoID, polledAt)
+		duration := time.Since(startedAt)
 		if poller.Hooks.OnRepoEnd != nil {
 			poller.Hooks.OnRepoEnd(repoID, err)
 		}
 		if err != nil {
+			poller.log().Warn("repo sync failed",
+				"repo", repoID,
+				"duration", duration,
+				"err", err,
+			)
 			errs = append(errs, err)
+		} else {
+			poller.log().Info("repo synced",
+				"repo", repoID,
+				"duration", duration,
+			)
 		}
 	}
 	if poller.Hooks.OnSyncEnd != nil {
@@ -146,10 +164,12 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 		return fmt.Errorf("poll repo %s: upsert repo: %w", repoID, err)
 	}
 
+	seenOpenUntriaged := make(map[int]struct{}, len(items))
 	for _, item := range items {
 		if isOlderThan(item.UpdatedAt, polledAt, poller.IgnoreOlderThan) {
 			continue
 		}
+		seenOpenUntriaged[item.Number] = struct{}{}
 		itemRecord := db.Item{
 			ID:          itemID(repoID, item.Number),
 			RepoID:      repoID,
@@ -175,6 +195,9 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 			return fmt.Errorf("poll repo %s: upsert item %d: %w", repoID, item.Number, err)
 		}
 	}
+	if err := reconcileMissingActiveRecommendations(ctx, poller, repoID, seenOpenUntriaged, polledAt); err != nil {
+		return fmt.Errorf("poll repo %s: reconcile active recommendations: %w", repoID, err)
+	}
 
 	if shouldRefreshTriagedItems(poller, repoID, polledAt) {
 		if err := refreshTriagedItems(ctx, poller, repoID, polledAt); err != nil {
@@ -182,6 +205,59 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 		}
 	}
 
+	return nil
+}
+
+func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, repoID string, seenOpenUntriaged map[int]struct{}, polledAt time.Time) error {
+	getter, ok := poller.GitHub.(itemGetter)
+	if !ok {
+		return nil
+	}
+	recommendations, err := poller.DB.ListActiveRecommendations()
+	if err != nil {
+		return err
+	}
+	for _, recommendation := range recommendations {
+		cached, err := poller.DB.GetItem(recommendation.ItemID)
+		if err != nil {
+			return err
+		}
+		if cached == nil || cached.RepoID != repoID || cached.GHTriaged {
+			continue
+		}
+		if _, ok := seenOpenUntriaged[cached.Number]; ok {
+			continue
+		}
+		current, err := getter.GetItem(ctx, cached.RepoID, cached.Kind, cached.Number)
+		if err != nil {
+			return fmt.Errorf("get item %d: %w", cached.Number, err)
+		}
+		itemRecord := db.Item{
+			ID:          cached.ID,
+			RepoID:      repoID,
+			Kind:        current.Kind,
+			Number:      current.Number,
+			Title:       current.Title,
+			Author:      current.Author,
+			State:       current.State,
+			IsDraft:     current.IsDraft,
+			GHTriaged:   hasLabel(current.Labels, triagedLabel),
+			WaitingOn:   cached.WaitingOn,
+			LastEventAt: timePtr(current.UpdatedAt.UTC()),
+			StaleSince:  cached.StaleSince,
+		}
+		if current.State != sharedtypes.ItemStateOpen {
+			itemRecord.StaleSince = nil
+		}
+		if err := poller.DB.UpsertItem(itemRecord); err != nil {
+			return fmt.Errorf("upsert item %d: %w", cached.Number, err)
+		}
+		if current.State != sharedtypes.ItemStateOpen || itemRecord.GHTriaged {
+			if err := poller.DB.MarkRecommendationSuperseded(recommendation.ID, polledAt); err != nil {
+				return fmt.Errorf("supersede recommendation for item %d: %w", cached.Number, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -229,16 +305,47 @@ func triageItem(ctx context.Context, poller Poller, item db.Item, polledAt time.
 	if poller.Hooks.OnAgentItemBegin != nil {
 		poller.Hooks.OnAgentItemBegin(itemID, idx, total)
 	}
-	err := runTriageForItem(ctx, poller, item, polledAt)
+	startedAt := time.Now()
+	result, err := runTriageForItem(ctx, poller, item, polledAt)
+	duration := time.Since(startedAt)
 	if poller.Hooks.OnAgentItemEnd != nil {
 		poller.Hooks.OnAgentItemEnd(itemID, err)
 	}
 	if err != nil {
-		poller.logf("triage item %s failed: %v", itemID, err)
+		// Distinguish per-item timeout from generic agent failure so the
+		// log can answer "did claude hang?" without scraping the error
+		// string.
+		reason := "error"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "timeout"
+		}
+		poller.log().Warn("triage failed",
+			"item", itemID,
+			"reason", reason,
+			"duration", duration,
+			"err", err,
+		)
+		return
 	}
+	attrs := []any{
+		"item", itemID,
+		"duration", duration,
+	}
+	if result != nil {
+		attrs = append(attrs,
+			"agent", string(result.Agent),
+			"model", result.Model,
+			"tokens_in", result.TokensIn,
+			"tokens_out", result.TokensOut,
+		)
+		if result.Recommendation != nil {
+			attrs = append(attrs, "options", len(result.Recommendation.Options))
+		}
+	}
+	poller.log().Info("triage done", attrs...)
 }
 
-func runTriageForItem(ctx context.Context, poller Poller, item db.Item, polledAt time.Time) error {
+func runTriageForItem(ctx context.Context, poller Poller, item db.Item, polledAt time.Time) (*TriageResult, error) {
 	timeout := poller.PerItemTriageTimeout
 	if timeout <= 0 {
 		timeout = defaultPerItemTriageTimeout
@@ -253,14 +360,14 @@ func runTriageForItem(ctx context.Context, poller Poller, item db.Item, polledAt
 		Schema: triage.Schema(),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if result == nil || result.Recommendation == nil {
-		return errors.New("empty recommendation")
+		return nil, errors.New("empty recommendation")
 	}
 
 	if err := supersedeActiveRecommendationsForItem(poller.DB, item.ID, polledAt); err != nil {
-		return fmt.Errorf("supersede recommendations: %w", err)
+		return nil, fmt.Errorf("supersede recommendations: %w", err)
 	}
 
 	options := make([]db.NewRecommendationOption, 0, len(result.Recommendation.Options))
@@ -283,14 +390,14 @@ func runTriageForItem(ctx context.Context, poller Poller, item db.Item, polledAt
 		TokensOut: result.TokensOut,
 		Options:   options,
 	}); err != nil {
-		return fmt.Errorf("insert recommendation: %w", err)
+		return nil, fmt.Errorf("insert recommendation: %w", err)
 	}
 
 	item.WaitingOn = result.Recommendation.Options[0].WaitingOn
 	if err := poller.DB.UpsertItem(item); err != nil {
-		return fmt.Errorf("update waiting_on: %w", err)
+		return nil, fmt.Errorf("update waiting_on: %w", err)
 	}
-	return nil
+	return result, nil
 }
 
 func filterItemsByRepo(items []db.Item, repos []string) []db.Item {
@@ -498,6 +605,11 @@ func surfaceStaleRecommendations(poller Poller, repoID string, polledAt time.Tim
 		}); err != nil {
 			return fmt.Errorf("insert stale recommendation for item %d: %w", item.Number, err)
 		}
+		poller.log().Info("auto-recommended close (stale)",
+			"item", item.ID,
+			"stale_since", staleSince.UTC(),
+			"threshold", poller.StaleThreshold,
+		)
 	}
 
 	return nil

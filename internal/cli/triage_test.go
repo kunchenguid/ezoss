@@ -920,29 +920,28 @@ func TestAcquireInvestigationCheckoutLockRecoversStalePIDLock(t *testing.T) {
 
 func TestPreparePersistentInvestigationCheckoutCreatesAndCleansClone(t *testing.T) {
 	root := t.TempDir()
-	originalGitHubAuthToken := gitHubAuthToken
-	t.Cleanup(func() {
-		gitHubAuthToken = originalGitHubAuthToken
-	})
-	gitHubAuthToken = func(_ context.Context) (string, error) {
-		return "", nil
-	}
 
-	var calls []gitCommandCall
-	runner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
-		calls = append(calls, gitCommandCall{dir: dir, env: append([]string(nil), env...), args: append([]string(nil), args...)})
-		if len(args) > 0 && args[0] == "clone" {
-			if err := os.MkdirAll(filepath.Join(root, "investigations", "kunchenguid__no-mistakes", ".git"), 0o755); err != nil {
-				return nil, err
-			}
-		}
+	var gitCalls []gitCommandCall
+	gitRunner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
+		gitCalls = append(gitCalls, gitCommandCall{dir: dir, env: append([]string(nil), env...), args: append([]string(nil), args...)})
 		if len(args) >= 3 && args[0] == "rev-parse" && args[1] == "--abbrev-ref" {
 			return []byte("origin/main\n"), nil
 		}
 		return nil, nil
 	}
 
-	checkout, err := preparePersistentInvestigationCheckout(context.Background(), root, "kunchenguid/no-mistakes", runner)
+	var ghCalls []ghCommandCall
+	ghRunner := func(_ context.Context, dir string, args ...string) ([]byte, error) {
+		ghCalls = append(ghCalls, ghCommandCall{dir: dir, args: append([]string(nil), args...)})
+		if len(args) >= 2 && args[0] == "repo" && args[1] == "clone" {
+			if err := os.MkdirAll(filepath.Join(root, "investigations", "kunchenguid__no-mistakes", ".git"), 0o755); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
+
+	checkout, err := preparePersistentInvestigationCheckout(context.Background(), root, "kunchenguid/no-mistakes", gitRunner, ghRunner)
 	if err != nil {
 		t.Fatalf("preparePersistentInvestigationCheckout() error = %v", err)
 	}
@@ -951,8 +950,15 @@ func TestPreparePersistentInvestigationCheckoutCreatesAndCleansClone(t *testing.
 	if checkout != wantCheckout {
 		t.Fatalf("checkout = %q, want %q", checkout, wantCheckout)
 	}
-	want := []gitCommandCall{
-		{dir: filepath.Join(root, "investigations"), args: []string{"clone", "https://github.com/kunchenguid/no-mistakes.git", wantCheckout}},
+
+	wantGh := []ghCommandCall{
+		{dir: filepath.Join(root, "investigations"), args: []string{"repo", "clone", "kunchenguid/no-mistakes", wantCheckout}},
+	}
+	if !reflect.DeepEqual(ghCalls, wantGh) {
+		t.Fatalf("gh calls = %#v, want %#v", ghCalls, wantGh)
+	}
+
+	wantGit := []gitCommandCall{
 		{dir: wantCheckout, args: []string{"fetch", "--prune", "origin"}},
 		{dir: wantCheckout, args: []string{"remote", "set-head", "origin", "-a"}},
 		{dir: wantCheckout, args: []string{"rev-parse", "--abbrev-ref", "origin/HEAD"}},
@@ -962,55 +968,89 @@ func TestPreparePersistentInvestigationCheckoutCreatesAndCleansClone(t *testing.
 		{dir: wantCheckout, args: []string{"reset", "--hard", "origin/main"}},
 		{dir: wantCheckout, args: []string{"clean", "-fdx"}},
 	}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("git calls = %#v, want %#v", calls, want)
+	if !reflect.DeepEqual(gitCalls, wantGit) {
+		t.Fatalf("git calls = %#v, want %#v", gitCalls, wantGit)
 	}
 }
 
-func TestPreparePersistentInvestigationCheckoutUsesGhTokenForGitHubGit(t *testing.T) {
+func TestPreparePersistentInvestigationCheckoutUsesGhCredentialsForPostCloneGit(t *testing.T) {
 	root := t.TempDir()
-	originalGitHubAuthToken := gitHubAuthToken
-	t.Cleanup(func() {
-		gitHubAuthToken = originalGitHubAuthToken
-	})
-	gitHubAuthToken = func(_ context.Context) (string, error) {
-		return "gho_private", nil
-	}
 
-	var calls []gitCommandCall
-	runner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
-		calls = append(calls, gitCommandCall{dir: dir, env: append([]string(nil), env...), args: append([]string(nil), args...)})
-		if len(args) > 0 && args[0] == "clone" {
+	var gitCalls []gitCommandCall
+	gitRunner := func(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
+		gitCalls = append(gitCalls, gitCommandCall{dir: dir, env: append([]string(nil), env...), args: append([]string(nil), args...)})
+		if len(args) >= 3 && args[0] == "rev-parse" && args[1] == "--abbrev-ref" {
+			return []byte("origin/main\n"), nil
+		}
+		return nil, nil
+	}
+	ghRunner := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "repo" && args[1] == "clone" {
 			if err := os.MkdirAll(filepath.Join(root, "investigations", "kunchenguid__no-mistakes", ".git"), 0o755); err != nil {
 				return nil, err
 			}
+		}
+		return nil, nil
+	}
+
+	_, err := preparePersistentInvestigationCheckout(context.Background(), root, "kunchenguid/no-mistakes", gitRunner, ghRunner)
+	if err != nil {
+		t.Fatalf("preparePersistentInvestigationCheckout() error = %v", err)
+	}
+
+	if len(gitCalls) == 0 {
+		t.Fatal("expected at least one post-clone git call")
+	}
+	for _, call := range gitCalls {
+		if len(call.env) != 0 {
+			t.Fatalf("git call %v env = %#v, want no injected bearer header", call.args, call.env)
+		}
+	}
+}
+
+func TestPreparePersistentInvestigationCheckoutDoesNotInjectBearerHeaderIntoClone(t *testing.T) {
+	// Regression: previously the daemon ran `git clone` with the gh
+	// token injected as a bearer header, which silently failed for
+	// SSO-required orgs. Now `gh repo clone` handles auth - the git
+	// runner must not see a clone command at all.
+	root := t.TempDir()
+
+	gitRunner := func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "clone" {
+			t.Fatalf("git runner received a clone command - cloning must go through gh: args=%v", args)
 		}
 		if len(args) >= 3 && args[0] == "rev-parse" && args[1] == "--abbrev-ref" {
 			return []byte("origin/main\n"), nil
 		}
 		return nil, nil
 	}
+	ghCloneSeen := false
+	ghRunner := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "repo" && args[1] == "clone" {
+			ghCloneSeen = true
+			if err := os.MkdirAll(filepath.Join(root, "investigations", "kunchenguid__no-mistakes", ".git"), 0o755); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
 
-	_, err := preparePersistentInvestigationCheckout(context.Background(), root, "kunchenguid/no-mistakes", runner)
-	if err != nil {
+	if _, err := preparePersistentInvestigationCheckout(context.Background(), root, "kunchenguid/no-mistakes", gitRunner, ghRunner); err != nil {
 		t.Fatalf("preparePersistentInvestigationCheckout() error = %v", err)
 	}
-
-	wantEnv := []string{
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
-		"GIT_CONFIG_VALUE_0=AUTHORIZATION: bearer gho_private",
-	}
-	for _, call := range calls {
-		if !reflect.DeepEqual(call.env, wantEnv) {
-			t.Fatalf("git call env = %#v, want %#v", call.env, wantEnv)
-		}
+	if !ghCloneSeen {
+		t.Fatal("expected gh runner to receive `repo clone` for the initial checkout")
 	}
 }
 
 type gitCommandCall struct {
 	dir  string
 	env  []string
+	args []string
+}
+
+type ghCommandCall struct {
+	dir  string
 	args []string
 }
 
