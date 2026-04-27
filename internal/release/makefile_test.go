@@ -15,6 +15,8 @@ import (
 )
 
 func TestMakeBuildSucceedsWithoutPreexistingBinDirectory(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -41,6 +43,8 @@ func TestMakeBuildSucceedsWithoutPreexistingBinDirectory(t *testing.T) {
 }
 
 func TestMakeBuildEmbedsRequestedVersion(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -68,6 +72,8 @@ func TestMakeBuildEmbedsRequestedVersion(t *testing.T) {
 }
 
 func TestMakeInstallSucceedsWithFreshGOBIN(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -96,6 +102,8 @@ func TestMakeInstallSucceedsWithFreshGOBIN(t *testing.T) {
 }
 
 func TestMakeInstallEmbedsRequestedVersion(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -148,6 +156,8 @@ func TestMakeInstallInstallsDaemonServiceBeforeRestarting(t *testing.T) {
 }
 
 func TestMakeDistProducesExpectedReleaseArtifacts(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -232,6 +242,8 @@ func TestMakeDistProducesExpectedReleaseArtifacts(t *testing.T) {
 }
 
 func TestMakeDistFallsBackToSHA256SumWhenShasumIsUnavailable(t *testing.T) {
+	requirePOSIXMake(t)
+
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()
 
@@ -289,6 +301,16 @@ func hostBinaryName() string {
 		return "ezoss.exe"
 	}
 	return "ezoss"
+}
+
+func requirePOSIXMake(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Makefile integration tests require POSIX make and shell")
+	}
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skipf("Makefile integration tests require make: %v", err)
+	}
 }
 
 func extractTarGz(t *testing.T, archivePath, dstDir string) {
