@@ -125,6 +125,28 @@ func TestMakeInstallEmbedsRequestedVersion(t *testing.T) {
 	}
 }
 
+func TestMakeInstallInstallsDaemonServiceBeforeRestarting(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "Makefile"))
+	if err != nil {
+		t.Fatalf("ReadFile(Makefile) error = %v", err)
+	}
+
+	text := string(data)
+	installCmd := `"$$install_bin/$(HOST_BINARY)" daemon install >/dev/null 2>&1 || true`
+	restartCmd := `"$$install_bin/$(HOST_BINARY)" daemon restart >/dev/null 2>&1 || true`
+	installIdx := strings.Index(text, installCmd)
+	if installIdx < 0 {
+		t.Fatalf("make install does not install the daemon service before restart; missing %q", installCmd)
+	}
+	restartIdx := strings.Index(text, restartCmd)
+	if restartIdx < 0 {
+		t.Fatalf("make install does not restart the daemon; missing %q", restartCmd)
+	}
+	if installIdx > restartIdx {
+		t.Fatalf("make install restarts daemon before installing supervised service")
+	}
+}
+
 func TestMakeDistProducesExpectedReleaseArtifacts(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	worktree := t.TempDir()

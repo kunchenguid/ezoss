@@ -308,26 +308,81 @@ func TestRunWithOptionsPollsImmediatelyAndOnEachTickUntilSignal(t *testing.T) {
 	}
 }
 
-func TestRunWithOptionsReturnsPollError(t *testing.T) {
+func TestRunWithOptionsBacksOffAndKeepsRunningOnGenericPollError(t *testing.T) {
 	tempDir := t.TempDir()
 	pidPath := filepath.Join(tempDir, "daemon.pid")
 	sigCh := make(chan os.Signal, 1)
+	tickCh := make(chan time.Time, 1)
+	sleepCalls := make(chan time.Duration, 1)
+	pollCalls := make(chan int, 2)
+	errCh := make(chan error, 1)
+	callCount := 0
 
-	err := RunWithOptions(pidPath, sigCh, RunOptions{
-		Repos:        []string{"acme/widgets"},
-		PollInterval: time.Hour,
-		PollOnce: func(context.Context, []string) error {
-			return errors.New("poll failed")
-		},
-		NewTicker: func(time.Duration) Ticker {
-			return stubTicker{ch: make(chan time.Time)}
-		},
-	})
-	if err == nil {
-		t.Fatal("expected error")
+	go func() {
+		errCh <- RunWithOptions(pidPath, sigCh, RunOptions{
+			Repos:        []string{"acme/widgets"},
+			PollInterval: time.Hour,
+			PollOnce: func(context.Context, []string) error {
+				callCount++
+				pollCalls <- callCount
+				if callCount == 1 {
+					return errors.New("poll failed")
+				}
+				return nil
+			},
+			NewTicker: func(time.Duration) Ticker {
+				return stubTicker{ch: tickCh}
+			},
+			Sleep: func(delay time.Duration) {
+				sleepCalls <- delay
+			},
+		})
+	}()
+
+	select {
+	case got := <-pollCalls:
+		if got != 1 {
+			t.Fatalf("first poll call = %d, want 1", got)
+		}
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned after generic poll error: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected initial poll call")
 	}
-	if got := err.Error(); got != "poll daemon loop: poll failed" {
-		t.Fatalf("error = %q, want %q", got, "poll daemon loop: poll failed")
+
+	select {
+	case delay := <-sleepCalls:
+		if delay != time.Hour {
+			t.Fatalf("sleep delay = %v, want poll interval", delay)
+		}
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned instead of backing off: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected generic-error backoff sleep")
+	}
+
+	tickCh <- time.Now()
+
+	select {
+	case got := <-pollCalls:
+		if got != 2 {
+			t.Fatalf("second poll call = %d, want 2", got)
+		}
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned before second poll: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected second poll call after backoff")
+	}
+
+	sigCh <- syscall.SIGTERM
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunWithOptions() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunWithOptions() did not exit after signal")
 	}
 }
 
@@ -403,37 +458,227 @@ func TestRunWithOptionsBacksOffAndKeepsRunningOnRateLimitError(t *testing.T) {
 	}
 }
 
-func TestRunWithOptionsDoesNotSwallowNonRateLimitErrorsJoinedWithRateLimit(t *testing.T) {
+func TestRunWithOptionsBacksOffAndKeepsRunningOnTransientGitHubServerError(t *testing.T) {
 	tempDir := t.TempDir()
 	pidPath := filepath.Join(tempDir, "daemon.pid")
 	sigCh := make(chan os.Signal, 1)
-	sleepCalled := false
+	tickCh := make(chan time.Time, 1)
+	sleepCalls := make(chan time.Duration, 1)
+	pollCalls := make(chan int, 2)
+	errCh := make(chan error, 1)
+	callCount := 0
 
-	err := RunWithOptions(pidPath, sigCh, RunOptions{
-		Repos:        []string{"acme/widgets", "acme/broken"},
-		PollInterval: time.Hour,
-		PollOnce: func(context.Context, []string) error {
-			return errors.Join(
-				&ghclient.RateLimitError{Message: "secondary rate limit: retry after 90s", RetryAfter: 90 * time.Second},
-				errors.New("poll failed"),
-			)
-		},
-		NewTicker: func(time.Duration) Ticker {
-			t.Fatal("ticker should not be created when initial poll fails")
-			return nil
-		},
-		Sleep: func(time.Duration) {
-			sleepCalled = true
-		},
-	})
-	if err == nil {
-		t.Fatal("expected error")
+	go func() {
+		errCh <- RunWithOptions(pidPath, sigCh, RunOptions{
+			Repos:        []string{"acme/widgets"},
+			PollInterval: time.Hour,
+			PollOnce: func(context.Context, []string) error {
+				callCount++
+				pollCalls <- callCount
+				if callCount == 1 {
+					return errors.New("poll repo acme/widgets: list needing triage: gh issue list acme/widgets: HTTP 504: 504 Gateway Timeout (https://api.github.com/graphql)")
+				}
+				return nil
+			},
+			NewTicker: func(time.Duration) Ticker {
+				return stubTicker{ch: tickCh}
+			},
+			Sleep: func(delay time.Duration) {
+				sleepCalls <- delay
+			},
+		})
+	}()
+
+	select {
+	case got := <-pollCalls:
+		if got != 1 {
+			t.Fatalf("first poll call = %d, want 1", got)
+		}
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned after transient error: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected initial poll call")
 	}
-	if got := err.Error(); got != "poll daemon loop: github rate limit exceeded (retry after 1m30s): secondary rate limit: retry after 90s\npoll failed" {
-		t.Fatalf("error = %q", got)
+
+	select {
+	case delay := <-sleepCalls:
+		if delay != time.Hour {
+			t.Fatalf("sleep delay = %v, want poll interval", delay)
+		}
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned instead of backing off: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected transient-error backoff sleep")
 	}
-	if sleepCalled {
-		t.Fatal("expected non-rate-limit joined error to remain fatal")
+
+	tickCh <- time.Now()
+
+	select {
+	case got := <-pollCalls:
+		if got != 2 {
+			t.Fatalf("second poll call = %d, want 2", got)
+		}
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned before second poll: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected second poll call after backoff")
+	}
+
+	sigCh <- syscall.SIGTERM
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunWithOptions() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunWithOptions() did not exit after signal")
+	}
+}
+
+func TestRunWithOptionsBacksOffAndKeepsRunningOnJoinedPollErrors(t *testing.T) {
+	tempDir := t.TempDir()
+	pidPath := filepath.Join(tempDir, "daemon.pid")
+	sigCh := make(chan os.Signal, 1)
+	tickCh := make(chan time.Time, 1)
+	sleepCalls := make(chan time.Duration, 1)
+	pollCalls := make(chan int, 2)
+	errCh := make(chan error, 1)
+	callCount := 0
+
+	go func() {
+		errCh <- RunWithOptions(pidPath, sigCh, RunOptions{
+			Repos:        []string{"acme/widgets", "acme/broken"},
+			PollInterval: time.Hour,
+			PollOnce: func(context.Context, []string) error {
+				callCount++
+				pollCalls <- callCount
+				if callCount == 1 {
+					return errors.Join(
+						&ghclient.RateLimitError{Message: "secondary rate limit: retry after 90s", RetryAfter: 90 * time.Second},
+						errors.New("poll failed"),
+					)
+				}
+				return nil
+			},
+			NewTicker: func(time.Duration) Ticker {
+				return stubTicker{ch: tickCh}
+			},
+			Sleep: func(delay time.Duration) {
+				sleepCalls <- delay
+			},
+		})
+	}()
+
+	<-pollCalls
+	select {
+	case delay := <-sleepCalls:
+		if delay != 90*time.Second {
+			t.Fatalf("sleep delay = %v, want 90s", delay)
+		}
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned instead of backing off: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected joined-error backoff sleep")
+	}
+
+	tickCh <- time.Now()
+	select {
+	case got := <-pollCalls:
+		if got != 2 {
+			t.Fatalf("second poll call = %d, want 2", got)
+		}
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned before second poll: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected second poll call after joined-error backoff")
+	}
+
+	sigCh <- syscall.SIGTERM
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunWithOptions() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunWithOptions() did not exit after signal")
+	}
+}
+
+func TestRunWithOptionsBacksOffAndKeepsRunningOnRecommendationSnapshotError(t *testing.T) {
+	tempDir := t.TempDir()
+	pidPath := filepath.Join(tempDir, "daemon.pid")
+	sigCh := make(chan os.Signal, 1)
+	tickCh := make(chan time.Time, 1)
+	sleepCalls := make(chan time.Duration, 1)
+	pollCalls := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
+	snapshotCalls := 0
+
+	go func() {
+		errCh <- RunWithOptions(pidPath, sigCh, RunOptions{
+			Repos:        []string{"acme/widgets"},
+			PollInterval: time.Hour,
+			RecommendationSnapshot: func() ([]db.Recommendation, error) {
+				snapshotCalls++
+				if snapshotCalls == 1 {
+					return nil, errors.New("snapshot failed")
+				}
+				return nil, nil
+			},
+			PollOnce: func(context.Context, []string) error {
+				pollCalls <- struct{}{}
+				return nil
+			},
+			NewTicker: func(time.Duration) Ticker {
+				return stubTicker{ch: tickCh}
+			},
+			Sleep: func(delay time.Duration) {
+				sleepCalls <- delay
+			},
+		})
+	}()
+
+	select {
+	case delay := <-sleepCalls:
+		if delay != time.Hour {
+			t.Fatalf("sleep delay = %v, want poll interval", delay)
+		}
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned after snapshot error: %v", err)
+	case <-pollCalls:
+		t.Fatal("poll should not run until the snapshot succeeds")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected snapshot-error backoff sleep")
+	}
+
+	tickCh <- time.Now()
+	select {
+	case <-pollCalls:
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() returned before recovered snapshot poll: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected poll after snapshot error backoff")
+	}
+
+	sigCh <- syscall.SIGTERM
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunWithOptions() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunWithOptions() did not exit after signal")
+	}
+}
+
+func TestJoinedPollRetryDelayClassifiesNetworkFailuresAsTransient(t *testing.T) {
+	_, reason, ok := joinedPollRetryDelay(errors.New("read tcp 127.0.0.1:1234->140.82.112.6:443: read: connection reset by peer"))
+	if !ok {
+		t.Fatal("expected network failure to be retryable")
+	}
+	if reason != "transient poll error" {
+		t.Fatalf("reason = %q, want transient poll error", reason)
 	}
 }
 
@@ -751,7 +996,7 @@ func TestRunWithOptionsLogsRateLimitBackoff(t *testing.T) {
 	}
 }
 
-func TestRunWithOptionsLogsFatalErrorBeforeReturning(t *testing.T) {
+func TestRunWithOptionsLogsRecoveredPanicBeforeReturning(t *testing.T) {
 	tempDir := t.TempDir()
 	pidPath := filepath.Join(tempDir, "daemon.pid")
 	sigCh := make(chan os.Signal, 1)
@@ -762,7 +1007,7 @@ func TestRunWithOptionsLogsFatalErrorBeforeReturning(t *testing.T) {
 		PollInterval: time.Hour,
 		Logger:       NewLogger(&logBuf),
 		PollOnce: func(context.Context, []string) error {
-			return errors.New("boom")
+			panic("boom")
 		},
 		NewTicker: func(time.Duration) Ticker {
 			return stubTicker{ch: make(chan time.Time)}
@@ -773,6 +1018,12 @@ func TestRunWithOptionsLogsFatalErrorBeforeReturning(t *testing.T) {
 	}
 
 	out := logBuf.String()
+	if !strings.Contains(out, `msg="daemon panic"`) {
+		t.Fatalf("expected recovered panic log line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "goroutine") {
+		t.Fatalf("expected stack trace in panic log: %s", out)
+	}
 	if !strings.Contains(out, `msg="daemon exiting on error"`) {
 		t.Fatalf("expected fatal-exit log line so the failure reason lands in the log file, got:\n%s", out)
 	}

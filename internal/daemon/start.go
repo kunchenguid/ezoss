@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -98,7 +100,16 @@ func Run(pidFile string, sigCh <-chan os.Signal) error {
 	return RunWithOptions(pidFile, sigCh, RunOptions{})
 }
 
-func RunWithOptions(pidFile string, sigCh <-chan os.Signal, opts RunOptions) error {
+func RunWithOptions(pidFile string, sigCh <-chan os.Signal, opts RunOptions) (retErr error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err := fmt.Errorf("daemon panic: %v", recovered)
+			opts.log().Error("daemon panic", "panic", recovered, "stack", string(debug.Stack()))
+			opts.log().Error("daemon exiting on error", "err", err)
+			retErr = err
+		}
+	}()
+
 	if sigCh == nil {
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
@@ -288,7 +299,7 @@ func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)
 		cycleNum++
 		before, err := recommendationSnapshot(opts)
 		if err != nil {
-			return nil, fmt.Errorf("snapshot recommendations: %w", err)
+			return fmt.Errorf("snapshot recommendations: %w", err), nil
 		}
 		opts.log().Info("cycle started", "cycle", cycleNum, "repos", len(opts.Repos))
 		cycleStart := time.Now()
@@ -330,7 +341,7 @@ func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)
 			return pollErr, nil
 		}
 		if err := emitRecommendationEvents(opts, before, notify); err != nil {
-			return nil, err
+			return err, nil
 		}
 		return nil, nil
 	}
@@ -346,7 +357,6 @@ func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)
 			}
 			goto waitForTicker
 		}
-		return fmt.Errorf("poll daemon loop: %w", cycleErr)
 	}
 
 waitForTicker:
@@ -363,16 +373,12 @@ waitForTicker:
 			if fatalErr != nil {
 				return fatalErr
 			}
-			if cycleErr == nil {
-				continue
-			}
-			if handled, waitErr := handlePollError(sigCh, interval, sleep, customSleep, cycleErr, opts.log()); handled {
+			if cycleErr != nil {
+				_, waitErr := handlePollError(sigCh, interval, sleep, customSleep, cycleErr, opts.log())
 				if waitErr != nil {
 					return waitErr
 				}
-				continue
 			}
-			return fmt.Errorf("poll daemon loop: %w", cycleErr)
 		}
 	}
 }
@@ -412,7 +418,7 @@ func drainOverrunTick(ticker Ticker) bool {
 }
 
 func handlePollError(sigCh <-chan os.Signal, fallbackDelay time.Duration, sleep func(time.Duration), customSleep bool, err error, log *slog.Logger) (bool, error) {
-	delay, ok := joinedRateLimitDelay(err)
+	delay, reason, ok := joinedPollRetryDelay(err)
 	if !ok {
 		return false, nil
 	}
@@ -425,7 +431,7 @@ func handlePollError(sigCh <-chan os.Signal, fallbackDelay time.Duration, sleep 
 	}
 
 	if log != nil {
-		log.Warn("rate limited", "delay", delay, "err", err)
+		log.Warn(reason, "delay", delay, "err", err)
 	}
 
 	if customSleep {
@@ -456,49 +462,85 @@ type multiUnwrapper interface {
 	Unwrap() []error
 }
 
-func joinedRateLimitDelay(err error) (time.Duration, bool) {
+func joinedPollRetryDelay(err error) (time.Duration, string, bool) {
 	if err == nil {
-		return 0, false
+		return 0, "", false
 	}
 
 	maxDelay := time.Duration(0)
 	foundRateLimit := false
+	foundTransient := false
+	foundOther := false
 
-	var walk func(error) bool
-	walk = func(current error) bool {
+	var walk func(error)
+	walk = func(current error) {
 		if current == nil {
-			return true
+			return
 		}
 
 		if multi, ok := current.(multiUnwrapper); ok {
 			children := multi.Unwrap()
 			if len(children) == 0 {
-				return true
+				return
 			}
 			for _, child := range children {
-				if !walk(child) {
-					return false
-				}
+				walk(child)
 			}
-			return true
+			return
 		}
 
 		var rateLimitErr *ghclient.RateLimitError
-		if !errors.As(current, &rateLimitErr) {
-			return false
+		if errors.As(current, &rateLimitErr) {
+			foundRateLimit = true
+			if rateLimitErr.RetryAfter > maxDelay {
+				maxDelay = rateLimitErr.RetryAfter
+			}
+			return
 		}
-		foundRateLimit = true
-		if rateLimitErr.RetryAfter > maxDelay {
-			maxDelay = rateLimitErr.RetryAfter
+
+		if isTransientGitHubServerError(current) {
+			foundTransient = true
+			return
 		}
-		return true
+
+		foundOther = true
+	}
+	walk(err)
+
+	if !foundRateLimit && !foundTransient && !foundOther {
+		return 0, "", false
 	}
 
-	if !walk(err) || !foundRateLimit {
-		return 0, false
+	switch {
+	case foundOther:
+		return maxDelay, "poll error", true
+	case foundRateLimit && !foundTransient:
+		return maxDelay, "rate limited", true
+	case foundTransient && !foundRateLimit:
+		return maxDelay, "transient poll error", true
+	default:
+		return maxDelay, "retryable poll error", true
 	}
+}
 
-	return maxDelay, true
+func isTransientGitHubServerError(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "http 500") ||
+		strings.Contains(message, "http 502") ||
+		strings.Contains(message, "http 503") ||
+		strings.Contains(message, "http 504") ||
+		strings.Contains(message, "connection reset") ||
+		strings.Contains(message, "connection refused") ||
+		strings.Contains(message, "i/o timeout") ||
+		strings.Contains(message, "no such host") ||
+		strings.Contains(message, "network is unreachable") ||
+		strings.Contains(message, "operation timed out") ||
+		strings.Contains(message, "tls handshake timeout") ||
+		strings.Contains(message, "unexpected eof") ||
+		strings.Contains(message, "internal server error") ||
+		strings.Contains(message, "bad gateway") ||
+		strings.Contains(message, "service unavailable") ||
+		strings.Contains(message, "gateway timeout")
 }
 
 func emitRecommendationEvents(opts RunOptions, before []db.Recommendation, notify func(ipc.Event)) error {
