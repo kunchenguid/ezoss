@@ -149,10 +149,12 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        env:
-          TMP: ${{ runner.temp }}
-          TEMP: ${{ runner.temp }}
-        run: go test ./...
+        shell: pwsh
+        run: |
+          $env:TMP = '${{ runner.temp }}'
+          $env:TEMP = '${{ runner.temp }}'
+          Write-Host "Using TMP=$env:TMP TEMP=$env:TEMP"
+          go test ./...
 
       - name: Build
         run: go build ./cmd/ezoss
