@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,6 +19,17 @@ import (
 	"github.com/kunchenguid/ezoss/internal/ipc"
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
 )
+
+// ipcSocketParent picks a directory short enough to hold a Unix domain
+// socket path within the 104-byte sun_path limit on macOS. On Windows
+// the IPC transport is TCP-with-token via a flat file, so any short
+// path works and we just use the per-test temp dir.
+func ipcSocketParent(tempDir string) string {
+	if runtime.GOOS == "windows" {
+		return tempDir
+	}
+	return "/tmp"
+}
 
 func TestStartLaunchesWhenStopped(t *testing.T) {
 	tempDir := t.TempDir()
@@ -426,7 +438,7 @@ func TestRunWithOptionsDoesNotSwallowNonRateLimitErrorsJoinedWithRateLimit(t *te
 func TestRunWithOptionsServesIPCHealthAndRemovesSocketOnExit(t *testing.T) {
 	tempDir := t.TempDir()
 	pidPath := filepath.Join(tempDir, "daemon.pid")
-	ipcPath := filepath.Join("/tmp", fmt.Sprintf("am-ipc-%d.sock", time.Now().UnixNano()))
+	ipcPath := filepath.Join(ipcSocketParent(tempDir), fmt.Sprintf("am-ipc-%d.sock", time.Now().UnixNano()))
 	_ = os.Remove(ipcPath)
 	sigCh := make(chan os.Signal, 1)
 	errCh := make(chan error, 1)
@@ -477,7 +489,7 @@ func TestRunWithOptionsServesIPCHealthAndRemovesSocketOnExit(t *testing.T) {
 func TestRunWithOptionsStreamsRecommendationCreatedEvents(t *testing.T) {
 	tempDir := t.TempDir()
 	pidPath := filepath.Join(tempDir, "daemon.pid")
-	ipcPath := filepath.Join("/tmp", fmt.Sprintf("am-ipc-%d.sock", time.Now().UnixNano()))
+	ipcPath := filepath.Join(ipcSocketParent(tempDir), fmt.Sprintf("am-ipc-%d.sock", time.Now().UnixNano()))
 	_ = os.Remove(ipcPath)
 
 	database, err := db.Open(filepath.Join(tempDir, "ezoss.db"))
