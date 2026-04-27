@@ -130,6 +130,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Ensure TMP/TEMP directories exist
+        shell: pwsh
+        # The windows-2025 runner image presets TMP/TEMP to D:\tmp but does
+        # not create the directory, so Go's t.TempDir() (and any os.MkdirTemp)
+        # fails with "The system cannot find the file specified".
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:TMP | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
