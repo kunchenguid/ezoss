@@ -150,10 +150,16 @@ jobs:
 
       - name: Test
         shell: pwsh
+        # The windows-2025 runner image presets GOTMPDIR (and TMP/TEMP) to
+        # D:\tmp, which is not created on disk - go test then fails with
+        # "GetFileAttributesEx D:\tmp: The system cannot find the file
+        # specified" inside testing.makeTempDir, since t.TempDir() resolves
+        # via os.Getenv("GOTMPDIR"). Point all three at runner.temp, which
+        # the runner guarantees exists.
         run: |
+          $env:GOTMPDIR = '${{ runner.temp }}'
           $env:TMP = '${{ runner.temp }}'
           $env:TEMP = '${{ runner.temp }}'
-          Write-Host "Using TMP=$env:TMP TEMP=$env:TEMP"
           go test ./...
 
       - name: Build
