@@ -207,6 +207,8 @@ Precedence is simple:
 
 If `~/.ezoss/AGENTS.md` exists, its contents are appended to every triage prompt.
 
+Daemon logs are written to `~/.ezoss/logs/daemon.log`. Set `EZOSS_LOG_LEVEL` to `debug`, `info`, `warn`, or `error` to adjust structured log verbosity.
+
 ## Development
 
 ```sh
