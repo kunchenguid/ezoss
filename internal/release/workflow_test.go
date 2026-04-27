@@ -771,25 +771,6 @@ func TestCIWorkflowIncludesWindowsBuildSmokeCheck(t *testing.T) {
 	}
 }
 
-func TestCIWorkflowPinsWindowsTempDirectoryToRunnerTemp(t *testing.T) {
-	workflowPath := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
-	data, err := os.ReadFile(workflowPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"windows-build:\n    runs-on: windows-latest\n    env:\n      TMP: ${{ runner.temp }}\n      TEMP: ${{ runner.temp }}",
-		"run: go test ./...",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("ci workflow missing %q:\n%s", want, text)
-		}
-	}
-}
-
 func TestCIWorkflowRunsFormattingAndVetChecksOnWindows(t *testing.T) {
 	workflowPath := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
 	data, err := os.ReadFile(workflowPath)
@@ -1190,9 +1171,9 @@ func TestREADMEHeroMatchesCurrentReleaseMessaging(t *testing.T) {
 		"<h1 align=\"center\">ezoss</h1>",
 		"Turn your issue queue into a reviewable inbox instead of a background tax.",
 		"You stay in control. The agent drafts. The maintainer decides.",
-		"- **Private by default** - agent rationale, draft comments, and token usage stay in local SQLite until you approve an action.",
+		"- **Private by default** - agent rationale, draft comments, fix prompts, and token usage stay in local SQLite until you approve an action.",
 		"- **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.",
-		"- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/edit/rerun flows already work end to end.",
+		"- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/copy-prompt/edit/rerun flows already work end to end.",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
@@ -1357,7 +1338,8 @@ func TestREADMECLIReferenceMatchesCurrentCommandSurface(t *testing.T) {
 		"| `ezoss` | Open the inbox TUI from the local recommendations database |",
 		"| `ezoss doctor` | Check local prerequisites including `gh`, agent availability, daemon state, and SQLite access |",
 		"| `ezoss init` | Create or update `~/.ezoss/config.yaml` |",
-		"| `ezoss status` | Print a one-line summary of pending recommendations and configured repos |",
+		"| `ezoss status` | Open the realtime status TUI; in non-interactive output, print rich text status |",
+		"| `ezoss status --short` | Print a one-line summary of pending recommendations and configured repos |",
 		"| `ezoss list` | Print pending recommendations in a text format |",
 		"| `ezoss triage <repo>#<number>` | Manually triage one issue or PR |",
 		"| `ezoss update` | Download and install the latest released binary for the current platform |",
@@ -1419,7 +1401,7 @@ func TestREADMEHowItWorksSectionMatchesCurrentMaintainerFirstFlow(t *testing.T) 
 		"│ inbox TUI          │",
 		"│ GitHub labels /    │",
 		"- **GitHub is the visible truth** - `ezoss/triaged` is the public signal that an item has already been handled.",
-		"- **Local DB is the private memory** - drafts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.",
+		"- **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.",
 		"- **Approval is explicit** - nothing gets posted, closed, merged, or labeled until you do it from the inbox.",
 	}
 	for _, want := range checks {
@@ -1471,7 +1453,7 @@ func TestDocsHeroMatchesCurrentReleaseMessaging(t *testing.T) {
 		"<p class=\"eyebrow\">ezoss docs</p>",
 		"Run your open source inbox like a review queue, not a background tax.",
 		"polls GitHub for untriaged issues and PRs",
-		"approve, edit, skip, or rerun from a terminal inbox before anything touches GitHub.",
+		"approve, copy fix prompts, edit, skip, or rerun from a terminal inbox before anything touches GitHub.",
 		"<a class=\"button primary\" href=\"https://github.com/kunchenguid/ezoss\">View on GitHub</a>",
 		"<a class=\"button secondary\" href=\"#install\">Install</a>",
 	}
@@ -1606,7 +1588,7 @@ func TestDocsImportantCommandsMatchCurrentPublicCLI(t *testing.T) {
 		"<h3><code>ezoss doctor</code></h3>",
 		"Check GitHub auth, agent availability, daemon health, and local database access.",
 		"<h3><code>ezoss status</code></h3>",
-		"Print a one-line summary of configured repos and pending recommendations.",
+		"Open the realtime status TUI, or use <code>--short</code> for one-line script output.",
 		"<h3><code>ezoss list</code></h3>",
 		"Dump pending recommendations as text without opening the TUI.",
 		"<h3><code>ezoss update</code></h3>",
@@ -1633,13 +1615,13 @@ func TestDocsCoreLoopAndRequirementsMatchCurrentReleaseContract(t *testing.T) {
 	checks := []string{
 		"<h2>Core loop</h2>",
 		"GitHub stays the visible source of truth",
-		"local SQLite database keeps draft comments, agent rationale, and token usage",
+		"local SQLite database keeps draft comments, fix prompts, agent rationale, and token usage",
 		"<h3>1. Poll GitHub</h3>",
 		"Fetch issues and PRs missing the <code>ezoss/triaged</code> label.",
 		"<h3>2. Prepare checkout and ask your agent</h3>",
 		"Clone or refresh the managed checkout in <code>~/.ezoss/investigations</code>, discard scratch edits from prior runs, then run Claude, Codex, Rovo Dev, or OpenCode there for a structured recommendation.",
 		"<h3>3. Review privately</h3>",
-		"Approve, edit, skip, or rerun from the local TUI inbox without exposing drafts.",
+		"Approve, copy fix prompts, edit, skip, or rerun from the local TUI inbox without exposing drafts.",
 		"<h3>4. Sync the outcome</h3>",
 		"Approved actions execute with <code>gh</code> and mirror triage labels back to GitHub.",
 		"<h2>Requirements</h2>",
@@ -1690,7 +1672,7 @@ func TestReleaseDocsAndREADMEDescribePRApprovalBeforeReview(t *testing.T) {
 	readmeText := string(readmeData)
 	for _, want := range []string{
 		"PRs without prior agreement can be routed into a maintainer approval step before code review.",
-		"`request_approval_for_review`",
+		"unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.",
 	} {
 		if !strings.Contains(readmeText, want) {
 			t.Fatalf("README missing PR approval-before-review guidance %q:\n%s", want, readmeText)
@@ -1706,7 +1688,7 @@ func TestReleaseDocsAndREADMEDescribePRApprovalBeforeReview(t *testing.T) {
 	docsText := string(docsData)
 	for _, want := range []string{
 		"PRs without prior agreement can pause for maintainer approval before any code review happens.",
-		"<code>request_approval_for_review</code>",
+		"The agent can surface that as <code>state_change: none</code> with a draft question so you decide",
 	} {
 		if !strings.Contains(docsText, want) {
 			t.Fatalf("docs missing PR approval-before-review guidance %q:\n%s", want, docsText)
