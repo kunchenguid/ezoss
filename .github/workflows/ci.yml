@@ -130,20 +130,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Ensure TMP/TEMP directories exist
-        shell: pwsh
-        # The windows-2025 runner image presets TMP/TEMP to D:\tmp but does
-        # not create the directory, so Go's t.TempDir() (and any os.MkdirTemp)
-        # fails with "The system cannot find the file specified". Create the
-        # literal path the runner uses, plus our own $env:TMP/$env:TEMP in
-        # case they differ from what go test sees.
-        run: |
-          Write-Host "TMP=$env:TMP TEMP=$env:TEMP RUNNER_TEMP=$env:RUNNER_TEMP"
-          New-Item -ItemType Directory -Force -Path 'D:\tmp' | Out-Null
-          New-Item -ItemType Directory -Force -Path $env:TMP | Out-Null
-          New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
-          Get-ChildItem 'D:\' | Select-Object Name | Out-Host
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -163,6 +149,9 @@ jobs:
         run: go vet ./...
 
       - name: Test
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: go test ./...
 
       - name: Build
