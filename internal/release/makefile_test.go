@@ -140,8 +140,8 @@ func TestMakeInstallInstallsDaemonServiceBeforeRestarting(t *testing.T) {
 	}
 
 	text := string(data)
-	installCmd := `"$$install_bin/$(HOST_BINARY)" daemon install >/dev/null 2>&1 || true`
-	restartCmd := `"$$install_bin/$(HOST_BINARY)" daemon restart >/dev/null 2>&1 || true`
+	installCmd := `"$$install_bin/$(HOST_BINARY)" daemon install`
+	restartCmd := `"$$install_bin/$(HOST_BINARY)" daemon restart`
 	installIdx := strings.Index(text, installCmd)
 	if installIdx < 0 {
 		t.Fatalf("make install does not install the daemon service before restart; missing %q", installCmd)

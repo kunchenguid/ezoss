@@ -268,8 +268,8 @@ func TestPollOnceStoresRecommendationFromTriageRunner(t *testing.T) {
 	if item == nil {
 		t.Fatal("expected item to remain stored")
 	}
-	if item.WaitingOn != sharedtypes.WaitingOnContributor {
-		t.Fatalf("item waiting_on = %q, want contributor", item.WaitingOn)
+	if item.WaitingOn != sharedtypes.WaitingOnNone {
+		t.Fatalf("item waiting_on = %q, want none before recommendation approval", item.WaitingOn)
 	}
 }
 

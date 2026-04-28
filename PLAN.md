@@ -70,14 +70,15 @@ Follows `DESIGN.md` primitives. Rough sketch:
 │  Fix prompt:                                                          │
 │    Fix https://github.com/... by reproducing the failure and testing. │
 │  Proposed labels: bug, needs-repro                                    │
-│  Confidence: medium  ·  tokens: 12.4k in / 1.1k out                   │
+│  by @alice  ·  confidence: medium                                     │
+│  currently waiting on @alice (contributor)                            │
 ╰───────────────────────────────────────────────────────────────────────╯
  q quit  ? help
 ```
 
 Two-pane list/detail. Inbox on top, detail below. `j/k` moves cursor; up/down arrows scroll overflowing detail content. `a` approves the selected item(s), `c` copies the active option's coding-agent fix prompt, `e` opens `$EDITOR` for the draft, `s` dismisses (won't retrigger unless the `ezoss/triaged` label is removed on GitHub), `r` reruns triage.
 
-The details pane always shows cumulative token usage for the item - every triage/re-triage gets attributed so the maintainer can see what the agent is costing them per issue.
+The details pane shows author, confidence, and the item's current `waiting_on` state. Token usage stays in the local DB and is not shown in the card metadata.
 
 ## State model
 
@@ -90,7 +91,7 @@ Other useful labels the orchestrator may apply on approval (all opt-in via confi
 - `ezoss/awaiting-contributor`, `ezoss/awaiting-maintainer` - reflects the `waiting_on` signal on GitHub so co-maintainers can filter.
 - `ezoss/stale` - set when we've been waiting on the contributor past the stale threshold.
 
-`waiting_on` is inferred from GitHub activity (last commenter, CI state) and re-computed on every poll. It's not authoritative on its own; the label is the visible form.
+`waiting_on` is the item's current local waiting state. Recommendation options include a proposed future `waiting_on`, but the item is only updated to that value when the maintainer approves the option; the label is the visible form on GitHub.
 
 Per-item local cache fields (just enough to render the TUI without hammering GitHub):
 
@@ -99,7 +100,7 @@ Per-item local cache fields (just enough to render the TUI without hammering Git
 | `kind`          | `issue` \| `pr`                                            |
 | `is_draft`      | true for draft PRs / WIP-titled PRs - skipped from triage  |
 | `gh_triaged`    | bool, mirror of `ezoss/triaged` label on GitHub    |
-| `waiting_on`    | `maintainer` \| `contributor` \| `ci` \| `none` (inferred) |
+| `waiting_on`    | `maintainer` \| `contributor` \| `ci` \| `none` (current state) |
 | `last_event_at` | timestamp of latest GH event we've seen                    |
 | `stale_since`   | when the item crossed the stale threshold, if applicable   |
 
@@ -178,7 +179,7 @@ CREATE TABLE approvals (
 );
 ```
 
-Recommendations are immutable and superseded when re-triage runs. Full history is preserved. Token counts on the recommendations table roll up for per-item cost display in the TUI.
+Recommendations are immutable and superseded when re-triage runs. Full history is preserved. Token counts on the recommendations table are stored locally for accounting and history.
 
 ## GitHub integration
 
@@ -195,7 +196,7 @@ Polling strategy:
 - `gh issue list --search "-label:ezoss/triaged"` / same for PRs - gets us everything that needs triage in one query.
 - Skip items where `isDraft=true` or the title matches a WIP pattern (`WIP:`, `[WIP]`, `[draft]`).
 - Items that had the label and no longer do come back into the queue automatically - the query is the trigger.
-- For re-computing `waiting_on` and stale detection, also fetch items with the label on a slower cadence (default 1h).
+- For stale detection, also fetch items with the label on a slower cadence (default 1h).
 - Backoff on poll errors, including rate limits (`x-ratelimit-remaining` from `gh api`) and transient GitHub/network failures.
 
 **Webhooks are deliberately out of scope for v1.** They need a public endpoint or a tunnel service, which is a big complexity jump. Polling gets us 90% of the value.
@@ -303,7 +304,7 @@ Single daemon, many repos. Repos configured in `~/.ezoss/config.yaml`. Agent cho
 **Phase 2 - TUI**
 
 - Copy `internal/ipc/`, `internal/tui/` skeleton.
-- Inbox list view, detail pane with token usage, approve/copy prompt/edit/skip/rerun actions.
+- Inbox list view, detail pane, approve/copy prompt/edit/skip/rerun actions.
 - Live subscription so new triages land in the TUI without a refresh.
 - Follow `DESIGN.md` primitives exactly.
 

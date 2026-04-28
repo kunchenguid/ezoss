@@ -56,8 +56,8 @@ func startLaunchAgent(p *paths.Paths) error {
 }
 
 // launchctlBootstrapWithRetry runs `launchctl bootstrap` and retries on
-// errno 37 EPROGRESS until the bootout-cleanup window closes. Non-busy
-// failures (bad plist, bad permissions) return immediately.
+// transient errors until the bootout-cleanup window closes. Non-busy failures
+// (bad plist, bad permissions) return immediately.
 func launchctlBootstrapWithRetry(domain, path string) error {
 	deadline := time.Now().Add(launchctlBootstrapRetryTimeout)
 	var lastErr error
@@ -83,7 +83,9 @@ func launchctlBootstrapBusy(err error) bool {
 	}
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "operation already in progress") ||
-		strings.Contains(text, "exit status 37")
+		strings.Contains(text, "exit status 37") ||
+		strings.Contains(text, "input/output error") ||
+		strings.Contains(text, "exit status 5")
 }
 
 func stopLaunchAgent(p *paths.Paths) error {

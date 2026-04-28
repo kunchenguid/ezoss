@@ -393,10 +393,6 @@ func runTriageForItem(ctx context.Context, poller Poller, item db.Item, polledAt
 		return nil, fmt.Errorf("insert recommendation: %w", err)
 	}
 
-	item.WaitingOn = result.Recommendation.Options[0].WaitingOn
-	if err := poller.DB.UpsertItem(item); err != nil {
-		return nil, fmt.Errorf("update waiting_on: %w", err)
-	}
 	return result, nil
 }
 

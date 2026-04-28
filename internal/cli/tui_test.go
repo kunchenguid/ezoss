@@ -292,8 +292,8 @@ func TestRootCommandLaunchesTUIOnNoArgs(t *testing.T) {
 	if got[0].TokensIn != 350 || got[0].TokensOut != 50 {
 		t.Fatalf("token totals = %d in / %d out, want 350 in / 50 out", got[0].TokensIn, got[0].TokensOut)
 	}
-	if got[0].WaitingOn != sharedtypes.WaitingOnContributor {
-		t.Fatalf("waiting_on = %q, want %q", got[0].WaitingOn, sharedtypes.WaitingOnContributor)
+	if got[0].CurrentWaitingOn != sharedtypes.WaitingOnContributor {
+		t.Fatalf("current waiting_on = %q, want %q", got[0].CurrentWaitingOn, sharedtypes.WaitingOnContributor)
 	}
 	if updateCheckCalls != 1 {
 		t.Fatalf("background update checks = %d, want 1", updateCheckCalls)
@@ -1378,12 +1378,12 @@ func TestLoadInboxEntriesPopulatesGitHubURLForIssuesAndPRs(t *testing.T) {
 		t.Fatalf("UpsertRepo() error = %v", err)
 	}
 	if err := database.UpsertItem(db.Item{
-		ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "issue", State: sharedtypes.ItemStateOpen,
+		ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "issue", Author: "alice", State: sharedtypes.ItemStateOpen, WaitingOn: sharedtypes.WaitingOnMaintainer,
 	}); err != nil {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
 	if err := database.UpsertItem(db.Item{
-		ID: "acme/widgets#7", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 7, Title: "pr", State: sharedtypes.ItemStateOpen,
+		ID: "acme/widgets#7", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 7, Title: "pr", Author: "bob", State: sharedtypes.ItemStateOpen, WaitingOn: sharedtypes.WaitingOnContributor,
 	}); err != nil {
 		t.Fatalf("UpsertItem() error = %v", err)
 	}
@@ -1403,14 +1403,31 @@ func TestLoadInboxEntriesPopulatesGitHubURLForIssuesAndPRs(t *testing.T) {
 		t.Fatalf("loadInboxEntries() error = %v", err)
 	}
 	urls := map[string]string{}
+	authors := map[string]string{}
+	currentWaitingOn := map[string]sharedtypes.WaitingOn{}
 	for _, entry := range entries {
-		urls[fmt.Sprintf("%s#%d", entry.RepoID, entry.Number)] = entry.URL
+		key := fmt.Sprintf("%s#%d", entry.RepoID, entry.Number)
+		urls[key] = entry.URL
+		authors[key] = entry.Author
+		currentWaitingOn[key] = entry.CurrentWaitingOn
 	}
 	if got, want := urls["acme/widgets#42"], "https://github.com/acme/widgets/issues/42"; got != want {
 		t.Fatalf("issue URL = %q, want %q", got, want)
 	}
 	if got, want := urls["acme/widgets#7"], "https://github.com/acme/widgets/pull/7"; got != want {
 		t.Fatalf("PR URL = %q, want %q", got, want)
+	}
+	if got, want := authors["acme/widgets#42"], "alice"; got != want {
+		t.Fatalf("issue author = %q, want %q", got, want)
+	}
+	if got, want := authors["acme/widgets#7"], "bob"; got != want {
+		t.Fatalf("PR author = %q, want %q", got, want)
+	}
+	if got, want := currentWaitingOn["acme/widgets#42"], sharedtypes.WaitingOnMaintainer; got != want {
+		t.Fatalf("issue CurrentWaitingOn = %q, want %q", got, want)
+	}
+	if got, want := currentWaitingOn["acme/widgets#7"], sharedtypes.WaitingOnContributor; got != want {
+		t.Fatalf("PR CurrentWaitingOn = %q, want %q", got, want)
 	}
 	prompts := map[string]string{}
 	for _, entry := range entries {
@@ -2526,6 +2543,86 @@ func TestApproveInboxEntriesRemovesOutdatedManagedStateLabels(t *testing.T) {
 		if executor.labels[0].Remove[i] != label {
 			t.Fatalf("removed labels = %#v, want %#v", executor.labels[0].Remove, wantRemove)
 		}
+	}
+}
+
+func TestApproveInboxEntriesAppliesApprovedOptionWaitingOn(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewApprovalExecutor := newApprovalExecutor
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newApprovalExecutor = originalNewApprovalExecutor
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	executor := &stubApprovalExecutor{}
+	newApprovalExecutor = func() approvalExecutor {
+		return executor
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
+		SyncLabels: config.SyncLabels{Triaged: true, WaitingOn: true, Stale: true},
+	}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "acme/widgets#26", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 26,
+		Title: "Needs a follow-up", State: sharedtypes.ItemStateOpen, WaitingOn: sharedtypes.WaitingOnMaintainer,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#26", Agent: sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{DraftComment: "Can you share details?", StateChange: sharedtypes.StateChangeNone, WaitingOn: sharedtypes.WaitingOnContributor}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: rec.ID,
+		OptionID:         rec.Options[0].ID,
+		RepoID:           "acme/widgets",
+		Number:           26,
+		Kind:             sharedtypes.ItemKindIssue,
+		DraftComment:     "Can you share details?",
+		StateChange:      sharedtypes.StateChangeNone,
+		WaitingOn:        sharedtypes.WaitingOnContributor,
+	}}); err != nil {
+		t.Fatalf("approveInboxEntries() error = %v", err)
+	}
+
+	wantAdd := []string{ezossTriagedLabel, "ezoss/awaiting-contributor"}
+	if len(executor.labels) != 1 || len(executor.labels[0].Add) != len(wantAdd) {
+		t.Fatalf("added labels = %#v, want %#v", executor.labels, wantAdd)
+	}
+	for i, label := range wantAdd {
+		if executor.labels[0].Add[i] != label {
+			t.Fatalf("added labels = %#v, want %#v", executor.labels[0].Add, wantAdd)
+		}
+	}
+	item, err := database.GetItem("acme/widgets#26")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || item.WaitingOn != sharedtypes.WaitingOnContributor {
+		t.Fatalf("item after approval = %#v, want waiting_on contributor", item)
 	}
 }
 

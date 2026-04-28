@@ -70,6 +70,7 @@ type Entry struct {
 	RepoID           string
 	Number           int
 	Kind             sharedtypes.ItemKind
+	Author           string
 	Unconfigured     bool
 	Title            string
 	URL              string
@@ -78,6 +79,7 @@ type Entry struct {
 	AgeLabel         string
 	SelectionMarker  string
 	ApprovalError    string
+	CurrentWaitingOn sharedtypes.WaitingOn
 
 	Options      []EntryOption
 	ActiveOption int
@@ -1400,21 +1402,56 @@ func renderActionSummary(entry Entry) string {
 }
 
 func renderStatusStrip(entry Entry) string {
-	parts := make([]string, 0, 3)
+	primary := make([]string, 0, 3)
+	if author := authorLabel(entry.Author); author != "" {
+		primary = append(primary, metaStyle().Render("by "+author))
+	}
 	if conf := strings.TrimSpace(string(entry.Confidence)); conf != "" {
-		parts = append(parts, confidenceStyle(entry.Confidence).Render(conf))
+		primary = append(primary, confidenceStyle(entry.Confidence).Render("confidence: "+conf))
 	}
-	if waiting := strings.TrimSpace(string(entry.WaitingOn)); waiting != "" && entry.WaitingOn != sharedtypes.WaitingOnNone {
-		parts = append(parts, metaStyle().Render("waiting on "+waiting))
+	secondary := make([]string, 0, 1)
+	currentWaitingOn := entry.CurrentWaitingOn
+	if currentWaitingOn == "" {
+		currentWaitingOn = entry.WaitingOn
 	}
-	if entry.TokensIn > 0 || entry.TokensOut > 0 {
-		parts = append(parts, metaStyle().Render(fmt.Sprintf("%s in / %s out", formatTokens(entry.TokensIn), formatTokens(entry.TokensOut))))
+	if waiting := waitingOnLabel(currentWaitingOn, entry.Author); waiting != "" {
+		secondary = append(secondary, metaStyle().Render("currently waiting on "+waiting))
 	}
-	if len(parts) == 0 {
+	if len(primary) == 0 && len(secondary) == 0 {
 		return ""
 	}
 	sep := metaStyle().Render(" · ")
-	return strings.Join(parts, sep)
+	if len(primary) == 0 {
+		return strings.Join(secondary, sep)
+	}
+	if len(secondary) == 0 {
+		return strings.Join(primary, sep)
+	}
+	return strings.Join(primary, sep) + "\n" + strings.Join(secondary, sep)
+}
+
+func authorLabel(author string) string {
+	author = strings.TrimSpace(author)
+	if author == "" {
+		return ""
+	}
+	return "@" + strings.TrimPrefix(author, "@")
+}
+
+func waitingOnLabel(waitingOn sharedtypes.WaitingOn, author string) string {
+	switch waitingOn {
+	case sharedtypes.WaitingOnContributor:
+		if label := authorLabel(author); label != "" {
+			return label + " (contributor)"
+		}
+		return "contributor"
+	case sharedtypes.WaitingOnMaintainer:
+		return "maintainer"
+	case sharedtypes.WaitingOnCI:
+		return "CI"
+	default:
+		return ""
+	}
 }
 
 // renderMetaFooter renders the URL on its own line below the body. Labels
@@ -1514,9 +1551,6 @@ func (m Model) renderCard(width, boxHeight int) string {
 // option - the queue position is communicated by the rail's cursor.
 func cardTitle(entry Entry) string {
 	parts := []string{entry.RepoID, entryNumberLabel(entry)}
-	if age := strings.TrimSpace(entry.AgeLabel); age != "" {
-		parts = append(parts, age)
-	}
 	if len(entry.Options) > 1 {
 		parts = append(parts, fmt.Sprintf("option %d/%d", entry.ActiveOption+1, len(entry.Options)))
 	}

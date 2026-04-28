@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -82,6 +83,13 @@ func TestRenderLaunchAgentEmbedsKeyFields(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("renderLaunchAgent output missing %q\n--- output ---\n%s", want, rendered)
 		}
+	}
+}
+
+func TestLaunchctlBootstrapBusyTreatsInputOutputErrorAsRetryable(t *testing.T) {
+	err := fmt.Errorf("/bin/launchctl bootstrap gui/501 /Users/test/Library/LaunchAgents/com.kunchenguid.ezoss.daemon.plist: exit status 5: Bootstrap failed: 5: Input/output error")
+	if !launchctlBootstrapBusy(err) {
+		t.Fatalf("launchctlBootstrapBusy(%v) = false, want true", err)
 	}
 }
 

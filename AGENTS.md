@@ -19,14 +19,14 @@ make lint               # go vet ./...
 make fmt                # go fmt ./...
 make fmt-check          # CI gate; fails if gofmt would change tracked files
 make dist               # cross-compile release archives + checksums into ./dist
-make install            # go install + (best-effort) install/restart the local daemon
+make install            # go install + install/restart the local daemon
 make demo               # vhs demo.tape (requires VHS)
 make docs-build         # npm ci + build the Astro docs site under ./docs
 ```
 
 CI runs `fmt-check`, `lint`, `test`, and `build` on Ubuntu, macOS, and Windows; installer smoke tests for shell and PowerShell; packaged archive smoke checks; release archive verification; and the docs build. `make fmt-check` is the same formatting gate, so run it locally before pushing.
 
-`make install` triggers `ezoss daemon install` and `ezoss daemon restart` after install. Set `EZOSS_SKIP_DAEMON=1` to skip those side effects.
+`make install` triggers `ezoss daemon install` and `ezoss daemon restart` after install; failures fail the target. Set `EZOSS_SKIP_DAEMON=1` to skip those side effects.
 
 ## Architecture
 

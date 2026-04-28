@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kunchenguid/ezoss/internal/config"
+	"github.com/kunchenguid/ezoss/internal/daemon"
 	"github.com/kunchenguid/ezoss/internal/paths"
 	"github.com/kunchenguid/ezoss/internal/telemetry"
 )
@@ -66,6 +67,115 @@ func TestDaemonStartCommandPrintsStarted(t *testing.T) {
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestDaemonStartCommandWaitsForManagedServiceReadiness(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalStartDaemon := startDaemon
+	originalStartDaemonService := startDaemonService
+	originalDaemonServiceInstalled := daemonServiceInstalled
+	originalReadDaemonStatus := readDaemonStatus
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		startDaemon = originalStartDaemon
+		startDaemonService = originalStartDaemonService
+		daemonServiceInstalled = originalDaemonServiceInstalled
+		readDaemonStatus = originalReadDaemonStatus
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{Repos: []string{"kunchenguid/ezoss"}}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+	daemonServiceInstalled = func(*paths.Paths) bool { return true }
+	startDaemonService = func(*paths.Paths) (bool, error) { return true, nil }
+	startDaemon = func(string, bool) error {
+		t.Fatal("startDaemon should not run when managed service handles start")
+		return nil
+	}
+	statusCalls := 0
+	readDaemonStatus = func(string) (daemon.Status, error) {
+		statusCalls++
+		if statusCalls == 1 {
+			return daemon.Status{State: daemon.StateStopped}, nil
+		}
+		return daemon.Status{State: daemon.StateRunning, PID: 123}, nil
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	cmd.SetArgs([]string{"daemon", "start"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if statusCalls < 2 {
+		t.Fatalf("readDaemonStatus calls = %d, want readiness polling", statusCalls)
+	}
+	if got := stdout.String(); got != "started\n" {
+		t.Fatalf("stdout = %q, want %q", got, "started\n")
+	}
+}
+
+func TestDaemonRestartCommandWaitsForManagedServiceReadiness(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalStopDaemon := stopDaemon
+	originalStartDaemon := startDaemon
+	originalRestartDaemonService := restartDaemonService
+	originalDaemonServiceInstalled := daemonServiceInstalled
+	originalReadDaemonStatus := readDaemonStatus
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		stopDaemon = originalStopDaemon
+		startDaemon = originalStartDaemon
+		restartDaemonService = originalRestartDaemonService
+		daemonServiceInstalled = originalDaemonServiceInstalled
+		readDaemonStatus = originalReadDaemonStatus
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	daemonServiceInstalled = func(*paths.Paths) bool { return true }
+	restartDaemonService = func(*paths.Paths) (bool, error) { return true, nil }
+	stopDaemon = func(string) error {
+		t.Fatal("stopDaemon should not run when managed service handles restart")
+		return nil
+	}
+	startDaemon = func(string, bool) error {
+		t.Fatal("startDaemon should not run when managed service handles restart")
+		return nil
+	}
+	statusCalls := 0
+	readDaemonStatus = func(string) (daemon.Status, error) {
+		statusCalls++
+		if statusCalls == 1 {
+			return daemon.Status{State: daemon.StateStopped}, nil
+		}
+		return daemon.Status{State: daemon.StateRunning, PID: 123}, nil
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	cmd.SetArgs([]string{"daemon", "restart"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if statusCalls < 2 {
+		t.Fatalf("readDaemonStatus calls = %d, want readiness polling", statusCalls)
+	}
+	if got := stdout.String(); got != "restarted\n" {
+		t.Fatalf("stdout = %q, want %q", got, "restarted\n")
 	}
 }
 
