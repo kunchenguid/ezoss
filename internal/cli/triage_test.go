@@ -148,8 +148,8 @@ func TestTriageCommandWithMockPersistsRecommendation(t *testing.T) {
 	if item.Kind != sharedtypes.ItemKindIssue {
 		t.Fatalf("item.Kind = %q, want %q", item.Kind, sharedtypes.ItemKindIssue)
 	}
-	if item.WaitingOn != sharedtypes.WaitingOnContributor {
-		t.Fatalf("item.WaitingOn = %q, want %q", item.WaitingOn, sharedtypes.WaitingOnContributor)
+	if item.WaitingOn != sharedtypes.WaitingOnNone {
+		t.Fatalf("item.WaitingOn = %q, want %q before approval", item.WaitingOn, sharedtypes.WaitingOnNone)
 	}
 
 	recommendations, err := database.ListActiveRecommendations()

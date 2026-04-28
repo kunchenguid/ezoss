@@ -54,6 +54,7 @@ func TestModelViewShowsInboxCountsAndDetails(t *testing.T) {
 			RepoID:         "acme/widgets",
 			Number:         42,
 			Kind:           sharedtypes.ItemKindIssue,
+			Author:         "alice",
 			Title:          "Bug: triage queue stalls",
 			StateChange:    sharedtypes.StateChangeNone,
 			ProposedLabels: []string{"bug", "needs-repro"},
@@ -82,15 +83,16 @@ func TestModelViewShowsInboxCountsAndDetails(t *testing.T) {
 	for _, want := range []string{
 		// Card title: repo · <kind-glyph> #N · age (no queue counter on
 		// single-option recommendations - the rail's cursor shows position).
-		"acme/widgets · ○ #42 · 2h",
+		"acme/widgets · ○ #42",
 		// Card body
 		"Bug: triage queue stalls",
+		"by @alice",
 		"The report is missing a repro",
 		"Thanks for the report. Can you share a repro?",
-		"waiting on contributor",
+		"confidence: medium",
+		"currently waiting on @alice (contributor)",
 		"Follow-ups:",
 		"- Check whether this regressed after the queue rewrite.",
-		"12.4k in / 1.1k out",
 		// Action summary describes what `a approve` will do.
 		"Will:",
 		"comment",
@@ -102,6 +104,12 @@ func TestModelViewShowsInboxCountsAndDetails(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q in:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "recommendation: 2h old") {
+		t.Fatalf("View() should not show recommendation age in card metadata:\n%s", view)
+	}
+	if strings.Contains(view, "12.4k in / 1.1k out") {
+		t.Fatalf("View() should not show token usage in card metadata:\n%s", view)
 	}
 }
 
@@ -136,6 +144,31 @@ func TestModelViewShowsSwitchOptionHintWhenMultipleOptions(t *testing.T) {
 	view := stripANSI(m.View())
 	if !strings.Contains(view, "tab switch option") {
 		t.Fatalf("View() with multiple options missing 'tab switch option' hint in:\n%s", view)
+	}
+}
+
+func TestModelViewKeepsCurrentWaitingOnWhenSwitchingOptions(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "Bug: triage queue stalls",
+		CurrentWaitingOn: sharedtypes.WaitingOnMaintainer,
+		Options: []EntryOption{
+			{ID: "opt-1", StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceHigh, WaitingOn: sharedtypes.WaitingOnContributor},
+			{ID: "opt-2", StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium, WaitingOn: sharedtypes.WaitingOnCI},
+		},
+	}})
+	m.entries[0].SyncActive()
+	m.width = 100
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	view := stripANSI(updated.(Model).View())
+	if !strings.Contains(view, "currently waiting on maintainer") {
+		t.Fatalf("View() should keep current waiting_on after switching options, got:\n%s", view)
+	}
+	if strings.Contains(view, "currently waiting on ci") {
+		t.Fatalf("View() should not render option waiting_on as current state, got:\n%s", view)
 	}
 }
 
@@ -246,7 +279,7 @@ func TestModelViewDoesNotStartDetailsPaneWithBlankLineWhenNoApprovalError(t *tes
 	}
 	stripped := stripANSI(details)
 	// New layout: status strip on first line, then blank, then rationale.
-	if !strings.HasPrefix(stripped, "medium\n\nRationale:\n  Need a minimal repro.") {
+	if !strings.HasPrefix(stripped, "confidence: medium\n\nRationale:\n  Need a minimal repro.") {
 		t.Fatalf("renderDetails() should start with status strip then rationale, got %q", stripped)
 	}
 }
@@ -1338,7 +1371,7 @@ func TestModelDetailsHidesNoneFields(t *testing.T) {
 	}
 }
 
-func TestModelDetailsStatusStripGroupsConfidenceWaitingOnTokens(t *testing.T) {
+func TestModelDetailsStatusStripGroupsConfidenceAndWaitingOn(t *testing.T) {
 	m := NewModel([]Entry{{
 		RepoID:       "acme/widgets",
 		Number:       42,
@@ -1356,10 +1389,33 @@ func TestModelDetailsStatusStripGroupsConfidenceWaitingOnTokens(t *testing.T) {
 
 	stripped := stripANSI(m.renderDetails())
 	firstLine := strings.SplitN(stripped, "\n", 2)[0]
-	for _, want := range []string{"high", "waiting on maintainer", "2.1k in / 4.2k out"} {
+	for _, want := range []string{"confidence: high"} {
 		if !strings.Contains(firstLine, want) {
 			t.Fatalf("status strip first line missing %q in %q (full:\n%s)", want, firstLine, stripped)
 		}
+	}
+	for _, want := range []string{"currently waiting on maintainer"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("status strip missing %q in:\n%s", want, stripped)
+		}
+	}
+	if strings.Contains(stripped, "2.1k in / 4.2k out") {
+		t.Fatalf("status strip should not show token usage:\n%s", stripped)
+	}
+}
+
+func TestCardTitleOmitsCardMetadata(t *testing.T) {
+	entry := Entry{
+		RepoID:   "acme/widgets",
+		Number:   42,
+		Kind:     sharedtypes.ItemKindIssue,
+		Author:   "alice",
+		AgeLabel: "2h",
+	}
+
+	got := stripANSI(cardTitle(entry))
+	if strings.Contains(got, "@alice") || strings.Contains(got, "2h") {
+		t.Fatalf("cardTitle() should keep contributor and age in card metadata, got %q", got)
 	}
 }
 
@@ -1383,7 +1439,7 @@ func TestModelDetailsConfidenceRendersWithLevelColor(t *testing.T) {
 			details := m.renderDetails()
 			// Look for ANSI escape that includes the foreground color code for this level.
 			// Format: \x1b[1;3<N>m where N is the ANSI color number.
-			marker := "\x1b[1;3" + c.colorCode + "m" + string(c.conf)
+			marker := "\x1b[1;3" + c.colorCode + "mconfidence: " + string(c.conf)
 			if !strings.Contains(details, marker) {
 				t.Fatalf("confidence %s should render with color %s. raw: %q", c.conf, c.colorCode, details)
 			}

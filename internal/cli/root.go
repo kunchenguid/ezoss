@@ -65,6 +65,8 @@ var restartDaemonService = daemon.RestartService
 var daemonServiceInstalled = daemon.ServiceInstalled
 var runDaemonWithOptions = daemon.RunWithOptions
 var installTimestampedLogPipe = daemon.InstallTimestampedLogPipe
+var daemonReadyTimeout = 5 * time.Second
+var daemonReadyPollInterval = 100 * time.Millisecond
 var newGitHubClient = func() itemFetcher {
 	return ghclient.New(nil)
 }
@@ -460,6 +462,9 @@ func newDaemonStartCmd() *cobra.Command {
 				if managed, err := startDaemonService(p); err != nil {
 					return fmt.Errorf("start daemon: %w", err)
 				} else if managed {
+					if err := waitForDaemonReady(p.PIDPath()); err != nil {
+						return fmt.Errorf("start daemon: %w", err)
+					}
 					telemetry.Track("command", telemetry.Fields{"command": "daemon_start", "entrypoint": "daemon.start"})
 					_, err = fmt.Fprintln(cmd.OutOrStdout(), "started")
 					return err
@@ -524,6 +529,9 @@ func newDaemonRestartCmd() *cobra.Command {
 				if managed, err := restartDaemonService(p); err != nil {
 					return fmt.Errorf("restart daemon: %w", err)
 				} else if managed {
+					if err := waitForDaemonReady(p.PIDPath()); err != nil {
+						return fmt.Errorf("restart daemon: %w", err)
+					}
 					telemetry.Track("command", telemetry.Fields{"command": "daemon_restart", "entrypoint": "daemon.restart"})
 					_, err = fmt.Fprintln(cmd.OutOrStdout(), "restarted")
 					return err
@@ -543,6 +551,30 @@ func newDaemonRestartCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&useMock, "mock", false, "Use canned GitHub items and recommendations")
 	return cmd
+}
+
+func waitForDaemonReady(pidFile string) error {
+	deadline := time.Now().Add(daemonReadyTimeout)
+	var lastState string
+	var lastErr error
+	for {
+		status, err := readDaemonStatus(pidFile)
+		if err == nil && status.State == daemon.StateRunning {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastState = status.State
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("daemon did not report running: %w", lastErr)
+			}
+			return fmt.Errorf("daemon did not report running: %s", lastState)
+		}
+		time.Sleep(daemonReadyPollInterval)
+	}
 }
 
 func newDaemonInstallCmd() *cobra.Command {
@@ -649,6 +681,7 @@ func loadInboxEntries() ([]tui.Entry, error) {
 			RepoID:           item.RepoID,
 			Number:           item.Number,
 			Kind:             item.Kind,
+			Author:           item.Author,
 			Unconfigured:     !isConfigured,
 			Title:            item.Title,
 			URL:              githubItemURL(item.RepoID, item.Kind, item.Number),
@@ -656,12 +689,10 @@ func loadInboxEntries() ([]tui.Entry, error) {
 			TokensOut:        totals.TokensOut,
 			AgeLabel:         recommendationAgeLabel(rec.CreatedAt),
 			ApprovalError:    latestApprovalError(database, rec.ID),
+			CurrentWaitingOn: item.WaitingOn,
 			Options:          buildEntryOptions(rec.Options),
 		}
 		entry.SyncActive()
-		// WaitingOn shown in the TUI reflects the item's current state -
-		// the option carries waiting_on for what *would* happen if approved.
-		entry.WaitingOn = item.WaitingOn
 		entries = append(entries, entry)
 	}
 	return entries, nil
@@ -956,7 +987,16 @@ func executeApproval(ctx context.Context, executor approvalExecutor, entry tui.E
 
 func approvalLabelEdits(entry tui.Entry, item *db.Item, sync config.SyncLabels) ([]string, []string) {
 	labels := append([]string(nil), entry.ProposedLabels...)
-	return managedLabelEdits(labels, item, sync)
+	return managedLabelEdits(labels, itemWithApprovedWaitingOn(item, entry), sync)
+}
+
+func itemWithApprovedWaitingOn(item *db.Item, entry tui.Entry) *db.Item {
+	if item == nil || entry.WaitingOn == "" {
+		return item
+	}
+	updated := *item
+	updated.WaitingOn = entry.WaitingOn
+	return &updated
 }
 
 func dismissLabelEdits(item *db.Item, sync config.SyncLabels) ([]string, []string) {
@@ -1141,16 +1181,17 @@ func loadInboxEntry(database *db.DB, repoID string, number int) (*tui.Entry, err
 			RepoID:           item.RepoID,
 			Number:           item.Number,
 			Kind:             item.Kind,
+			Author:           item.Author,
 			Title:            item.Title,
 			URL:              githubItemURL(item.RepoID, item.Kind, item.Number),
 			TokensIn:         totals.TokensIn,
 			TokensOut:        totals.TokensOut,
 			AgeLabel:         recommendationAgeLabel(rec.CreatedAt),
 			ApprovalError:    latestApprovalError(database, rec.ID),
+			CurrentWaitingOn: item.WaitingOn,
 			Options:          buildEntryOptions(rec.Options),
 		}
 		entry.SyncActive()
-		entry.WaitingOn = item.WaitingOn
 		return entry, nil
 	}
 	return nil, nil
@@ -1174,6 +1215,9 @@ func markInboxItemTriaged(database *db.DB, entry tui.Entry) error {
 		item.State = sharedtypes.ItemStateClosed
 	case sharedtypes.StateChangeMerge:
 		item.State = sharedtypes.ItemStateMerged
+	}
+	if entry.WaitingOn != "" {
+		item.WaitingOn = entry.WaitingOn
 	}
 	if err := database.UpsertItem(*item); err != nil {
 		return fmt.Errorf("update item %s: %w", item.ID, err)
