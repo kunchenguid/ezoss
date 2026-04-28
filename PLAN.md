@@ -100,7 +100,7 @@ Per-item local cache fields (just enough to render the TUI without hammering Git
 | `kind`          | `issue` \| `pr`                                            |
 | `is_draft`      | true for draft PRs / WIP-titled PRs - skipped from triage  |
 | `gh_triaged`    | bool, mirror of `ezoss/triaged` label on GitHub    |
-| `waiting_on`    | `maintainer` \| `contributor` \| `ci` \| `none` (inferred) |
+| `waiting_on`    | `maintainer` \| `contributor` \| `ci` \| `none` (current state) |
 | `last_event_at` | timestamp of latest GH event we've seen                    |
 | `stale_since`   | when the item crossed the stale threshold, if applicable   |
 
@@ -179,7 +179,7 @@ CREATE TABLE approvals (
 );
 ```
 
-Recommendations are immutable and superseded when re-triage runs. Full history is preserved. Token counts on the recommendations table roll up for per-item cost display in the TUI.
+Recommendations are immutable and superseded when re-triage runs. Full history is preserved. Token counts on the recommendations table are stored locally for accounting and history.
 
 ## GitHub integration
 

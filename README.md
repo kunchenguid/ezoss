@@ -216,7 +216,7 @@ make build      # Build ./bin/ezoss
 make demo       # Regenerate demo.gif with VHS and ffmpeg
 make dist       # Cross-compile release archives into ./dist
 make docs-build # Install docs deps and build ./docs
-make install    # go install + daemon install/restart
+make install    # go install + daemon install/restart; fails on daemon errors unless EZOSS_SKIP_DAEMON=1
 make test       # Run Go tests
 make lint       # Run go vet
 make fmt        # Format Go code
