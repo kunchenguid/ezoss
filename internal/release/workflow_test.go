@@ -1311,6 +1311,7 @@ func TestREADMECLIReferenceMatchesCurrentCommandSurface(t *testing.T) {
 }
 
 func normalizeMarkdownTableRows(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		if !strings.HasPrefix(line, "|") || !strings.HasSuffix(line, "|") {
