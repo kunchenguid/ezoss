@@ -34,12 +34,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Set up Node.js
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
       - name: Check formatting
         run: make fmt-check
 
@@ -119,10 +113,6 @@ jobs:
           printf '%s\n' "$version_output" | grep "$version"
           kill "$server_pid"
           trap - EXIT
-
-      - name: Build docs
-        if: matrix.os == 'ubuntu-latest'
-        run: make docs-build
 
   windows-build:
     runs-on: windows-latest
@@ -343,17 +333,3 @@ jobs:
           version_output=$(./dist/smoke-ci/ezoss-test-ci-linux-amd64/ezoss --version)
           printf '%s\n' "$version_output"
           printf '%s\n' "$version_output" | grep "test-ci"
-
-  docs:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Build docs site
-        run: make docs-build

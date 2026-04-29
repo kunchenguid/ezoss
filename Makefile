@@ -15,7 +15,7 @@ LDFLAGS := -X github.com/kunchenguid/ezoss/internal/buildinfo.Version=$(VERSION)
            -X github.com/kunchenguid/ezoss/internal/buildinfo.TelemetryWebsiteID=$(UMAMI_WEBSITE_ID)
 PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 
-.PHONY: build dist demo docs-build install test lint fmt fmt-check
+.PHONY: build dist demo install test lint fmt fmt-check
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o ./bin/$(HOST_BINARY) $(CMD_DIR)
@@ -60,10 +60,6 @@ demo: build
 	  "[0:v]setpts=PTS/1.6,fps=18,scale=1100:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle" \
 	  demo.gif
 	rm -f demo_raw.gif
-
-docs-build:
-	npm --prefix ./docs ci
-	npm --prefix ./docs run build
 
 install: build
 	$(GO) install -ldflags "$(LDFLAGS)" $(CMD_DIR)

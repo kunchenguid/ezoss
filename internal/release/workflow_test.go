@@ -285,7 +285,7 @@ func TestReleaseWorkflowRunsGoValidationBeforePublishingAssets(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowRunsDocsBuildBeforePublishingAssets(t *testing.T) {
+func TestReleaseWorkflowDoesNotBuildDocsSiteBeforePublishingAssets(t *testing.T) {
 	workflowPath := filepath.Join("..", "..", ".github", "workflows", "release.yml")
 	data, err := os.ReadFile(workflowPath)
 	if err != nil {
@@ -293,16 +293,16 @@ func TestReleaseWorkflowRunsDocsBuildBeforePublishingAssets(t *testing.T) {
 	}
 
 	text := string(data)
-	checks := []string{
+	forbidden := []string{
 		"- name: Set up Node.js",
 		"uses: actions/setup-node@v4",
 		"node-version: 20",
 		"- name: Run docs validation",
 		"run: make docs-build",
 	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("release workflow missing %q:\n%s", want, text)
+	for _, value := range forbidden {
+		if strings.Contains(text, value) {
+			t.Fatalf("release workflow should not contain docs site build step %q:\n%s", value, text)
 		}
 	}
 }
@@ -498,111 +498,14 @@ func TestReleasePleaseManifestKeepsRootPackageVersion(t *testing.T) {
 	}
 }
 
-func TestDocsAstroConfigSetsGitHubPagesBasePath(t *testing.T) {
-	configPath := filepath.Join("..", "..", "docs", "astro.config.mjs")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", configPath, err)
-	}
-
-	text := string(data)
-	if !strings.Contains(text, "site: 'https://kunchenguid.github.io/ezoss'") {
-		t.Fatalf("docs astro config does not declare the published site URL:\n%s", text)
-	}
-	if !strings.Contains(text, "base: '/ezoss'") {
-		t.Fatalf("docs astro config does not set the GitHub Pages base path:\n%s", text)
-	}
-}
-
-func TestDocsWorkflowBuildsAndDeploysGitHubPages(t *testing.T) {
-	workflowPath := filepath.Join("..", "..", ".github", "workflows", "docs.yml")
-	data, err := os.ReadFile(workflowPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"pages: write",
-		"id-token: write",
-		"uses: actions/configure-pages@v5",
-		"run: make docs-build",
-		"uses: actions/upload-pages-artifact@v3",
-		"path: docs/dist",
-		"uses: actions/deploy-pages@v4",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs workflow missing %q:\n%s", want, text)
+func TestDocsSiteAndPagesWorkflowAreRemoved(t *testing.T) {
+	for _, path := range []string{
+		filepath.Join("..", "..", "docs"),
+		filepath.Join("..", "..", ".github", "workflows", "docs.yml"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %q to be removed, stat error = %v", path, err)
 		}
-	}
-}
-
-func TestDocsWorkflowKeepsExpectedPublishTriggerAndConcurrency(t *testing.T) {
-	workflowPath := filepath.Join("..", "..", ".github", "workflows", "docs.yml")
-	data, err := os.ReadFile(workflowPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"push:",
-		"branches:",
-		"- main",
-		"paths:",
-		"- docs/**",
-		"- .github/workflows/docs.yml",
-		"- Makefile",
-		"workflow_dispatch:",
-		"concurrency:",
-		"group: docs",
-		"cancel-in-progress: true",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs workflow missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestDocsWorkflowUsesLeastPrivilegeJobPermissions(t *testing.T) {
-	workflowPath := filepath.Join("..", "..", ".github", "workflows", "docs.yml")
-	data, err := os.ReadFile(workflowPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
-	}
-
-	text := string(data)
-	if strings.Contains(text, "permissions:\n  contents: read\n  pages: write\n  id-token: write") {
-		t.Fatalf("docs workflow should not grant deploy permissions workflow-wide:\n%s", text)
-	}
-
-	checks := []string{
-		"build:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read",
-		"deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    permissions:\n      pages: write\n      id-token: write",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs workflow missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestDocsWorkflowScopesGitHubPagesEnvironmentToDeployOnly(t *testing.T) {
-	workflowPath := filepath.Join("..", "..", ".github", "workflows", "docs.yml")
-	data, err := os.ReadFile(workflowPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
-	}
-
-	text := string(data)
-	if strings.Contains(text, "build:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    environment:\n      name: github-pages") {
-		t.Fatalf("docs workflow should not attach the github-pages environment to the build job:\n%s", text)
-	}
-
-	if !strings.Contains(text, "deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    permissions:\n      pages: write\n      id-token: write\n    environment:\n      name: github-pages") {
-		t.Fatalf("docs workflow should keep the github-pages environment on the deploy job:\n%s", text)
 	}
 }
 
@@ -622,12 +525,21 @@ func TestCIWorkflowCoversCrossPlatformValidationAndReleaseBuilds(t *testing.T) {
 		"run: make test",
 		"run: make build",
 		"run: make dist VERSION=test-ci",
-		"uses: actions/setup-node@v4",
-		"run: make docs-build",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
 			t.Fatalf("ci workflow missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{
+		"uses: actions/setup-node@v4",
+		"node-version: 20",
+		"run: make docs-build",
+		"Build docs",
+		"docs:",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("ci workflow should not contain docs site validation %q:\n%s", forbidden, text)
 		}
 	}
 }
@@ -947,7 +859,7 @@ func TestCIWorkflowUnixInstallerSmokeCheckSupportsChecksumFallback(t *testing.T)
 	}
 }
 
-func TestCIWorkflowBuildsDocsOnUbuntu(t *testing.T) {
+func TestCIWorkflowDoesNotBuildDocsSite(t *testing.T) {
 	workflowPath := filepath.Join("..", "..", ".github", "workflows", "ci.yml")
 	data, err := os.ReadFile(workflowPath)
 	if err != nil {
@@ -955,17 +867,16 @@ func TestCIWorkflowBuildsDocsOnUbuntu(t *testing.T) {
 	}
 
 	text := string(data)
-	checks := []string{
+	forbidden := []string{
 		"- name: Set up Node.js",
 		"uses: actions/setup-node@v4",
-		"if: matrix.os == 'ubuntu-latest'",
 		"node-version: 20",
 		"- name: Build docs",
 		"run: make docs-build",
 	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("ci workflow missing %q:\n%s", want, text)
+	for _, value := range forbidden {
+		if strings.Contains(text, value) {
+			t.Fatalf("ci workflow should not contain docs site build step %q:\n%s", value, text)
 		}
 	}
 }
@@ -1128,7 +1039,7 @@ func TestCIWorkflowExecutesExtractedReleaseBinary(t *testing.T) {
 	}
 }
 
-func TestGitIgnoreKeepsGeneratedReleaseAndDocsArtifactsOutOfGit(t *testing.T) {
+func TestGitIgnoreKeepsGeneratedReleaseArtifactsOutOfGit(t *testing.T) {
 	gitignorePath := filepath.Join("..", "..", ".gitignore")
 	data, err := os.ReadFile(gitignorePath)
 	if err != nil {
@@ -1139,14 +1050,14 @@ func TestGitIgnoreKeepsGeneratedReleaseAndDocsArtifactsOutOfGit(t *testing.T) {
 	checks := []string{
 		"/bin/",
 		"/dist/",
-		"/docs/.astro/",
-		"/docs/node_modules/",
-		"/docs/dist/",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
 			t.Fatalf(".gitignore missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "/docs/") {
+		t.Fatalf(".gitignore should not keep docs site artifact ignores after docs removal:\n%s", text)
 	}
 }
 
@@ -1212,7 +1123,7 @@ func TestREADMEHeroMatchesCurrentReleaseMessaging(t *testing.T) {
 	}
 }
 
-func TestREADMEExposesPublishedDocsLink(t *testing.T) {
+func TestREADMEDoesNotLinkToPublishedDocsSite(t *testing.T) {
 	readmePath := filepath.Join("..", "..", "README.md")
 	data, err := os.ReadFile(readmePath)
 	if err != nil {
@@ -1220,14 +1131,14 @@ func TestREADMEExposesPublishedDocsLink(t *testing.T) {
 	}
 
 	text := string(data)
-	checks := []string{
+	forbidden := []string{
 		"href=\"https://kunchenguid.github.io/ezoss/\"",
 		"alt=\"Docs\"",
 		"Docs: https://kunchenguid.github.io/ezoss/",
 	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("README docs link missing %q:\n%s", want, text)
+	for _, value := range forbidden {
+		if strings.Contains(text, value) {
+			t.Fatalf("README should not link to removed docs site %q:\n%s", value, text)
 		}
 	}
 }
@@ -1251,13 +1162,14 @@ func TestREADMEBadgesKeepCurrentReleaseDiscoveryLinks(t *testing.T) {
 		"alt=\"X\"",
 		"href=\"https://discord.gg/Wsy2NpnZDu\"",
 		"alt=\"Discord\"",
-		"href=\"https://kunchenguid.github.io/ezoss/\"",
-		"alt=\"Docs\"",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
 			t.Fatalf("README badge row missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "docs-GitHub") || strings.Contains(text, "alt=\"Docs\"") {
+		t.Fatalf("README badge row should not include a docs badge after docs site removal:\n%s", text)
 	}
 }
 
@@ -1270,7 +1182,7 @@ func TestDemoTapeAndMakefileMatchShippedDemoFlow(t *testing.T) {
 
 	makefileText := string(makefileData)
 	for _, want := range []string{
-		".PHONY: build dist demo docs-build install test lint fmt fmt-check",
+		".PHONY: build dist demo install test lint fmt fmt-check",
 		"demo: build",
 		"vhs demo.tape",
 		"ffmpeg -y -i demo_raw.gif",
@@ -1280,6 +1192,9 @@ func TestDemoTapeAndMakefileMatchShippedDemoFlow(t *testing.T) {
 		if !strings.Contains(makefileText, want) {
 			t.Fatalf("Makefile demo flow missing %q:\n%s", want, makefileText)
 		}
+	}
+	if strings.Contains(makefileText, "docs-build") {
+		t.Fatalf("Makefile should not keep docs-build target after docs site removal:\n%s", makefileText)
 	}
 
 	tapePath := filepath.Join("..", "..", "demo.tape")
@@ -1441,81 +1356,28 @@ func TestREADMEHowItWorksSectionMatchesCurrentMaintainerFirstFlow(t *testing.T) 
 	}
 }
 
-func TestDocsQuickStartUsesSingleInitCommand(t *testing.T) {
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	data, err := os.ReadFile(docsPath)
+func TestREADMEInboxActionsAndRequirementsCoverShippedWorkflow(t *testing.T) {
+	readmePath := filepath.Join("..", "..", "README.md")
+	data, err := os.ReadFile(readmePath)
 	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
+		t.Fatalf("ReadFile(%q) error = %v", readmePath, err)
 	}
 
-	text := string(data)
+	text := normalizeMarkdownTableRows(string(data))
 	checks := []string{
-		"ezoss init --repo kunchenguid/ezoss --agent auto --merge-method squash",
-		"$ ezoss daemon start --mock",
-		"$ ezoss status",
-		"$ ezoss list",
-		"$ ezoss",
+		"Live triage requires `gh auth login`, `git`, one supported agent backend, and a writable state directory under `~/.ezoss`.",
+		"Copying fix prompts from the inbox also needs a platform clipboard command",
+		"## Inbox Actions",
+		"| `a` | Approve | Execute the selected GitHub action and sync triage labels |",
+		"| `c` | Copy prompt | Copy the active option's coding-agent fix prompt when one exists |",
+		"| `e` | Edit | Open the draft in your editor before approval |",
+		"| `m` | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation |",
+		"| `r` | Rerun | Re-triage the item and replace the active recommendation |",
+		"| `j`/`k` | Navigate | Move between inbox items; use arrow keys to scroll overflowing text |",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
-			t.Fatalf("docs quick start missing %q:\n%s", want, text)
-		}
-	}
-
-	if strings.Contains(text, "$ ezoss daemon start\n") {
-		t.Fatalf("docs quick start should use mock mode for the daemon walkthrough:\n%s", text)
-	}
-
-	if strings.Contains(text, "$ ezoss init --merge-method squash") {
-		t.Fatalf("docs quick start still contains a second standalone init command:\n%s", text)
-	}
-}
-
-func TestDocsHeroMatchesCurrentReleaseMessaging(t *testing.T) {
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	data, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"<p class=\"eyebrow\">ezoss docs</p>",
-		"Run your open source inbox like a review queue, not a background tax.",
-		"polls GitHub for untriaged issues and PRs",
-		"approve, copy fix prompts, edit, mark triaged, or rerun from a terminal inbox before anything touches GitHub.",
-		"<a class=\"button primary\" href=\"https://github.com/kunchenguid/ezoss\">View on GitHub</a>",
-		"<a class=\"button secondary\" href=\"#install\">Install</a>",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs hero section missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestDocsInstallSectionMatchesReleaseInstallPaths(t *testing.T) {
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	data, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"href=\"#install\"",
-		"<section id=\"install\" class=\"section\">",
-		"<h2>Install</h2>",
-		"go install github.com/kunchenguid/ezoss/cmd/ezoss@latest",
-		"curl -fsSL https://raw.githubusercontent.com/kunchenguid/ezoss/main/install.sh | sh",
-		"iwr https://raw.githubusercontent.com/kunchenguid/ezoss/main/install.ps1 -useb | iex",
-		"git clone https://github.com/kunchenguid/ezoss.git",
-		"make build",
-		"./bin/ezoss --version",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs install section missing %q:\n%s", want, text)
+			t.Fatalf("README inbox workflow section missing %q:\n%s", want, text)
 		}
 	}
 }
@@ -1536,163 +1398,9 @@ func TestReleaseInstallDocsMentionManualAssetVerification(t *testing.T) {
 			t.Fatalf("README install section missing %q:\n%s", want, readmeText)
 		}
 	}
-
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	docsData, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	docsText := string(docsData)
-	for _, want := range []string{
-		"checksums.txt",
-		"GitHub releases",
-		"SHA-256",
-	} {
-		if !strings.Contains(docsText, want) {
-			t.Fatalf("docs install section missing %q:\n%s", want, docsText)
-		}
-	}
 }
 
-func TestDocsFooterLinksToLicenseAndSourceRepo(t *testing.T) {
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	data, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"<footer>",
-		"href=\"https://github.com/kunchenguid/ezoss/blob/main/LICENSE\"",
-		">MIT licensed</a>",
-		"href=\"https://github.com/kunchenguid/ezoss\"",
-		"source",
-		"repo</a>",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs footer missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestDocsConfigurationExampleMatchesCurrentConfigSurface(t *testing.T) {
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	data, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"const configExample = `agent: auto",
-		"merge_method: merge",
-		"sync_labels:",
-		"waiting_on: true",
-		"stale: true`",
-		"Per-repo overrides can",
-		"live in <code>.ezoss.yaml</code>",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs configuration section missing %q:\n%s", want, text)
-		}
-	}
-	if strings.Contains(text, "triaged: true") {
-		t.Fatalf("docs configuration section should not advertise sync_labels.triaged as configurable:\n%s", text)
-	}
-}
-
-func TestDocsImportantCommandsMatchCurrentPublicCLI(t *testing.T) {
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	data, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"<h2>Important commands</h2>",
-		"<h3><code>ezoss doctor</code></h3>",
-		"Check GitHub auth, agent availability, daemon health, and local database access.",
-		"<h3><code>ezoss status</code></h3>",
-		"Open the realtime status TUI, or use <code>--short</code> for one-line script output.",
-		"<h3><code>ezoss list</code></h3>",
-		"Dump pending recommendations as text without opening the TUI.",
-		"<h3><code>ezoss update</code></h3>",
-		"Download and replace the running binary with the latest release for the current platform.",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs important commands missing %q:\n%s", want, text)
-		}
-	}
-	if strings.Contains(text, "ezoss daemon run") {
-		t.Fatalf("docs page should not expose the hidden daemon run command:\n%s", text)
-	}
-}
-
-func TestDocsCoreLoopAndRequirementsMatchCurrentReleaseContract(t *testing.T) {
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	data, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"<h2>Core loop</h2>",
-		"GitHub stays the visible source of truth",
-		"local SQLite database keeps draft comments, fix prompts, agent rationale, and token usage",
-		"<h3>1. Poll GitHub</h3>",
-		"Fetch issues and PRs missing the <code>ezoss/triaged</code> label.",
-		"<h3>2. Prepare checkout and ask your agent</h3>",
-		"Clone or refresh the managed checkout in <code>~/.ezoss/investigations</code>, discard scratch edits from prior runs, then run Claude, Codex, Rovo Dev, or OpenCode there for a structured recommendation.",
-		"<h3>3. Review privately</h3>",
-		"Approve, copy fix prompts, edit, mark triaged, or rerun from the local TUI inbox without exposing drafts.",
-		"<h3>4. Sync the outcome</h3>",
-		"Approved actions execute with <code>gh</code> and mirror triage labels back to GitHub.",
-		"<h2>Requirements</h2>",
-		"<li><code>gh auth login</code> already configured for the GitHub account you want to use.</li>",
-		"<li>One supported agent backend installed locally.</li>",
-		"<li>Writable state directory under <code>~/.ezoss</code>, including checkout storage in <code>~/.ezoss/investigations</code>.</li>",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs core loop or requirements missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestDocsInboxActionsMatchCurrentTUIWorkflow(t *testing.T) {
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	data, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	text := string(data)
-	checks := []string{
-		"<h2>What the inbox can do</h2>",
-		"<strong><code>a</code> approve</strong>",
-		"Execute the recommended GitHub action and sync triage labels.",
-		"<strong><code>e</code> edit</strong>",
-		"Open the draft in your editor before approval.",
-		"<strong><code>m</code> mark triaged</strong>",
-		"Stamp the GitHub triaged label without approving the recommendation.",
-		"<strong><code>r</code> rerun</strong>",
-		"Re-triage the item and replace the active recommendation in place.",
-	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("docs inbox actions missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestReleaseDocsAndREADMEDescribePRApprovalBeforeReview(t *testing.T) {
+func TestREADMEDescribesPRApprovalBeforeReview(t *testing.T) {
 	readmePath := filepath.Join("..", "..", "README.md")
 	readmeData, err := os.ReadFile(readmePath)
 	if err != nil {
@@ -1706,22 +1414,6 @@ func TestReleaseDocsAndREADMEDescribePRApprovalBeforeReview(t *testing.T) {
 	} {
 		if !strings.Contains(readmeText, want) {
 			t.Fatalf("README missing PR approval-before-review guidance %q:\n%s", want, readmeText)
-		}
-	}
-
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	docsData, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	docsText := string(docsData)
-	for _, want := range []string{
-		"PRs without prior agreement can pause for maintainer approval before any code review happens.",
-		"The agent can surface that as <code>state_change: none</code> with a draft question so you decide",
-	} {
-		if !strings.Contains(docsText, want) {
-			t.Fatalf("docs missing PR approval-before-review guidance %q:\n%s", want, docsText)
 		}
 	}
 }
@@ -1738,7 +1430,6 @@ func TestREADMEDevelopmentSectionMatchesSupportedLocalWorkflows(t *testing.T) {
 		"## Development",
 		"make build      # Build ./bin/ezoss",
 		"make dist       # Cross-compile release archives into ./dist",
-		"make docs-build # Install docs deps and build ./docs",
 		"make install    # go install + daemon install/restart; fails on daemon errors unless EZOSS_SKIP_DAEMON=1",
 		"make test       # Run Go tests",
 		"make lint       # Run go vet",
@@ -1750,9 +1441,12 @@ func TestREADMEDevelopmentSectionMatchesSupportedLocalWorkflows(t *testing.T) {
 			t.Fatalf("README development section missing %q:\n%s", want, text)
 		}
 	}
+	if strings.Contains(text, "docs-build") || strings.Contains(text, "./docs") {
+		t.Fatalf("README development section should not mention removed docs site workflows:\n%s", text)
+	}
 }
 
-func TestReleaseDocsAndREADMEExposeMITLicense(t *testing.T) {
+func TestREADMEExposesMITLicense(t *testing.T) {
 	readmePath := filepath.Join("..", "..", "README.md")
 	readmeData, err := os.ReadFile(readmePath)
 	if err != nil {
@@ -1768,17 +1462,6 @@ func TestReleaseDocsAndREADMEExposeMITLicense(t *testing.T) {
 		if !strings.Contains(readmeText, want) {
 			t.Fatalf("README license section missing %q:\n%s", want, readmeText)
 		}
-	}
-
-	docsPath := filepath.Join("..", "..", "docs", "src", "pages", "index.astro")
-	docsData, err := os.ReadFile(docsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", docsPath, err)
-	}
-
-	docsText := string(docsData)
-	if !strings.Contains(docsText, ">MIT licensed</a>") || !strings.Contains(docsText, "source") || !strings.Contains(docsText, "repo</a>") {
-		t.Fatalf("docs footer missing MIT license statement:\n%s", docsText)
 	}
 }
 
