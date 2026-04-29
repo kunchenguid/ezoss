@@ -26,11 +26,6 @@
       alt="Discord"
       src="https://img.shields.io/discord/1439901831038763092?style=flat-square&label=discord"
   /></a>
-  <a href="https://kunchenguid.github.io/ezoss/"
-    ><img
-      alt="Docs"
-      src="https://img.shields.io/badge/docs-GitHub%20Pages-6e56cf?style=flat-square"
-  /></a>
 </p>
 
 <h3 align="center">Turn your issue queue into a reviewable inbox instead of a background tax.</h3>
@@ -44,8 +39,6 @@ You stay in control. The agent drafts. The maintainer decides.
 <p align="center">
   <img src="https://raw.githubusercontent.com/kunchenguid/ezoss/main/demo.gif" alt="ezoss demo" width="800" />
 </p>
-
-Docs: https://kunchenguid.github.io/ezoss/
 
 - **Private by default** - agent rationale, draft comments, fix prompts, and token usage stay in local SQLite until you approve an action.
 - **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.
@@ -73,12 +66,6 @@ $ ezoss
 
 ## Install
 
-**Go install**
-
-```sh
-go install github.com/kunchenguid/ezoss/cmd/ezoss@latest
-```
-
 **macOS / Linux installer**
 
 ```sh
@@ -89,6 +76,12 @@ curl -fsSL https://raw.githubusercontent.com/kunchenguid/ezoss/main/install.sh |
 
 ```powershell
 iwr https://raw.githubusercontent.com/kunchenguid/ezoss/main/install.ps1 -useb | iex
+```
+
+**Go install**
+
+```sh
+go install github.com/kunchenguid/ezoss/cmd/ezoss@latest
 ```
 
 **From source**
@@ -102,7 +95,9 @@ make build
 
 Every GitHub release also includes platform archives plus `checksums.txt` if you prefer a manual download and verification path.
 
-Live triage requires `gh`, `git`, and one supported agent backend available locally. Copying fix prompts from the inbox also needs a platform clipboard command: `pbcopy` on macOS, `clip` on Windows, or `wl-copy`, `xclip`, or `xsel` on Linux.
+Live triage requires `gh auth login`, `git`, one supported agent backend, and a writable state directory under `~/.ezoss`.
+
+Copying fix prompts from the inbox also needs a platform clipboard command: `pbcopy` on macOS, `clip` on Windows, or `wl-copy`, `xclip`, or `xsel` on Linux.
 
 ## How It Works
 
@@ -147,34 +142,45 @@ Live triage requires `gh`, `git`, and one supported agent backend available loca
 - **Approval is explicit** - nothing gets posted, closed, merged, or labeled until you do it from the inbox.
 - **PR review is gated when needed** - unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.
 
+## Inbox Actions
+
+| Key     | Action       | Description                                                        |
+| ------- | ------------ | ------------------------------------------------------------------ |
+| `a`     | Approve      | Execute the selected GitHub action and sync triage labels          |
+| `c`     | Copy prompt  | Copy the active option's coding-agent fix prompt when one exists   |
+| `e`     | Edit         | Open the draft in your editor before approval                      |
+| `m`     | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation         |
+| `r`     | Rerun        | Re-triage the item and replace the active recommendation           |
+| `j`/`k` | Navigate     | Move between inbox items; use arrow keys to scroll overflowing text |
+
 ## CLI Reference
 
-| Command | Description |
-| --- | --- |
-| `ezoss` | Open the inbox TUI from the local recommendations database |
-| `ezoss doctor` | Check local prerequisites including `gh`, agent availability, daemon state, and SQLite access |
-| `ezoss init` | Create or update `~/.ezoss/config.yaml` |
-| `ezoss status` | Open the realtime status TUI; in non-interactive output, print rich text status |
-| `ezoss status --short` | Print a one-line summary of pending recommendations and configured repos |
-| `ezoss list` | Print pending recommendations in a text format |
-| `ezoss triage <repo>#<number>` | Manually triage one issue or PR |
-| `ezoss update` | Download and install the latest released binary for the current platform |
-| `ezoss daemon start` | Start the background poller |
-| `ezoss daemon stop` | Stop the background poller |
-| `ezoss daemon status` | Show whether the daemon is running |
+| Command                        | Description                                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------------- |
+| `ezoss`                        | Open the inbox TUI from the local recommendations database                                    |
+| `ezoss doctor`                 | Check local prerequisites including `gh`, agent availability, daemon state, and SQLite access |
+| `ezoss init`                   | Create or update `~/.ezoss/config.yaml`                                                       |
+| `ezoss status`                 | Open the realtime status TUI; in non-interactive output, print rich text status               |
+| `ezoss status --short`         | Print a one-line summary of pending recommendations and configured repos                      |
+| `ezoss list`                   | Print pending recommendations in a text format                                                |
+| `ezoss triage <repo>#<number>` | Manually triage one issue or PR                                                               |
+| `ezoss update`                 | Download and install the latest released binary for the current platform                      |
+| `ezoss daemon start`           | Start the background poller                                                                   |
+| `ezoss daemon stop`            | Stop the background poller                                                                    |
+| `ezoss daemon status`          | Show whether the daemon is running                                                            |
 
 ### Flags
 
-| Command | Flag | Description |
-| --- | --- | --- |
-| `daemon start` | `--mock` | Use canned GitHub items and recommendations |
-| `status` | `--short` | Print a one-line key=value summary |
-| `triage <repo>#<number>` | `--mock` | Triage against canned fixtures instead of live GitHub + agent backends |
-| `init` | `--repo` | Repository to monitor, repeatable |
-| `init` | `--agent` | Agent backend: `auto`, `claude`, `codex`, `rovodev`, `opencode` |
-| `init` | `--merge-method` | Default PR merge method: `merge`, `squash`, or `rebase` |
-| `init` | `--poll-interval` | Poll cadence as a duration like `5m` |
-| `init` | `--stale-threshold` | Stale threshold as a duration like `30d` or `720h` |
+| Command                  | Flag                | Description                                                            |
+| ------------------------ | ------------------- | ---------------------------------------------------------------------- |
+| `daemon start`           | `--mock`            | Use canned GitHub items and recommendations                            |
+| `status`                 | `--short`           | Print a one-line key=value summary                                     |
+| `triage <repo>#<number>` | `--mock`            | Triage against canned fixtures instead of live GitHub + agent backends |
+| `init`                   | `--repo`            | Repository to monitor, repeatable                                      |
+| `init`                   | `--agent`           | Agent backend: `auto`, `claude`, `codex`, `rovodev`, `opencode`        |
+| `init`                   | `--merge-method`    | Default PR merge method: `merge`, `squash`, or `rebase`                |
+| `init`                   | `--poll-interval`   | Poll cadence as a duration like `5m`                                   |
+| `init`                   | `--stale-threshold` | Stale threshold as a duration like `30d` or `720h`                     |
 
 ## Configuration
 
@@ -215,7 +221,6 @@ Daemon logs are written to `~/.ezoss/logs/daemon.log`. Set `EZOSS_LOG_LEVEL` to 
 make build      # Build ./bin/ezoss
 make demo       # Regenerate demo.gif with VHS and ffmpeg
 make dist       # Cross-compile release archives into ./dist
-make docs-build # Install docs deps and build ./docs
 make install    # go install + daemon install/restart; fails on daemon errors unless EZOSS_SKIP_DAEMON=1
 make test       # Run Go tests
 make lint       # Run go vet

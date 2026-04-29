@@ -180,19 +180,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
       - name: Run Go validation
         run: |
           make fmt-check
           make lint
           make test
-
-      - name: Run docs validation
-        run: make docs-build
 
       - name: Build CLI for installer smoke check
         run: go build -ldflags "-X github.com/kunchenguid/ezoss/internal/buildinfo.Version=${{ needs.release-please.outputs.tag_name }}" -o ./bin/ezoss ./cmd/ezoss
