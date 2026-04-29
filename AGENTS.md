@@ -4,7 +4,7 @@ This file provides shared guidance for coding agents working in this repository.
 
 ## Project
 
-`ezoss` is a single-user, maintainer-side orchestrator written in Go. A background daemon polls configured GitHub repos, runs a coding agent (`claude`, `codex`, `rovodev`, or `opencode`) against any issue or PR that does not yet carry the `ezoss/triaged` label, stores a structured recommendation in a local SQLite cache, and surfaces drafts in a Bubble Tea TUI inbox where the maintainer approves, edits, skips, or reruns. Nothing is posted to GitHub until the maintainer approves an action; the daemon then stamps `ezoss/triaged`.
+`ezoss` is a single-user, maintainer-side orchestrator written in Go. A background daemon polls configured GitHub repos, runs a coding agent (`claude`, `codex`, `rovodev`, or `opencode`) against any issue or PR that does not yet carry the `ezoss/triaged` label, stores a structured recommendation in a local SQLite cache, and surfaces drafts in a Bubble Tea TUI inbox where the maintainer approves, edits, marks triaged, or reruns. Nothing is posted to GitHub until the maintainer approves an action; the daemon then stamps `ezoss/triaged`.
 
 `PLAN.md` is the long-form design doc. `README.md` is the user-facing surface.
 

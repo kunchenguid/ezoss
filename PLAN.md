@@ -62,7 +62,7 @@ Follows `DESIGN.md` primitives. Rough sketch:
 │           Question about install on Windows                           │
 │           → answer + close as resolved                                │
 ╰───────────────────────────────────────────────────────────────────────╯
- a approve  c copy prompt  e edit  s skip  r rerun  d details │ ␣ toggle
+ a approve  c copy prompt  e edit  m mark triaged  r rerun  ? more
 ╭─ Details ─────────────────────────────────────────────────────────────╮
 │  Rationale: the error trace in the body matches a known race in ...   │
 │  Draft response:                                                      │
@@ -76,7 +76,7 @@ Follows `DESIGN.md` primitives. Rough sketch:
  q quit  ? help
 ```
 
-Two-pane list/detail. Inbox on top, detail below. `j/k` moves cursor; up/down arrows scroll overflowing detail content. `a` approves the selected item(s), `c` copies the active option's coding-agent fix prompt, `e` opens `$EDITOR` for the draft, `s` dismisses (won't retrigger unless the `ezoss/triaged` label is removed on GitHub), `r` reruns triage.
+Two-pane list/detail. Inbox on top, detail below. `j/k` moves cursor; up/down arrows scroll overflowing detail content. `a` approves the selected item(s), `c` copies the active option's coding-agent fix prompt, `e` opens `$EDITOR` for the draft, `m` marks the item triaged without approving (won't retrigger unless the `ezoss/triaged` label is removed on GitHub), `r` reruns triage.
 
 The details pane shows author, confidence, and the item's current `waiting_on` state. Token usage stays in the local DB and is not shown in the card metadata.
 
@@ -226,7 +226,7 @@ The prompt is intentionally minimal:
 - The issue or PR URL.
 - The contents of `~/.ezoss/AGENTS.md` if it exists (user-supplied instructions - voice profile, custom guidance, house rules - injected verbatim into every prompt).
 - A brief note that the agent should inspect the managed checkout and any issue body, comments, diff, linked issues, or CI context it needs.
-- For legitimate actionable issues or PRs, return `fix_prompt` with the original URL, investigation context, acceptance criteria, and verification steps; otherwise leave it empty.
+- For legitimate actionable issues or PRs, return `fix_prompt` with the original URL, investigation context, acceptance criteria, and verification steps; format it as readable multi-line Markdown with short sections; otherwise leave it empty.
 
 We don't pre-fetch issue context or stuff the prompt. Ezoss prepares the repo checkout, the agent decides what to look at, and local scratch edits are discarded before a future run. The agent interface already supports streaming, so the TUI can show rationale appearing live when the user runs `rerun`.
 
@@ -304,7 +304,7 @@ Single daemon, many repos. Repos configured in `~/.ezoss/config.yaml`. Agent cho
 **Phase 2 - TUI**
 
 - Copy `internal/ipc/`, `internal/tui/` skeleton.
-- Inbox list view, detail pane, approve/copy prompt/edit/skip/rerun actions.
+- Inbox list view, detail pane, approve/copy prompt/edit/mark triaged/rerun actions.
 - Live subscription so new triages land in the TUI without a refresh.
 - Follow `DESIGN.md` primitives exactly.
 
