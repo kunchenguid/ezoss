@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
@@ -66,20 +67,21 @@ func (o EntryOption) Edited() bool {
 }
 
 type Entry struct {
-	RecommendationID string
-	RepoID           string
-	Number           int
-	Kind             sharedtypes.ItemKind
-	Author           string
-	Unconfigured     bool
-	Title            string
-	URL              string
-	TokensIn         int
-	TokensOut        int
-	AgeLabel         string
-	SelectionMarker  string
-	ApprovalError    string
-	CurrentWaitingOn sharedtypes.WaitingOn
+	RecommendationID  string
+	RepoID            string
+	Number            int
+	Kind              sharedtypes.ItemKind
+	Author            string
+	Unconfigured      bool
+	Title             string
+	URL               string
+	TokensIn          int
+	TokensOut         int
+	AgeLabel          string
+	SelectionMarker   string
+	ApprovalError     string
+	CurrentWaitingOn  sharedtypes.WaitingOn
+	RerunInstructions string
 
 	Options      []EntryOption
 	ActiveOption int
@@ -177,7 +179,7 @@ type ModelActions struct {
 	InitialStatus string
 	Notify        <-chan struct{}
 	Reload        func() ([]Entry, error)
-	Rerun         func([]Entry) ([]Entry, error)
+	Rerun         func([]Entry, string) ([]Entry, error)
 	CopyPrompt    func(Entry) error
 }
 
@@ -193,10 +195,11 @@ type Model struct {
 	editExec   func(Entry) (*exec.Cmd, func(error) (Entry, error), error)
 	notify     <-chan struct{}
 	reload     func() ([]Entry, error)
-	rerun      func([]Entry) ([]Entry, error)
+	rerun      func([]Entry, string) ([]Entry, error)
 	copyPrompt func(Entry) error
 	showHelp   bool
 	quitting   bool
+	rerunInput *rerunInputState
 
 	// Async-action state. Approve/mark-triaged/rerun run in a goroutine via tea.Cmd
 	// so the event loop stays responsive; until the goroutine reports back
@@ -209,6 +212,11 @@ type Model struct {
 	// quitArmed is set to true when the user pressed q while actions were
 	// in flight. The next q quits; any other key disarms.
 	quitArmed bool
+}
+
+type rerunInputState struct {
+	entry Entry
+	input textarea.Model
 }
 
 // pendingAction tracks a verb that's running in the background for one
@@ -403,6 +411,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
+		if m.rerunInput != nil {
+			if cmd := m.updateRerunInput(msg); cmd != nil {
+				return m, cmd
+			}
+			return m, nil
+		}
 		// Any non-q key disarms the quit-confirm latch.
 		if key != "q" && key != "ctrl+c" {
 			m.quitArmed = false
@@ -434,9 +448,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		case "r":
-			if cmd := m.rerunCurrent(); cmd != nil {
-				return m, withSpinner(cmd, m.kickSpinnerIfPending())
-			}
+			m.openRerunInput()
 		case "m":
 			if cmd := m.dismissCurrent(); cmd != nil {
 				return m, withSpinner(cmd, m.kickSpinnerIfPending())
@@ -799,6 +811,10 @@ func (m *Model) rerunCurrent() tea.Cmd {
 		return nil
 	}
 	entry := m.entries[m.cursor]
+	return m.rerunEntry(entry, "")
+}
+
+func (m *Model) rerunEntry(entry Entry, instructions string) tea.Cmd {
 	if cmd, blocked := m.guardConflict(entry, "rerun"); blocked {
 		return cmd
 	}
@@ -807,7 +823,7 @@ func (m *Model) rerunCurrent() tea.Cmd {
 		return nil
 	}
 	return m.startAction(entry, "rerun", func() tea.Msg {
-		updated, err := m.rerun([]Entry{entry})
+		updated, err := m.rerun([]Entry{entry}, instructions)
 		return actionFinishedMsg{
 			verb:             "rerun",
 			recommendationID: entry.RecommendationID,
@@ -815,6 +831,62 @@ func (m *Model) rerunCurrent() tea.Cmd {
 			updatedEntries:   updated,
 		}
 	})
+}
+
+func (m *Model) openRerunInput() {
+	if len(m.entries) == 0 {
+		return
+	}
+	entry := m.entries[m.cursor]
+	if _, blocked := m.guardConflict(entry, "rerun"); blocked {
+		return
+	}
+	if m.rerun == nil {
+		m.pushLog(logEntry{state: logStateInfo, note: "rerun unavailable"})
+		return
+	}
+	input := textarea.New()
+	input.Placeholder = "Focus on the maintainer clarification, CI failure, security risk, or merge readiness."
+	input.ShowLineNumbers = false
+	input.Prompt = "> "
+	input.SetWidth(m.rerunInputWidth())
+	input.SetHeight(5)
+	input.Focus()
+	m.rerunInput = &rerunInputState{entry: entry, input: input}
+}
+
+func (m *Model) updateRerunInput(msg tea.KeyMsg) tea.Cmd {
+	if m.rerunInput == nil {
+		return nil
+	}
+	switch msg.String() {
+	case "esc":
+		m.rerunInput = nil
+		return nil
+	case "ctrl+c":
+		m.quitting = true
+		return tea.Quit
+	case "ctrl+r", "ctrl+enter":
+		state := m.rerunInput
+		m.rerunInput = nil
+		cmd := m.rerunEntry(state.entry, state.input.Value())
+		return withSpinner(cmd, m.kickSpinnerIfPending())
+	}
+	input, cmd := m.rerunInput.input.Update(msg)
+	m.rerunInput.input = input
+	return cmd
+}
+
+func (m Model) rerunInputWidth() int {
+	width := m.width
+	if width < 80 {
+		width = 80
+	}
+	contentWidth := width - 8
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+	return contentWidth
 }
 
 const (
@@ -877,10 +949,16 @@ func (m Model) View() string {
 	useRail := m.width >= responsiveLayoutMinWidth && m.height >= responsiveLayoutMinHeight && !m.showHelp
 
 	logPanel := m.renderLogPanel(width)
+	rerunInput := ""
+	rerunInputHeight := 0
+	if m.rerunInput != nil {
+		rerunInput = m.renderRerunInput(width)
+		rerunInputHeight = lipgloss.Height(rerunInput) + gapHeight
+	}
 
 	contentBudget := -1
 	if m.height > 0 {
-		fixed := lipgloss.Height(navBar) + gapHeight
+		fixed := lipgloss.Height(navBar) + gapHeight + rerunInputHeight
 		if m.showHelp {
 			fixed += lipgloss.Height(renderBox(width, "Keyboard shortcuts", m.renderHelp())) + gapHeight
 		}
@@ -917,6 +995,9 @@ func (m Model) View() string {
 	}
 
 	sections := []string{bodySection}
+	if rerunInput != "" {
+		sections = append(sections, rerunInput)
+	}
 	if logPanel != "" {
 		sections = append(sections, logPanel)
 	}
@@ -943,6 +1024,9 @@ func (m Model) cardRenderSize() (int, int) {
 	if m.height > 0 {
 		navBar := appNavBar()
 		fixed := lipgloss.Height(navBar) + gapHeight
+		if m.rerunInput != nil {
+			fixed += lipgloss.Height(m.renderRerunInput(width)) + gapHeight
+		}
 		if m.showHelp {
 			fixed += lipgloss.Height(renderBox(width, "Keyboard shortcuts", m.renderHelp())) + gapHeight
 		}
@@ -1008,6 +1092,24 @@ func (m Model) renderLogPanel(width int) string {
 		wrapped = wrapped[len(wrapped)-maxLogPanelLines:]
 	}
 	return renderBox(width, "Activity", strings.Join(wrapped, "\n"))
+}
+
+func (m Model) renderRerunInput(width int) string {
+	if m.rerunInput == nil {
+		return ""
+	}
+	entry := m.rerunInput.entry
+	input := m.rerunInput.input
+	input.SetWidth(m.rerunInputWidth())
+	body := strings.Join([]string{
+		fmt.Sprintf("Add instructions for the agent rerun on %s #%d.", entry.RepoID, entry.Number),
+		metaStyle().Render("Used as private context for this rerun. Nothing here is posted to GitHub."),
+		"",
+		input.View(),
+		"",
+		actionBarStyle().Render("ctrl+r rerun   enter newline   esc cancel"),
+	}, "\n")
+	return renderBox(width, "Rerun triage", body)
 }
 
 // shrinkLogPanel re-renders the log panel with at most enough content
@@ -1181,7 +1283,7 @@ func (m Model) renderHelp() string {
 		"c                  copy active option's coding-agent prompt",
 		"e                  edit active option's draft, action, or labels",
 		"m                  mark triaged without approving",
-		"r                  rerun the agent on the current item",
+		"r                  rerun the agent on the current item with instructions",
 		"?                  toggle this help",
 		"q                  quit",
 	}, "\n")
@@ -1306,6 +1408,9 @@ func (m Model) renderDetails() string {
 	if strip := renderStatusStrip(entry); strip != "" {
 		lines = append(lines, strip)
 	}
+	if strings.TrimSpace(entry.RerunInstructions) != "" {
+		lines = append(lines, sectionLabel("Rerun instructions"), renderIndentedBlock(entry.RerunInstructions, "  "))
+	}
 
 	if len(lines) > 0 {
 		// Blank line between status strip / approval error and body.
@@ -1347,6 +1452,9 @@ func cardBodyLines(entry Entry) []string {
 	}
 	if strip := renderStatusStrip(entry); strip != "" {
 		lines = append(lines, strip, "")
+	}
+	if strings.TrimSpace(entry.RerunInstructions) != "" {
+		lines = append(lines, sectionLabel("Rerun instructions"), renderIndentedBlock(entry.RerunInstructions, "  "), "")
 	}
 	lines = append(lines,
 		sectionLabel("Rationale"),

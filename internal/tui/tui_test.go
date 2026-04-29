@@ -947,6 +947,7 @@ func TestModelEditExecAppliesFinishCallbackResult(t *testing.T) {
 }
 
 func TestModelRerunRefreshesCurrentEntry(t *testing.T) {
+	var gotInstructions string
 	m := NewModelWithActions([]Entry{{
 		RecommendationID:     "rec-1",
 		RepoID:               "acme/widgets",
@@ -958,7 +959,8 @@ func TestModelRerunRefreshesCurrentEntry(t *testing.T) {
 		OriginalDraftComment: "old draft",
 		Rationale:            "old rationale",
 	}}, ModelActions{
-		Rerun: func(entries []Entry) ([]Entry, error) {
+		Rerun: func(entries []Entry, instructions string) ([]Entry, error) {
+			gotInstructions = instructions
 			entry := entries[0]
 			entry.RecommendationID = "rec-2"
 			entry.DraftComment = "new draft"
@@ -970,10 +972,23 @@ func TestModelRerunRefreshesCurrentEntry(t *testing.T) {
 	m.width = 100
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd != nil {
+		t.Fatalf("pressing r should open the rerun instructions prompt, got cmd %T", cmd)
+	}
+	view := stripANSI(updated.(Model).View())
+	if !strings.Contains(view, "Rerun triage") || !strings.Contains(view, "Add instructions for the agent") {
+		t.Fatalf("View() missing rerun instructions prompt:\n%s", view)
+	}
+
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Focus on the maintainer's clarification.")})
+	updated, cmd = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyCtrlR})
 	finishMsg := runActionCmd(t, cmd)
 	updated, _ = updated.(Model).Update(finishMsg)
 	next := updated.(Model)
-	view := stripANSI(next.View())
+	view = stripANSI(next.View())
+	if gotInstructions != "Focus on the maintainer's clarification." {
+		t.Fatalf("rerun instructions = %q", gotInstructions)
+	}
 	if !strings.Contains(view, "new draft") {
 		t.Fatalf("View() missing rerun draft in:\n%s", view)
 	}
@@ -988,6 +1003,35 @@ func TestModelRerunRefreshesCurrentEntry(t *testing.T) {
 	}
 	if next.entries[0].OriginalDraftComment != "new draft" {
 		t.Fatalf("OriginalDraftComment after rerun = %q, want new draft", next.entries[0].OriginalDraftComment)
+	}
+}
+
+func TestModelViewFitsWithinTerminalHeightWithRerunInput(t *testing.T) {
+	m := NewModelWithActions([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "one",
+		StateChange:      sharedtypes.StateChangeNone,
+		Rationale:        strings.Repeat("needs careful follow-up ", 20),
+		DraftComment:     "please share repro",
+	}}, ModelActions{
+		Rerun: func(entries []Entry, instructions string) ([]Entry, error) {
+			return entries, nil
+		},
+	})
+	m.width = 100
+	m.height = 24
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd != nil {
+		t.Fatalf("pressing r returned cmd %T", cmd)
+	}
+	view := updated.(Model).View()
+	height := lipgloss.Height(view)
+	if height > 24 {
+		t.Fatalf("View() height = %d, want <= 24 with rerun input\n%s", height, view)
 	}
 }
 

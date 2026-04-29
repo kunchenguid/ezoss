@@ -1989,6 +1989,7 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 			UpdatedAt: time.Unix(1713511200, 0).UTC(),
 		}}
 	}
+	var prompt string
 	newAgent = func(name sharedtypes.AgentName, _ string) (triageAgent, error) {
 		if name != sharedtypes.AgentCodex {
 			t.Fatalf("newAgent() name = %q, want %q", name, sharedtypes.AgentCodex)
@@ -2004,6 +2005,8 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 				}},
 			}),
 			Usage: agent.TokenUsage{InputTokens: 900, OutputTokens: 120},
+		}, onRun: func(opts agent.RunOpts) {
+			prompt = opts.Prompt
 		}}, nil
 	}
 
@@ -2057,12 +2060,18 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 		Title:                "Bug: triage queue stalls",
 		DraftComment:         "Old draft.",
 		OriginalDraftComment: "Old draft.",
-	}})
+	}}, "Focus on whether the maintainer's new log changes the waiting_on state.")
 	if err != nil {
 		t.Fatalf("rerunInboxEntries() error = %v", err)
 	}
+	if !strings.Contains(prompt, "Maintainer-provided rerun instructions:") || !strings.Contains(prompt, "Focus on whether the maintainer's new log changes the waiting_on state.") {
+		t.Fatalf("rerun prompt missing instructions:\n%s", prompt)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("len(rerun entries) = %d, want 1", len(entries))
+	}
+	if entries[0].RerunInstructions != "Focus on whether the maintainer's new log changes the waiting_on state." {
+		t.Fatalf("entry RerunInstructions = %q", entries[0].RerunInstructions)
 	}
 	if entries[0].RecommendationID == oldRec.ID {
 		t.Fatalf("rerun RecommendationID = %q, want a new recommendation", entries[0].RecommendationID)
@@ -2223,7 +2232,7 @@ func TestRerunInboxEntriesPrefersRepoAgentOverride(t *testing.T) {
 		Title:                "Bug: triage queue stalls",
 		DraftComment:         "Old draft.",
 		OriginalDraftComment: "Old draft.",
-	}}); err != nil {
+	}}, "Use the repo-specific agent override."); err != nil {
 		t.Fatalf("rerunInboxEntries() error = %v", err)
 	}
 

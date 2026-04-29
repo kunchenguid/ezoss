@@ -677,20 +677,21 @@ func loadInboxEntries() ([]tui.Entry, error) {
 			return nil, fmt.Errorf("recommendation token totals for %s: %w", rec.ItemID, err)
 		}
 		entry := tui.Entry{
-			RecommendationID: rec.ID,
-			RepoID:           item.RepoID,
-			Number:           item.Number,
-			Kind:             item.Kind,
-			Author:           item.Author,
-			Unconfigured:     !isConfigured,
-			Title:            item.Title,
-			URL:              githubItemURL(item.RepoID, item.Kind, item.Number),
-			TokensIn:         totals.TokensIn,
-			TokensOut:        totals.TokensOut,
-			AgeLabel:         recommendationAgeLabel(rec.CreatedAt),
-			ApprovalError:    latestApprovalError(database, rec.ID),
-			CurrentWaitingOn: item.WaitingOn,
-			Options:          buildEntryOptions(rec.Options),
+			RecommendationID:  rec.ID,
+			RepoID:            item.RepoID,
+			Number:            item.Number,
+			Kind:              item.Kind,
+			Author:            item.Author,
+			Unconfigured:      !isConfigured,
+			Title:             item.Title,
+			URL:               githubItemURL(item.RepoID, item.Kind, item.Number),
+			TokensIn:          totals.TokensIn,
+			TokensOut:         totals.TokensOut,
+			AgeLabel:          recommendationAgeLabel(rec.CreatedAt),
+			ApprovalError:     latestApprovalError(database, rec.ID),
+			CurrentWaitingOn:  item.WaitingOn,
+			RerunInstructions: rec.RerunInstructions,
+			Options:           buildEntryOptions(rec.Options),
 		}
 		entry.SyncActive()
 		entries = append(entries, entry)
@@ -773,8 +774,8 @@ func inboxModelActions(notify <-chan struct{}) tui.ModelActions {
 			return prepareInboxEntryEdit(context.Background(), entry)
 		},
 		Notify: notify,
-		Rerun: func(selected []tui.Entry) ([]tui.Entry, error) {
-			return rerunInboxEntries(context.Background(), selected)
+		Rerun: func(selected []tui.Entry, instructions string) ([]tui.Entry, error) {
+			return rerunInboxEntries(context.Background(), selected, instructions)
 		},
 		CopyPrompt: func(entry tui.Entry) error {
 			return copyTextToClipboard(context.Background(), entry.FixPrompt)
@@ -832,10 +833,11 @@ func isRecommendationEvent(eventType ipc.EventType) bool {
 	}
 }
 
-func rerunInboxEntries(ctx context.Context, entries []tui.Entry) ([]tui.Entry, error) {
+func rerunInboxEntries(ctx context.Context, entries []tui.Entry, instructions string) ([]tui.Entry, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	instructions = strings.TrimSpace(instructions)
 	p, err := newPaths()
 	if err != nil {
 		return nil, fmt.Errorf("resolve paths: %w", err)
@@ -861,6 +863,7 @@ func rerunInboxEntries(ctx context.Context, entries []tui.Entry) ([]tui.Entry, e
 		if err != nil {
 			return nil, err
 		}
+		poller.RerunInstructions = instructions
 		if err := daemon.PollOnce(ctx, poller, []string{entry.RepoID}); err != nil {
 			return nil, fmt.Errorf("rerun item %s#%d: %w", entry.RepoID, entry.Number, err)
 		}
@@ -1177,19 +1180,20 @@ func loadInboxEntry(database *db.DB, repoID string, number int) (*tui.Entry, err
 			return nil, fmt.Errorf("recommendation token totals for %s: %w", itemID, err)
 		}
 		entry := &tui.Entry{
-			RecommendationID: rec.ID,
-			RepoID:           item.RepoID,
-			Number:           item.Number,
-			Kind:             item.Kind,
-			Author:           item.Author,
-			Title:            item.Title,
-			URL:              githubItemURL(item.RepoID, item.Kind, item.Number),
-			TokensIn:         totals.TokensIn,
-			TokensOut:        totals.TokensOut,
-			AgeLabel:         recommendationAgeLabel(rec.CreatedAt),
-			ApprovalError:    latestApprovalError(database, rec.ID),
-			CurrentWaitingOn: item.WaitingOn,
-			Options:          buildEntryOptions(rec.Options),
+			RecommendationID:  rec.ID,
+			RepoID:            item.RepoID,
+			Number:            item.Number,
+			Kind:              item.Kind,
+			Author:            item.Author,
+			Title:             item.Title,
+			URL:               githubItemURL(item.RepoID, item.Kind, item.Number),
+			TokensIn:          totals.TokensIn,
+			TokensOut:         totals.TokensOut,
+			AgeLabel:          recommendationAgeLabel(rec.CreatedAt),
+			ApprovalError:     latestApprovalError(database, rec.ID),
+			CurrentWaitingOn:  item.WaitingOn,
+			RerunInstructions: rec.RerunInstructions,
+			Options:           buildEntryOptions(rec.Options),
 		}
 		entry.SyncActive()
 		return entry, nil

@@ -233,6 +233,31 @@ func TestPromptIncludesURLAndAgentInstructions(t *testing.T) {
 	}
 }
 
+func TestPromptIncludesRerunInstructions(t *testing.T) {
+	t.Parallel()
+
+	prompt := PromptWithRerunInstructions(
+		"https://github.com/acme/widgets/issues/42",
+		"Always ask for a repro before calling something a bug.",
+		"Focus on whether this is safe to close after the maintainer clarified it is unsupported.",
+	)
+
+	for _, want := range []string{
+		"Maintainer-provided rerun instructions:",
+		"Focus on whether this is safe to close after the maintainer clarified it is unsupported.",
+		"Use these instructions as additional context for this rerun.",
+		"Do not treat them as GitHub-visible text.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q in:\n%s", want, prompt)
+		}
+	}
+
+	if !strings.Contains(prompt, "Always ask for a repro before calling something a bug.") {
+		t.Fatalf("prompt missing AGENTS.md instructions: %q", prompt)
+	}
+}
+
 func TestPromptDescribesDecomposedActionFields(t *testing.T) {
 	t.Parallel()
 

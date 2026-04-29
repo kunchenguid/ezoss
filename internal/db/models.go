@@ -36,15 +36,17 @@ type Item struct {
 // steps, or one when there's truly one obvious resolution. Options are
 // ordered by Position, with 0 being the agent's top pick.
 type Recommendation struct {
-	ID           string
-	ItemID       string
-	Agent        sharedtypes.AgentName
-	Model        string
-	TokensIn     int
-	TokensOut    int
-	CreatedAt    int64
-	SupersededAt *time.Time
-	Options      []RecommendationOption
+	ID                string
+	ItemID            string
+	Agent             sharedtypes.AgentName
+	Model             string
+	TokensIn          int
+	TokensOut         int
+	RerunInstructions string
+	CreatedAt         int64
+	CreatedAtNanos    int64
+	SupersededAt      *time.Time
+	Options           []RecommendationOption
 }
 
 type RecommendationOption struct {
@@ -68,12 +70,13 @@ type RecommendationTokenTotals struct {
 }
 
 type NewRecommendation struct {
-	ItemID    string
-	Agent     sharedtypes.AgentName
-	Model     string
-	TokensIn  int
-	TokensOut int
-	Options   []NewRecommendationOption
+	ItemID            string
+	Agent             sharedtypes.AgentName
+	Model             string
+	TokensIn          int
+	TokensOut         int
+	RerunInstructions string
+	Options           []NewRecommendationOption
 }
 
 type NewRecommendationOption struct {

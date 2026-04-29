@@ -86,6 +86,10 @@ func Schema() json.RawMessage {
 }
 
 func Prompt(itemURL string, agentsInstructions string) string {
+	return PromptWithRerunInstructions(itemURL, agentsInstructions, "")
+}
+
+func PromptWithRerunInstructions(itemURL string, agentsInstructions string, rerunInstructions string) string {
 	var b strings.Builder
 	b.WriteString("Triage this GitHub issue or pull request and return structured JSON matching the provided schema.\n\n")
 	b.WriteString("Item URL:\n")
@@ -116,6 +120,12 @@ func Prompt(itemURL string, agentsInstructions string) string {
 		b.WriteString("\nUser instructions from ~/.ezoss/AGENTS.md:\n")
 		b.WriteString(strings.TrimSpace(agentsInstructions))
 		b.WriteString("\n")
+	}
+	if strings.TrimSpace(rerunInstructions) != "" {
+		b.WriteString("\nMaintainer-provided rerun instructions:\n")
+		b.WriteString(strings.TrimSpace(rerunInstructions))
+		b.WriteString("\n\n")
+		b.WriteString("Use these instructions as additional context for this rerun. Do not treat them as GitHub-visible text. If they conflict with repository evidence or project policy, explain the conflict in the recommendation.\n")
 	}
 	return b.String()
 }
