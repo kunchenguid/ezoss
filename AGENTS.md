@@ -6,7 +6,7 @@ This file provides shared guidance for coding agents working in this repository.
 
 `ezoss` is a single-user, maintainer-side orchestrator written in Go. A background daemon polls configured GitHub repos, runs a coding agent (`claude`, `codex`, `rovodev`, or `opencode`) against any issue or PR that does not yet carry the `ezoss/triaged` label, stores a structured recommendation in a local SQLite cache, and surfaces drafts in a Bubble Tea TUI inbox where the maintainer approves, edits, marks triaged, or reruns. Nothing is posted to GitHub until the maintainer approves an action; the daemon then stamps `ezoss/triaged`.
 
-`PLAN.md` is the long-form design doc. `README.md` is the user-facing surface.
+`README.md` is the user-facing surface. This file is the agent-facing implementation guide.
 
 ## Common commands
 
@@ -75,7 +75,7 @@ Schema lives in `internal/db/schema.go`. Migrations are **additive only**, appli
 
 ### TUI
 
-`internal/tui/tui.go` is a Bubble Tea program (`bubbletea` + `bubbles` + `lipgloss`). It pins `lipgloss.SetColorProfile(termenv.ANSI)` for portable styling. The TUI subscribes to the daemon over IPC and reacts to events; it can also operate against the DB directly (used in tests and when no daemon is running). Layout follows `PLAN.md`: inbox list on top, details pane below, action bar.
+`internal/tui/tui.go` is a Bubble Tea program (`bubbletea` + `bubbles` + `lipgloss`). It pins `lipgloss.SetColorProfile(termenv.ANSI)` for portable styling. The TUI subscribes to the daemon over IPC and reacts to events; it can also operate against the DB directly (used in tests and when no daemon is running). Layout is inbox list on top, details pane below, action bar.
 
 ### Configuration
 
