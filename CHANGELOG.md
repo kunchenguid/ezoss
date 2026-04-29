@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.2.1...ezoss-v0.2.2) (2026-04-29)
+
+
+### Bug Fixes
+
+* release workflow upload ([7cc105a](https://github.com/kunchenguid/ezoss/commit/7cc105a0553737a215d71f5f42734eac1fb1c0d8))
+
 ## [0.2.1](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.2.0...ezoss-v0.2.1) (2026-04-29)
 
 
