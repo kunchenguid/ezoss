@@ -63,7 +63,7 @@ var schema = json.RawMessage(`{
 					},
 					"fix_prompt": {
 						"type": "string",
-						"description": "Prompt the maintainer can copy into a coding agent when the item is a legitimate actionable issue or PR. Include the original GitHub URL and enough investigation context for an agent to start fixing. Empty string means no coding-agent handoff is recommended."
+						"description": "Prompt the maintainer can copy into a coding agent when the item is a legitimate actionable issue or PR. Include the original GitHub URL and enough investigation context for an agent to start fixing. Prefer readable multi-line Markdown with short sections. Empty string means no coding-agent handoff is recommended."
 					},
 					"confidence": {
 						"type": "string",
@@ -94,7 +94,7 @@ func Prompt(itemURL string, agentsInstructions string) string {
 	b.WriteString("Inspect the managed repository checkout provided in the execution context, plus any issue comments, pull request diff, linked issues, or CI context you need before deciding. Do not create ad hoc clones unless the provided checkout is unavailable.\n\n")
 	b.WriteString("Return one or more options. Each option is a self-contained proposed resolution with these fields:\n")
 	b.WriteString("- draft_comment: the comment to post on the item, or empty string if no comment.\n")
-	b.WriteString("- fix_prompt: a prompt the maintainer can copy into a coding agent when the item is a legitimate actionable issue or PR, or empty string if no coding-agent handoff is useful. Include the original issue/PR URL and enough context from your investigation for the coding agent to work on it.\n")
+	b.WriteString("- fix_prompt: a prompt the maintainer can copy into a coding agent when the item is a legitimate actionable issue or PR, or empty string if no coding-agent handoff is useful. Include the original issue/PR URL and enough context from your investigation for the coding agent to work on it. Prefer readable multi-line Markdown with short sections over a single long paragraph.\n")
 	b.WriteString("- state_change: the state transition to apply: 'none', 'close', 'merge', or 'request_changes'.\n")
 	b.WriteString("- waiting_on: who the item is waiting on after this action.\n")
 	b.WriteString("- confidence: how sure you are this is the right resolution.\n\n")
@@ -110,7 +110,7 @@ func Prompt(itemURL string, agentsInstructions string) string {
 	b.WriteString("- merge an approved PR: state_change 'merge' (draft_comment optional).\n")
 	b.WriteString("- request changes on a PR: draft_comment set with the review feedback, state_change 'request_changes'.\n")
 	b.WriteString("- mark triaged with no further action: draft_comment empty, state_change 'none'.\n\n")
-	b.WriteString("For legitimate actionable issues, prefer setting fix_prompt to the handoff the maintainer can copy into a coding agent. The prompt should include the original URL, summary, reproduction or evidence, suspected files/components if found, acceptance criteria, and verification steps.\n\n")
+	b.WriteString("For legitimate actionable issues, prefer setting fix_prompt to the handoff the maintainer can copy into a coding agent. The prompt should include the original URL, summary, reproduction or evidence, suspected files/components if found, acceptance criteria, and verification steps. Format it as multi-line Markdown so it is readable in a terminal and useful when copied.\n\n")
 	b.WriteString("If the item is a pull request, first check whether it is linked to an issue where the approach was already discussed and agreed upon. If there is no prior agreement, set state_change 'none' and use draft_comment to ask whether the approach is wanted - do not request_changes or merge until the approach is confirmed. If there is prior agreement, proceed with code review and choose request_changes or merge based on the review.\n")
 	if strings.TrimSpace(agentsInstructions) != "" {
 		b.WriteString("\nUser instructions from ~/.ezoss/AGENTS.md:\n")

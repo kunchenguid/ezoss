@@ -31,7 +31,7 @@ func init() {
 // EntryOption is one self-contained resolution the agent proposed. An
 // Entry has at least one option; the agent is encouraged to surface
 // multiple options whenever there are multiple reasonable next steps.
-// The user cycles between options and approves/edits/skips one of them.
+// The user cycles between options and approves/edits/marks one of them triaged.
 type EntryOption struct {
 	ID                     string
 	StateChange            sharedtypes.StateChange
@@ -198,7 +198,7 @@ type Model struct {
 	showHelp   bool
 	quitting   bool
 
-	// Async-action state. Approve/skip/rerun run in a goroutine via tea.Cmd
+	// Async-action state. Approve/mark-triaged/rerun run in a goroutine via tea.Cmd
 	// so the event loop stays responsive; until the goroutine reports back
 	// via actionFinishedMsg, the entry is "pending" and conflicting key
 	// presses on the same entry are blocked with a warning in the log.
@@ -240,7 +240,7 @@ const (
 	logStatePending logState = iota
 	logStateDone
 	logStateFailed
-	logStateInfo // transient warnings, e.g., "still skipping #9 - wait"
+	logStateInfo // transient warnings, e.g., "still approving #9 - wait"
 )
 
 const (
@@ -255,13 +255,13 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 // asyncVerbForms maps the internal action verb to its present-participle
 // and past forms for use in log lines and the action-bar morph. Keep this
-// aligned with the keys understood by Update (a/s/r).
+// aligned with the keys understood by Update (a/m/r).
 var asyncVerbForms = map[string]struct {
 	ing string
 	ed  string
 }{
 	"approve": {"approving", "approved"},
-	"skip":    {"skipping", "skipped"},
+	"mark":    {"marking triaged", "marked triaged"},
 	"rerun":   {"rerunning", "reran"},
 }
 
@@ -283,7 +283,7 @@ type editFinishedMsg struct {
 	execErr          error
 }
 
-// actionFinishedMsg is delivered when an async approve/skip/rerun
+// actionFinishedMsg is delivered when an async approve/mark/rerun
 // completes. The entry is matched by recommendationID so reloads or
 // reorderings during the action don't clobber the wrong row.
 type actionFinishedMsg struct {
@@ -437,7 +437,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd := m.rerunCurrent(); cmd != nil {
 				return m, withSpinner(cmd, m.kickSpinnerIfPending())
 			}
-		case "s":
+		case "m":
 			if cmd := m.dismissCurrent(); cmd != nil {
 				return m, withSpinner(cmd, m.kickSpinnerIfPending())
 			}
@@ -467,7 +467,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // currentEntries returns the cursor's entry as a single-element slice (and
-// its index), used to drive approve/skip/rerun actions on the focused item.
+// its index), used to drive approve/mark/rerun actions on the focused item.
 func (m *Model) currentEntries() ([]Entry, []int) {
 	if len(m.entries) == 0 {
 		return nil, nil
@@ -722,7 +722,7 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 		}
 	}
 	switch msg.verb {
-	case "approve", "skip":
+	case "approve", "mark":
 		if idx >= 0 {
 			m.removeEntries([]int{idx})
 		}
@@ -1070,20 +1070,41 @@ func formatLogElapsed(d time.Duration) string {
 	return d.String()
 }
 
-// renderDecideBar shows the per-item actions in a single bold line. All
-// actions act on the cursor's item; there's no selection to disambiguate.
-// When the active item has multiple options, a "tab switch option" hint
-// is appended so the binding is discoverable from the main view.
+// renderDecideBar shows the highest-value per-item actions in a single bold
+// line. The footer has finite space, so it keeps a stable priority order and
+// ends with "? more" instead of trying to expose every binding inline.
 //
 // When the entry has an action in flight, the bar morphs into a
-// spinner+verb so it's obvious that pressing a/s/r/e right now is a
+// spinner+verb so it's obvious that pressing a/m/r/e right now is a
 // no-op until the action completes.
-func renderDecideBar(optionCount int) string {
-	bar := "a approve   c copy prompt   e edit draft   s skip   r rerun"
+func renderDecideBar(maxWidth int, optionCount int) string {
+	hints := []string{"a approve", "e edit", "m mark triaged", "r rerun", "c copy"}
 	if optionCount > 1 {
-		bar += "   tab switch option"
+		hints = append(hints, "tab switch option")
 	}
+	bar := fitActionHints(hints, "? more", maxWidth)
 	return actionBarStyle().Render(bar)
+}
+
+func fitActionHints(hints []string, more string, maxWidth int) string {
+	const sep = "   "
+	if maxWidth <= 0 {
+		return strings.Join(append(hints, more), sep)
+	}
+	selected := make([]string, 0, len(hints)+1)
+	for _, hint := range hints {
+		candidate := append(append([]string(nil), selected...), hint)
+		candidate = append(candidate, more)
+		if lipgloss.Width(strings.Join(candidate, sep)) > maxWidth {
+			break
+		}
+		selected = append(selected, hint)
+	}
+	selected = append(selected, more)
+	if lipgloss.Width(strings.Join(selected, sep)) <= maxWidth || len(selected) == 1 {
+		return strings.Join(selected, sep)
+	}
+	return more
 }
 
 // renderPendingDecideBar replaces the action keys with a spinner and the
@@ -1159,7 +1180,7 @@ func (m Model) renderHelp() string {
 		"a                  approve active option (post comment, apply state change, sync labels)",
 		"c                  copy active option's coding-agent prompt",
 		"e                  edit active option's draft, action, or labels",
-		"s                  skip current item",
+		"m                  mark triaged without approving",
 		"r                  rerun the agent on the current item",
 		"?                  toggle this help",
 		"q                  quit",
@@ -1297,7 +1318,7 @@ func (m Model) renderDetails() string {
 		renderIndentedBlock(emptyFallback(entry.DraftComment, "No draft response."), "  "),
 	)
 	if strings.TrimSpace(entry.FixPrompt) != "" {
-		lines = append(lines, sectionLabel("Fix prompt"), renderIndentedBlock(entry.FixPrompt, "  "))
+		lines = append(lines, sectionLabel("Fix prompt"), renderIndentedBlock(formatFixPromptForDisplay(entry.FixPrompt), "  "))
 	}
 	if len(entry.Followups) > 0 {
 		lines = append(lines, sectionLabel("Follow-ups"))
@@ -1334,7 +1355,7 @@ func cardBodyLines(entry Entry) []string {
 		renderIndentedBlock(emptyFallback(entry.DraftComment, "No draft response."), "  "),
 	)
 	if strings.TrimSpace(entry.FixPrompt) != "" {
-		lines = append(lines, sectionLabel("Fix prompt"), renderIndentedBlock(entry.FixPrompt, "  "))
+		lines = append(lines, sectionLabel("Fix prompt"), renderIndentedBlock(formatFixPromptForDisplay(entry.FixPrompt), "  "))
 	}
 	if len(entry.Followups) > 0 {
 		lines = append(lines, sectionLabel("Follow-ups"))
@@ -1503,7 +1524,11 @@ func (m Model) renderCard(width, boxHeight int) string {
 
 	title := cardTitle(entry)
 
-	actionFooter := renderDecideBar(len(entry.Options))
+	maxFooterWidth := width - 7
+	if maxFooterWidth < 1 {
+		maxFooterWidth = 1
+	}
+	actionFooter := renderDecideBar(maxFooterWidth, len(entry.Options))
 	if pending, ok := m.pendingActions[entry.RecommendationID]; ok {
 		actionFooter = renderPendingDecideBar(pending.verb, m.spinnerFrame, entry.RepoID, entry.Number, pending.startedAt)
 	}
@@ -1542,7 +1567,12 @@ func (m Model) renderCard(width, boxHeight int) string {
 	}
 	visible := strings.Join(wrapped[scroll:end], "\n")
 	hint := formatCardScrollHint(scroll, len(wrapped)-end)
-	footer := actionFooter + metaStyle().Render("  ·  ") + hint
+	sep := metaStyle().Render("  ·  ")
+	if _, ok := m.pendingActions[entry.RecommendationID]; !ok {
+		actionWidth := maxFooterWidth - lipgloss.Width(hint) - lipgloss.Width(sep)
+		actionFooter = renderDecideBar(actionWidth, len(entry.Options))
+	}
+	footer := hint + sep + actionFooter
 	return renderBoxWithFooter(width, title, visible, footer)
 }
 
@@ -1771,6 +1801,43 @@ func renderIndentedBlock(text string, indent string) string {
 	return strings.Join(lines, "\n")
 }
 
+func formatFixPromptForDisplay(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" || strings.Contains(text, "\n") {
+		return text
+	}
+	for _, marker := range []string{
+		"Problem",
+		"Summary",
+		"Reproduction / evidence",
+		"Evidence",
+		"Suspected files/components",
+		"Acceptance criteria",
+		"Verification steps",
+		"Implementation notes",
+	} {
+		text = splitFixPromptSection(text, marker)
+	}
+	return text
+}
+
+func splitFixPromptSection(text string, marker string) string {
+	for _, pattern := range []string{" " + marker + ": ", " " + marker + " "} {
+		index := strings.Index(text, pattern)
+		if index < 0 {
+			continue
+		}
+		before := text[:index]
+		after := text[index+len(pattern):]
+		label := strings.TrimSpace(pattern)
+		if strings.HasSuffix(label, ":") {
+			label = strings.TrimSuffix(label, ":") + ":"
+		}
+		return before + "\n" + label + "\n" + after
+	}
+	return text
+}
+
 func renderBox(width int, title string, body string) string {
 	return renderBoxWithFooter(width, title, body, "")
 }
@@ -1930,17 +1997,17 @@ func (m *Model) dismissCurrent() tea.Cmd {
 		return nil
 	}
 	entry := m.entries[m.cursor]
-	if cmd, blocked := m.guardConflict(entry, "skip"); blocked {
+	if cmd, blocked := m.guardConflict(entry, "mark"); blocked {
 		return cmd
 	}
 	if m.dismiss == nil {
 		m.removeEntries([]int{m.cursor})
-		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("skipped %s #%d", entry.RepoID, entry.Number)})
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("marked triaged %s #%d", entry.RepoID, entry.Number)})
 		return nil
 	}
-	return m.startAction(entry, "skip", func() tea.Msg {
+	return m.startAction(entry, "mark", func() tea.Msg {
 		return actionFinishedMsg{
-			verb:             "skip",
+			verb:             "mark",
 			recommendationID: entry.RecommendationID,
 			err:              m.dismiss([]Entry{entry}),
 		}

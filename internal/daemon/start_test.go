@@ -188,8 +188,32 @@ func TestRunWithOptionsClearsStalePIDFileAndProceeds(t *testing.T) {
 
 	sigCh := make(chan os.Signal, 1)
 	errCh := make(chan error, 1)
+	claimed := make(chan struct{})
+	claimErr := make(chan error, 1)
+	var claimOnce sync.Once
 	go func() {
 		errCh <- RunWithOptions(pidPath, sigCh, RunOptions{
+			Repos: []string{"owner/repo"},
+			PollOnce: func(context.Context, []string) error {
+				claimOnce.Do(func() {
+					contents, err := os.ReadFile(pidPath)
+					if err != nil {
+						claimErr <- err
+						return
+					}
+					pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+					if err != nil {
+						claimErr <- err
+						return
+					}
+					if pid != os.Getpid() {
+						claimErr <- fmt.Errorf("pid file contents = %d, want %d", pid, os.Getpid())
+						return
+					}
+					close(claimed)
+				})
+				return nil
+			},
 			ProcessChecker: func(int) (bool, error) {
 				// Pretend the previously-recorded pid is dead -
 				// the daemon should claim the file and proceed.
@@ -198,19 +222,14 @@ func TestRunWithOptionsClearsStalePIDFileAndProceeds(t *testing.T) {
 		})
 	}()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		contents, err := os.ReadFile(pidPath)
-		if err == nil {
-			pid, _ := strconv.Atoi(strings.TrimSpace(string(contents)))
-			if pid == os.Getpid() {
-				break
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("pid file was not claimed by current process within deadline; last contents=%q", contents)
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-claimed:
+	case err := <-claimErr:
+		t.Fatalf("pid file was not claimed by current process: %v", err)
+	case err := <-errCh:
+		t.Fatalf("RunWithOptions() exited before claiming pid file: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunWithOptions() did not claim pid file within deadline")
 	}
 
 	sigCh <- syscall.SIGTERM
