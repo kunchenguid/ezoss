@@ -1461,7 +1461,7 @@ func TestDocsHeroMatchesCurrentReleaseMessaging(t *testing.T) {
 		"<p class=\"eyebrow\">ezoss docs</p>",
 		"Run your open source inbox like a review queue, not a background tax.",
 		"polls GitHub for untriaged issues and PRs",
-		"approve, copy fix prompts, edit, skip, or rerun from a terminal inbox before anything touches GitHub.",
+		"approve, copy fix prompts, edit, mark triaged, or rerun from a terminal inbox before anything touches GitHub.",
 		"<a class=\"button primary\" href=\"https://github.com/kunchenguid/ezoss\">View on GitHub</a>",
 		"<a class=\"button secondary\" href=\"#install\">Install</a>",
 	}
@@ -1629,7 +1629,7 @@ func TestDocsCoreLoopAndRequirementsMatchCurrentReleaseContract(t *testing.T) {
 		"<h3>2. Prepare checkout and ask your agent</h3>",
 		"Clone or refresh the managed checkout in <code>~/.ezoss/investigations</code>, discard scratch edits from prior runs, then run Claude, Codex, Rovo Dev, or OpenCode there for a structured recommendation.",
 		"<h3>3. Review privately</h3>",
-		"Approve, copy fix prompts, edit, skip, or rerun from the local TUI inbox without exposing drafts.",
+		"Approve, copy fix prompts, edit, mark triaged, or rerun from the local TUI inbox without exposing drafts.",
 		"<h3>4. Sync the outcome</h3>",
 		"Approved actions execute with <code>gh</code> and mirror triage labels back to GitHub.",
 		"<h2>Requirements</h2>",
@@ -1658,8 +1658,8 @@ func TestDocsInboxActionsMatchCurrentTUIWorkflow(t *testing.T) {
 		"Execute the recommended GitHub action and sync triage labels.",
 		"<strong><code>e</code> edit</strong>",
 		"Open the draft in your editor before approval.",
-		"<strong><code>s</code> skip</strong>",
-		"Dismiss the recommendation and stamp the GitHub triaged label.",
+		"<strong><code>m</code> mark triaged</strong>",
+		"Stamp the GitHub triaged label without approving the recommendation.",
 		"<strong><code>r</code> rerun</strong>",
 		"Re-triage the item and replace the active recommendation in place.",
 	}
