@@ -20,7 +20,7 @@ func stripANSI(s string) string {
 }
 
 // runActionCmd extracts an actionFinishedMsg from the cmd returned by an
-// async key press (a/s/r). The cmd is either the bare action func or a
+// async key press (a/m/r). The cmd is either the bare action func or a
 // tea.Batch whose first child is the action - by convention startAction
 // places it first so tests can bypass the sibling spinner-tick cmd
 // (tea.Tick blocks for real wall-clock time).
@@ -147,6 +147,54 @@ func TestModelViewShowsSwitchOptionHintWhenMultipleOptions(t *testing.T) {
 	}
 }
 
+func TestModelViewShowsCompactActionHintsWithMoreFallback(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "Bug: triage queue stalls",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceMedium,
+		Rationale:    "single option only",
+		DraftComment: "draft",
+	}})
+	m.width = 100
+	m.height = 24
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"a approve", "e edit", "m mark triaged", "? more"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("View() missing compact action hint %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "edit draft") {
+		t.Fatalf("View() should say 'edit', not 'edit draft':\n%s", view)
+	}
+}
+
+func TestModelViewPrioritizesScrollHintWhenCardOverflows(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:       "acme/widgets",
+		Number:       42,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "Bug: triage queue stalls",
+		StateChange:  sharedtypes.StateChangeNone,
+		Confidence:   sharedtypes.ConfidenceMedium,
+		Rationale:    strings.Repeat("This is enough rationale to overflow the recommendation card. ", 24),
+		DraftComment: "draft",
+	}})
+	m.width = 92
+	m.height = 12
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "↓") || !strings.Contains(view, "more") {
+		t.Fatalf("View() should keep the scroll hint visible when the card overflows:\n%s", view)
+	}
+	if !strings.Contains(view, "a approve") || !strings.Contains(view, "? more") {
+		t.Fatalf("View() should still keep compact action discovery visible:\n%s", view)
+	}
+}
+
 func TestModelViewKeepsCurrentWaitingOnWhenSwitchingOptions(t *testing.T) {
 	m := NewModel([]Entry{{
 		RepoID:           "acme/widgets",
@@ -260,6 +308,41 @@ func TestModelViewIndentsMultilineRationale(t *testing.T) {
 	}
 }
 
+func TestModelViewFormatsSingleLineFixPromptIntoReadableSections(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:      "acme/widgets",
+		Number:      42,
+		Kind:        sharedtypes.ItemKindIssue,
+		Title:       "Bug: triage queue stalls",
+		StateChange: sharedtypes.StateChangeNone,
+		Confidence:  sharedtypes.ConfidenceMedium,
+		FixPrompt:   "GitHub issue: https://github.com/acme/widgets/issues/42 Problem The test step pauses at awaiting approval for informational findings. Reproduction / evidence Two offending blocks: 1. internal/pipeline/steps/test.go:122-146. Acceptance criteria Do not require approval for non-actionable findings. Verification steps go test ./internal/pipeline/...",
+	}})
+	m.width = 100
+
+	details := stripANSI(m.renderDetails())
+	for _, want := range []string{
+		"Fix prompt:",
+		"  GitHub issue: https://github.com/acme/widgets/issues/42",
+		"  Problem",
+		"  Reproduction / evidence",
+		"  Acceptance criteria",
+		"  Verification steps",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("renderDetails() missing formatted fix prompt section %q in:\n%s", want, details)
+		}
+	}
+}
+
+func TestModelHelpExplainsSkipMarksTriaged(t *testing.T) {
+	m := NewModel(nil)
+	help := stripANSI(m.renderHelp())
+	if !strings.Contains(help, "m                  mark triaged without approving") {
+		t.Fatalf("renderHelp() should explain mark-triaged semantics, got:\n%s", help)
+	}
+}
+
 func TestModelViewDoesNotStartDetailsPaneWithBlankLineWhenNoApprovalError(t *testing.T) {
 	m := NewModel([]Entry{{
 		RepoID:       "acme/widgets",
@@ -334,7 +417,7 @@ func TestModelNavigationIgnoresArrowNPKeysForInboxCursor(t *testing.T) {
 	}
 }
 
-func TestModelSkipDismissesCurrentEntry(t *testing.T) {
+func TestModelMarkTriagedDismissesCurrentEntry(t *testing.T) {
 	var dismissed []string
 	m := NewModelWithDismiss([]Entry{
 		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange: sharedtypes.StateChangeNone},
@@ -347,7 +430,7 @@ func TestModelSkipDismissesCurrentEntry(t *testing.T) {
 	})
 	m.width = 100
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	finishMsg := runActionCmd(t, cmd)
 	if len(dismissed) != 1 || dismissed[0] != "rec-1" {
 		t.Fatalf("dismissed = %#v, want [rec-1]", dismissed)
@@ -355,12 +438,33 @@ func TestModelSkipDismissesCurrentEntry(t *testing.T) {
 	updated, _ = updated.(Model).Update(finishMsg)
 	next := updated.(Model)
 	if len(next.entries) != 1 || next.entries[0].RecommendationID != "rec-2" {
-		t.Fatalf("entries after skip = %#v, want [rec-2]", next.entries)
+		t.Fatalf("entries after mark triaged = %#v, want [rec-2]", next.entries)
 	}
 	view := stripANSI(next.View())
 	// The card should now focus on the surviving entry.
 	if !strings.Contains(view, "acme/widgets · ⇡ #2") {
 		t.Fatalf("View() should show surviving entry as cursor:\n%s", view)
+	}
+}
+
+func TestModelSKeyDoesNotMarkTriaged(t *testing.T) {
+	called := false
+	m := NewModelWithDismiss([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "one",
+	}}, func(entries []Entry) error {
+		called = true
+		return nil
+	})
+	m.width = 100
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	next := updated.(Model)
+	if cmd != nil || called || len(next.entries) != 1 {
+		t.Fatalf("s key should not mark triaged; cmd=%v called=%v entries=%d", cmd, called, len(next.entries))
 	}
 }
 
@@ -566,13 +670,13 @@ func TestModelPendingActionBlocksConflictingKey(t *testing.T) {
 	}}, actions)
 	m.width = 100
 
-	updated, cmd1 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, cmd1 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	if cmd1 == nil {
-		t.Fatal("first skip should return cmd")
+		t.Fatal("first mark-triaged action should return cmd")
 	}
-	updated2, cmd2 := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated2, cmd2 := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	if cmd2 != nil {
-		t.Fatal("second skip while first is pending must be blocked - no cmd should be returned")
+		t.Fatal("second mark-triaged action while first is pending must be blocked - no cmd should be returned")
 	}
 	next := updated2.(Model)
 	foundInfo := false
@@ -605,10 +709,10 @@ func TestModelPendingActionDoesNotBlockOtherEntries(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	// Move to second.
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	// Skip second - must not be blocked by the pending approve on rec-1.
-	_, cmd := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	// Mark second triaged - must not be blocked by the pending approve on rec-1.
+	_, cmd := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	if cmd == nil {
-		t.Fatal("skip on rec-2 must not be blocked by pending approve on rec-1")
+		t.Fatal("mark triaged on rec-2 must not be blocked by pending approve on rec-1")
 	}
 }
 
@@ -625,7 +729,7 @@ func TestModelQuitDuringPendingArmsConfirm(t *testing.T) {
 	m.width = 100
 
 	// Start a pending action.
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	// Press q - should not quit yet.
 	updated2, cmd := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	next := updated2.(Model)
@@ -648,7 +752,7 @@ func TestModelQuitDuringPendingArmsConfirm(t *testing.T) {
 
 // TestModelPendingRendersSpinnerAndMorphsActionBar checks that while an
 // action is in flight, (a) the card's bottom action bar replaces the
-// a/e/s/r hints with a spinner and verb, so pressing those keys is
+// a/e/m/r hints with a spinner and verb, so pressing those keys is
 // obviously meaningless until the action completes, and (b) the rail
 // glyph swaps to the pending marker.
 func TestModelPendingRendersSpinnerAndMorphsActionBar(t *testing.T) {
@@ -665,12 +769,12 @@ func TestModelPendingRendersSpinnerAndMorphsActionBar(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	view := stripANSI(updated.(Model).View())
-	if !strings.Contains(view, "skipping acme/widgets #42") {
-		t.Fatalf("View() should show 'skipping acme/widgets #42' in the morphed action bar:\n%s", view)
+	if !strings.Contains(view, "marking triaged acme/widgets #42") {
+		t.Fatalf("View() should show 'marking triaged acme/widgets #42' in the morphed action bar:\n%s", view)
 	}
-	if strings.Contains(view, "a approve   c copy prompt   e edit draft   s skip   r rerun") {
+	if strings.Contains(view, "a approve") || strings.Contains(view, "m mark triaged") {
 		t.Fatalf("View() should hide the regular action hints while pending:\n%s", view)
 	}
 	if !strings.Contains(view, "…") {
@@ -737,8 +841,8 @@ func TestModelLogPanelRendersAndShrinksToFitTerminal(t *testing.T) {
 	m.width = 120
 	m.height = 30
 
-	// Drive a successful skip end-to-end.
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	// Drive a successful mark-triaged action end-to-end.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	finishMsg := runActionCmd(t, cmd)
 	updated, _ = updated.(Model).Update(finishMsg)
 	tall := updated.(Model)
@@ -746,8 +850,8 @@ func TestModelLogPanelRendersAndShrinksToFitTerminal(t *testing.T) {
 	if !strings.Contains(tallView, "Activity") {
 		t.Fatalf("expected Activity log panel, got:\n%s", tallView)
 	}
-	if !strings.Contains(tallView, "skipped acme/widgets #42") {
-		t.Fatalf("expected skipped log line, got:\n%s", tallView)
+	if !strings.Contains(tallView, "marked triaged acme/widgets #42") {
+		t.Fatalf("expected marked-triaged log line, got:\n%s", tallView)
 	}
 
 	// Now squeeze the terminal vertically. The log panel must be the first

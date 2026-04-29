@@ -246,6 +246,7 @@ func TestPromptDescribesDecomposedActionFields(t *testing.T) {
 		"merge an approved PR",
 		"request changes on a PR",
 		"copy into a coding agent",
+		"multi-line Markdown",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q in:\n%s", want, prompt)
