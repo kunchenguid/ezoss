@@ -511,6 +511,59 @@ func TestInsertRecommendationStoresRerunInstructions(t *testing.T) {
 	}
 }
 
+func TestInsertRecommendationReplacingActiveBeforeKeepsSameSecondNewerRecommendation(t *testing.T) {
+	database := openTestDB(t)
+	if err := database.UpsertRepo(Repo{ID: "kunchenguid/ezoss", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("upsert repo: %v", err)
+	}
+	if err := database.UpsertItem(Item{
+		ID: "kunchenguid/ezoss#42", RepoID: "kunchenguid/ezoss",
+		Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "x", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("upsert item: %v", err)
+	}
+
+	cutoff := time.Now()
+	time.Sleep(time.Millisecond)
+	newer, err := database.InsertRecommendation(NewRecommendation{
+		ItemID: "kunchenguid/ezoss#42",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []NewRecommendationOption{{
+			StateChange: sharedtypes.StateChangeNone,
+			Confidence:  sharedtypes.ConfidenceHigh,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() newer error = %v", err)
+	}
+	if _, err := database.sql.Exec(`UPDATE recommendations SET created_at = ? WHERE id = ?`, cutoff.Unix(), newer.ID); err != nil {
+		t.Fatalf("force same-second created_at: %v", err)
+	}
+
+	_, inserted, err := database.InsertRecommendationReplacingActiveBefore(NewRecommendation{
+		ItemID: "kunchenguid/ezoss#42",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []NewRecommendationOption{{
+			StateChange: sharedtypes.StateChangeClose,
+			Confidence:  sharedtypes.ConfidenceLow,
+		}},
+	}, cutoff)
+	if err != nil {
+		t.Fatalf("InsertRecommendationReplacingActiveBefore() error = %v", err)
+	}
+	if inserted {
+		t.Fatal("InsertRecommendationReplacingActiveBefore() inserted stale same-second result")
+	}
+
+	active, err := database.ListActiveRecommendations()
+	if err != nil {
+		t.Fatalf("ListActiveRecommendations() error = %v", err)
+	}
+	if len(active) != 1 || active[0].ID != newer.ID {
+		t.Fatalf("active recommendations = %#v, want only newer %s", active, newer.ID)
+	}
+}
+
 func TestInsertRecommendationRejectsEmptyOptions(t *testing.T) {
 	database := openTestDB(t)
 	if err := database.UpsertRepo(Repo{ID: "kunchenguid/ezoss"}); err != nil {

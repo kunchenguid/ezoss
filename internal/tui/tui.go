@@ -949,10 +949,16 @@ func (m Model) View() string {
 	useRail := m.width >= responsiveLayoutMinWidth && m.height >= responsiveLayoutMinHeight && !m.showHelp
 
 	logPanel := m.renderLogPanel(width)
+	rerunInput := ""
+	rerunInputHeight := 0
+	if m.rerunInput != nil {
+		rerunInput = m.renderRerunInput(width)
+		rerunInputHeight = lipgloss.Height(rerunInput) + gapHeight
+	}
 
 	contentBudget := -1
 	if m.height > 0 {
-		fixed := lipgloss.Height(navBar) + gapHeight
+		fixed := lipgloss.Height(navBar) + gapHeight + rerunInputHeight
 		if m.showHelp {
 			fixed += lipgloss.Height(renderBox(width, "Keyboard shortcuts", m.renderHelp())) + gapHeight
 		}
@@ -989,8 +995,8 @@ func (m Model) View() string {
 	}
 
 	sections := []string{bodySection}
-	if m.rerunInput != nil {
-		sections = append(sections, m.renderRerunInput(width))
+	if rerunInput != "" {
+		sections = append(sections, rerunInput)
 	}
 	if logPanel != "" {
 		sections = append(sections, logPanel)
@@ -1018,6 +1024,9 @@ func (m Model) cardRenderSize() (int, int) {
 	if m.height > 0 {
 		navBar := appNavBar()
 		fixed := lipgloss.Height(navBar) + gapHeight
+		if m.rerunInput != nil {
+			fixed += lipgloss.Height(m.renderRerunInput(width)) + gapHeight
+		}
 		if m.showHelp {
 			fixed += lipgloss.Height(renderBox(width, "Keyboard shortcuts", m.renderHelp())) + gapHeight
 		}

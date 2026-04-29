@@ -1006,6 +1006,35 @@ func TestModelRerunRefreshesCurrentEntry(t *testing.T) {
 	}
 }
 
+func TestModelViewFitsWithinTerminalHeightWithRerunInput(t *testing.T) {
+	m := NewModelWithActions([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "one",
+		StateChange:      sharedtypes.StateChangeNone,
+		Rationale:        strings.Repeat("needs careful follow-up ", 20),
+		DraftComment:     "please share repro",
+	}}, ModelActions{
+		Rerun: func(entries []Entry, instructions string) ([]Entry, error) {
+			return entries, nil
+		},
+	})
+	m.width = 100
+	m.height = 24
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd != nil {
+		t.Fatalf("pressing r returned cmd %T", cmd)
+	}
+	view := updated.(Model).View()
+	height := lipgloss.Height(view)
+	if height > 24 {
+		t.Fatalf("View() height = %d, want <= 24 with rerun input\n%s", height, view)
+	}
+}
+
 func TestModelReloadRefreshesEntriesAndPreservesEditedDrafts(t *testing.T) {
 	m := NewModelWithActions([]Entry{
 		{

@@ -74,10 +74,10 @@ func (d *DB) insertRecommendationReplacingActiveBefore(input NewRecommendation, 
 		}
 	}()
 	if !supersededAt.IsZero() {
-		cutoff := supersededAt.Unix()
+		cutoff := supersededAt.UnixNano()
 		var newerCount int
 		if err := tx.QueryRow(
-			`SELECT COUNT(*) FROM recommendations WHERE item_id = ? AND superseded_at IS NULL AND created_at > ?`,
+			`SELECT COUNT(*) FROM recommendations WHERE item_id = ? AND superseded_at IS NULL AND COALESCE(created_at_nanos, created_at * 1000000000) > ?`,
 			input.ItemID,
 			cutoff,
 		).Scan(&newerCount); err != nil {
@@ -86,9 +86,10 @@ func (d *DB) insertRecommendationReplacingActiveBefore(input NewRecommendation, 
 		if newerCount > 0 {
 			return nil, errNewerActiveRecommendation
 		}
+		supersededAtSeconds := supersededAt.Unix()
 		if _, err := tx.Exec(
-			`UPDATE recommendations SET superseded_at = ? WHERE item_id = ? AND superseded_at IS NULL AND created_at <= ?`,
-			cutoff,
+			`UPDATE recommendations SET superseded_at = ? WHERE item_id = ? AND superseded_at IS NULL AND COALESCE(created_at_nanos, created_at * 1000000000) <= ?`,
+			supersededAtSeconds,
 			input.ItemID,
 			cutoff,
 		); err != nil {
@@ -96,6 +97,7 @@ func (d *DB) insertRecommendationReplacingActiveBefore(input NewRecommendation, 
 		}
 	}
 
+	now := time.Now()
 	rec := &Recommendation{
 		ID:                newID(),
 		ItemID:            input.ItemID,
@@ -104,13 +106,14 @@ func (d *DB) insertRecommendationReplacingActiveBefore(input NewRecommendation, 
 		TokensIn:          input.TokensIn,
 		TokensOut:         input.TokensOut,
 		RerunInstructions: strings.TrimSpace(input.RerunInstructions),
-		CreatedAt:         nowUnix(),
+		CreatedAt:         now.Unix(),
+		CreatedAtNanos:    now.UnixNano(),
 	}
 
 	if _, err := tx.Exec(
 		`INSERT INTO recommendations (
-		 id, item_id, agent, model, rationale, draft_comment, followups, proposed_labels, state_change, confidence, tokens_in, tokens_out, rerun_instructions, created_at, superseded_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 id, item_id, agent, model, rationale, draft_comment, followups, proposed_labels, state_change, confidence, tokens_in, tokens_out, rerun_instructions, created_at, created_at_nanos, superseded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID,
 		rec.ItemID,
 		rec.Agent,
@@ -120,6 +123,7 @@ func (d *DB) insertRecommendationReplacingActiveBefore(input NewRecommendation, 
 		rec.TokensOut,
 		rec.RerunInstructions,
 		rec.CreatedAt,
+		rec.CreatedAtNanos,
 		nil,
 	); err != nil {
 		return nil, fmt.Errorf("insert recommendation: %w", err)
@@ -194,9 +198,10 @@ func (d *DB) GetRecommendation(id string) (*Recommendation, error) {
 	var rec Recommendation
 	var supersededAt sql.NullInt64
 	var rerunInstructions sql.NullString
+	var createdAtNanos sql.NullInt64
 
 	err := d.sql.QueryRow(
-		`SELECT id, item_id, agent, model, tokens_in, tokens_out, rerun_instructions, created_at, superseded_at
+		`SELECT id, item_id, agent, model, tokens_in, tokens_out, rerun_instructions, created_at, created_at_nanos, superseded_at
 		 FROM recommendations WHERE id = ?`,
 		id,
 	).Scan(
@@ -208,6 +213,7 @@ func (d *DB) GetRecommendation(id string) (*Recommendation, error) {
 		&rec.TokensOut,
 		&rerunInstructions,
 		&rec.CreatedAt,
+		&createdAtNanos,
 		&supersededAt,
 	)
 	if err == sql.ErrNoRows {
@@ -219,6 +225,9 @@ func (d *DB) GetRecommendation(id string) (*Recommendation, error) {
 
 	if rerunInstructions.Valid {
 		rec.RerunInstructions = rerunInstructions.String
+	}
+	if createdAtNanos.Valid {
+		rec.CreatedAtNanos = createdAtNanos.Int64
 	}
 	rec.SupersededAt = unixToTimePtr(supersededAt)
 	options, err := d.listOptionsForRecommendation(rec.ID)
@@ -319,10 +328,10 @@ func scanOption(rows *sql.Rows) (RecommendationOption, error) {
 
 func (d *DB) ListActiveRecommendations() ([]Recommendation, error) {
 	rows, err := d.sql.Query(
-		`SELECT id, item_id, agent, model, tokens_in, tokens_out, rerun_instructions, created_at, superseded_at
+		`SELECT id, item_id, agent, model, tokens_in, tokens_out, rerun_instructions, created_at, created_at_nanos, superseded_at
 		 FROM recommendations
 		 WHERE superseded_at IS NULL
-		 ORDER BY created_at DESC, id DESC`,
+		 ORDER BY COALESCE(created_at_nanos, created_at * 1000000000) DESC, id DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list active recommendations: %w", err)
@@ -334,6 +343,7 @@ func (d *DB) ListActiveRecommendations() ([]Recommendation, error) {
 		var rec Recommendation
 		var supersededAt sql.NullInt64
 		var rerunInstructions sql.NullString
+		var createdAtNanos sql.NullInt64
 		if err := rows.Scan(
 			&rec.ID,
 			&rec.ItemID,
@@ -343,12 +353,16 @@ func (d *DB) ListActiveRecommendations() ([]Recommendation, error) {
 			&rec.TokensOut,
 			&rerunInstructions,
 			&rec.CreatedAt,
+			&createdAtNanos,
 			&supersededAt,
 		); err != nil {
 			return nil, fmt.Errorf("list active recommendations: %w", err)
 		}
 		if rerunInstructions.Valid {
 			rec.RerunInstructions = rerunInstructions.String
+		}
+		if createdAtNanos.Valid {
+			rec.CreatedAtNanos = createdAtNanos.Int64
 		}
 		rec.SupersededAt = unixToTimePtr(supersededAt)
 		recommendations = append(recommendations, rec)

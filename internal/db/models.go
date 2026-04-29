@@ -44,6 +44,7 @@ type Recommendation struct {
 	TokensOut         int
 	RerunInstructions string
 	CreatedAt         int64
+	CreatedAtNanos    int64
 	SupersededAt      *time.Time
 	Options           []RecommendationOption
 }

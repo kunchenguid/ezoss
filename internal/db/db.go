@@ -42,6 +42,7 @@ func Open(path string) (*DB, error) {
 		{"approvals.option_id", "approvals", "option_id", `ALTER TABLE approvals ADD COLUMN option_id TEXT REFERENCES recommendation_options(id) ON DELETE SET NULL`},
 		{"recommendation_options.fix_prompt", "recommendation_options", "fix_prompt", `ALTER TABLE recommendation_options ADD COLUMN fix_prompt TEXT`},
 		{"recommendations.rerun_instructions", "recommendations", "rerun_instructions", `ALTER TABLE recommendations ADD COLUMN rerun_instructions TEXT`},
+		{"recommendations.created_at_nanos", "recommendations", "created_at_nanos", `ALTER TABLE recommendations ADD COLUMN created_at_nanos INTEGER`},
 	}
 	for _, m := range migrations {
 		ran, err := ensureColumnExists(sqlDB, m.table, m.column, m.ddl)
