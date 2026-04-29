@@ -273,6 +273,82 @@ func TestPollOnceStoresRecommendationFromTriageRunner(t *testing.T) {
 	}
 }
 
+func TestRunTriageForItemDoesNotSupersedeNewerActiveRecommendation(t *testing.T) {
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	item := db.Item{
+		ID:        "acme/widgets#42",
+		RepoID:    "acme/widgets",
+		Kind:      sharedtypes.ItemKindIssue,
+		Number:    42,
+		Title:     "panic in sync loop",
+		Author:    "alice",
+		State:     sharedtypes.ItemStateOpen,
+		WaitingOn: sharedtypes.WaitingOnNone,
+	}
+	if err := database.UpsertItem(item); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	staleRunStartedAt := time.Now().Add(-2 * time.Minute)
+	newerRec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#42",
+		Agent:  sharedtypes.AgentClaude,
+		Model:  "claude",
+		Options: []db.NewRecommendationOption{{
+			StateChange:  sharedtypes.StateChangeNone,
+			Rationale:    "Guided rerun result that should remain active.",
+			DraftComment: "Guided response.",
+			Confidence:   sharedtypes.ConfidenceHigh,
+			WaitingOn:    sharedtypes.WaitingOnContributor,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation(newer) error = %v", err)
+	}
+	if newerRec.CreatedAt <= staleRunStartedAt.Unix() {
+		t.Fatalf("test setup invalid: newer rec created_at=%d, stale start=%d", newerRec.CreatedAt, staleRunStartedAt.Unix())
+	}
+
+	runner := &stubRecommendationRunner{result: &TriageResult{
+		Agent: sharedtypes.AgentClaude,
+		Model: "claude",
+		Recommendation: &triage.Recommendation{Options: []triage.RecommendationOption{{
+			StateChange:  sharedtypes.StateChangeNone,
+			Rationale:    "Uninstructed daemon result from an older in-flight run.",
+			DraftComment: "Plain response.",
+			Confidence:   sharedtypes.ConfidenceMedium,
+			WaitingOn:    sharedtypes.WaitingOnMaintainer,
+		}}},
+	}}
+	if _, err := runTriageForItem(context.Background(), Poller{DB: database, Triage: runner}, item, staleRunStartedAt); err != nil {
+		t.Fatalf("runTriageForItem() error = %v", err)
+	}
+
+	active, err := database.ListActiveRecommendations()
+	if err != nil {
+		t.Fatalf("ListActiveRecommendations() error = %v", err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("active recommendations = %d, want 1: %#v", len(active), active)
+	}
+	if active[0].ID != newerRec.ID {
+		t.Fatalf("active recommendation id = %q, want newer %q", active[0].ID, newerRec.ID)
+	}
+	if active[0].Options[0].Rationale != "Guided rerun result that should remain active." {
+		t.Fatalf("active rationale = %q", active[0].Options[0].Rationale)
+	}
+	storedNewer, err := database.GetRecommendation(newerRec.ID)
+	if err != nil {
+		t.Fatalf("GetRecommendation(newer) error = %v", err)
+	}
+	if storedNewer.SupersededAt != nil {
+		t.Fatalf("newer recommendation was superseded at %v", storedNewer.SupersededAt)
+	}
+}
+
 func TestPollOnceSupersedesExistingRecommendationWhenItemHasNewActivity(t *testing.T) {
 	t.Parallel()
 

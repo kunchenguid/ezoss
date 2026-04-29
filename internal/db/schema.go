@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS recommendations (
     confidence       TEXT,
     tokens_in        INTEGER,
     tokens_out       INTEGER,
+    rerun_instructions TEXT,
     created_at       INTEGER NOT NULL,
     superseded_at    INTEGER
 );

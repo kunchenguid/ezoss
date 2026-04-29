@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,32 @@ func (d *DB) RecommendationTokenTotalsForItem(itemID string) (RecommendationToke
 // Option in a single transaction. At least one option is required; the
 // first option (Position 0 in storage) is the agent's top pick.
 func (d *DB) InsertRecommendation(input NewRecommendation) (*Recommendation, error) {
+	rec, err := d.insertRecommendationReplacingActiveBefore(input, time.Time{})
+	if err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+// InsertRecommendationReplacingActiveBefore inserts input unless an active
+// recommendation for the same item was created after supersededAt. When it
+// inserts, active recommendations created at or before supersededAt are
+// superseded in the same transaction so older in-flight triage runs cannot
+// overwrite newer reruns.
+func (d *DB) InsertRecommendationReplacingActiveBefore(input NewRecommendation, supersededAt time.Time) (*Recommendation, bool, error) {
+	rec, err := d.insertRecommendationReplacingActiveBefore(input, supersededAt)
+	if err == errNewerActiveRecommendation {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return rec, true, nil
+}
+
+var errNewerActiveRecommendation = fmt.Errorf("newer active recommendation exists")
+
+func (d *DB) insertRecommendationReplacingActiveBefore(input NewRecommendation, supersededAt time.Time) (*Recommendation, error) {
 	if len(input.Options) == 0 {
 		return nil, fmt.Errorf("insert recommendation: at least one option required")
 	}
@@ -46,21 +73,44 @@ func (d *DB) InsertRecommendation(input NewRecommendation) (*Recommendation, err
 			_ = tx.Rollback()
 		}
 	}()
+	if !supersededAt.IsZero() {
+		cutoff := supersededAt.Unix()
+		var newerCount int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM recommendations WHERE item_id = ? AND superseded_at IS NULL AND created_at > ?`,
+			input.ItemID,
+			cutoff,
+		).Scan(&newerCount); err != nil {
+			return nil, fmt.Errorf("insert recommendation: check newer active recommendation: %w", err)
+		}
+		if newerCount > 0 {
+			return nil, errNewerActiveRecommendation
+		}
+		if _, err := tx.Exec(
+			`UPDATE recommendations SET superseded_at = ? WHERE item_id = ? AND superseded_at IS NULL AND created_at <= ?`,
+			cutoff,
+			input.ItemID,
+			cutoff,
+		); err != nil {
+			return nil, fmt.Errorf("insert recommendation: supersede active recommendations: %w", err)
+		}
+	}
 
 	rec := &Recommendation{
-		ID:        newID(),
-		ItemID:    input.ItemID,
-		Agent:     input.Agent,
-		Model:     input.Model,
-		TokensIn:  input.TokensIn,
-		TokensOut: input.TokensOut,
-		CreatedAt: nowUnix(),
+		ID:                newID(),
+		ItemID:            input.ItemID,
+		Agent:             input.Agent,
+		Model:             input.Model,
+		TokensIn:          input.TokensIn,
+		TokensOut:         input.TokensOut,
+		RerunInstructions: strings.TrimSpace(input.RerunInstructions),
+		CreatedAt:         nowUnix(),
 	}
 
 	if _, err := tx.Exec(
 		`INSERT INTO recommendations (
-		 id, item_id, agent, model, rationale, draft_comment, followups, proposed_labels, state_change, confidence, tokens_in, tokens_out, created_at, superseded_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 id, item_id, agent, model, rationale, draft_comment, followups, proposed_labels, state_change, confidence, tokens_in, tokens_out, rerun_instructions, created_at, superseded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID,
 		rec.ItemID,
 		rec.Agent,
@@ -68,6 +118,7 @@ func (d *DB) InsertRecommendation(input NewRecommendation) (*Recommendation, err
 		"", "", nil, nil, "", "",
 		rec.TokensIn,
 		rec.TokensOut,
+		rec.RerunInstructions,
 		rec.CreatedAt,
 		nil,
 	); err != nil {
@@ -142,9 +193,10 @@ func insertOptionTx(tx *sql.Tx, recommendationID string, position int, input New
 func (d *DB) GetRecommendation(id string) (*Recommendation, error) {
 	var rec Recommendation
 	var supersededAt sql.NullInt64
+	var rerunInstructions sql.NullString
 
 	err := d.sql.QueryRow(
-		`SELECT id, item_id, agent, model, tokens_in, tokens_out, created_at, superseded_at
+		`SELECT id, item_id, agent, model, tokens_in, tokens_out, rerun_instructions, created_at, superseded_at
 		 FROM recommendations WHERE id = ?`,
 		id,
 	).Scan(
@@ -154,6 +206,7 @@ func (d *DB) GetRecommendation(id string) (*Recommendation, error) {
 		&rec.Model,
 		&rec.TokensIn,
 		&rec.TokensOut,
+		&rerunInstructions,
 		&rec.CreatedAt,
 		&supersededAt,
 	)
@@ -164,6 +217,9 @@ func (d *DB) GetRecommendation(id string) (*Recommendation, error) {
 		return nil, fmt.Errorf("get recommendation: %w", err)
 	}
 
+	if rerunInstructions.Valid {
+		rec.RerunInstructions = rerunInstructions.String
+	}
 	rec.SupersededAt = unixToTimePtr(supersededAt)
 	options, err := d.listOptionsForRecommendation(rec.ID)
 	if err != nil {
@@ -263,7 +319,7 @@ func scanOption(rows *sql.Rows) (RecommendationOption, error) {
 
 func (d *DB) ListActiveRecommendations() ([]Recommendation, error) {
 	rows, err := d.sql.Query(
-		`SELECT id, item_id, agent, model, tokens_in, tokens_out, created_at, superseded_at
+		`SELECT id, item_id, agent, model, tokens_in, tokens_out, rerun_instructions, created_at, superseded_at
 		 FROM recommendations
 		 WHERE superseded_at IS NULL
 		 ORDER BY created_at DESC, id DESC`,
@@ -277,6 +333,7 @@ func (d *DB) ListActiveRecommendations() ([]Recommendation, error) {
 	for rows.Next() {
 		var rec Recommendation
 		var supersededAt sql.NullInt64
+		var rerunInstructions sql.NullString
 		if err := rows.Scan(
 			&rec.ID,
 			&rec.ItemID,
@@ -284,10 +341,14 @@ func (d *DB) ListActiveRecommendations() ([]Recommendation, error) {
 			&rec.Model,
 			&rec.TokensIn,
 			&rec.TokensOut,
+			&rerunInstructions,
 			&rec.CreatedAt,
 			&supersededAt,
 		); err != nil {
 			return nil, fmt.Errorf("list active recommendations: %w", err)
+		}
+		if rerunInstructions.Valid {
+			rec.RerunInstructions = rerunInstructions.String
 		}
 		rec.SupersededAt = unixToTimePtr(supersededAt)
 		recommendations = append(recommendations, rec)

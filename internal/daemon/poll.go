@@ -59,6 +59,7 @@ type Poller struct {
 	GitHub             triageLister
 	Triage             triageRunner
 	AgentsInstructions string
+	RerunInstructions  string
 	StaleThreshold     time.Duration
 	// IgnoreOlderThan skips items whose last update is older than this.
 	// Zero disables the filter (every item is processed).
@@ -356,7 +357,7 @@ func runTriageForItem(ctx context.Context, poller Poller, item db.Item, polledAt
 	ghItem := dbItemToGHItem(item)
 	result, err := poller.Triage.Triage(itemCtx, TriageRequest{
 		Item:   ghItem,
-		Prompt: triage.Prompt(ghItem.URL, poller.AgentsInstructions),
+		Prompt: triage.PromptWithRerunInstructions(ghItem.URL, poller.AgentsInstructions, poller.RerunInstructions),
 		Schema: triage.Schema(),
 	})
 	if err != nil {
@@ -364,10 +365,6 @@ func runTriageForItem(ctx context.Context, poller Poller, item db.Item, polledAt
 	}
 	if result == nil || result.Recommendation == nil {
 		return nil, errors.New("empty recommendation")
-	}
-
-	if err := supersedeActiveRecommendationsForItem(poller.DB, item.ID, polledAt); err != nil {
-		return nil, fmt.Errorf("supersede recommendations: %w", err)
 	}
 
 	options := make([]db.NewRecommendationOption, 0, len(result.Recommendation.Options))
@@ -382,15 +379,20 @@ func runTriageForItem(ctx context.Context, poller Poller, item db.Item, polledAt
 			WaitingOn:    opt.WaitingOn,
 		})
 	}
-	if _, err := poller.DB.InsertRecommendation(db.NewRecommendation{
-		ItemID:    item.ID,
-		Agent:     result.Agent,
-		Model:     result.Model,
-		TokensIn:  result.TokensIn,
-		TokensOut: result.TokensOut,
-		Options:   options,
-	}); err != nil {
+	_, inserted, err := poller.DB.InsertRecommendationReplacingActiveBefore(db.NewRecommendation{
+		ItemID:            item.ID,
+		Agent:             result.Agent,
+		Model:             result.Model,
+		TokensIn:          result.TokensIn,
+		TokensOut:         result.TokensOut,
+		RerunInstructions: poller.RerunInstructions,
+		Options:           options,
+	}, polledAt)
+	if err != nil {
 		return nil, fmt.Errorf("insert recommendation: %w", err)
+	}
+	if !inserted {
+		poller.log().Info("discarded stale triage result", "item", item.ID)
 	}
 
 	return result, nil

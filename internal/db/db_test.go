@@ -468,6 +468,49 @@ func TestInsertRecommendationStoresMultipleOptionsInOrder(t *testing.T) {
 	}
 }
 
+func TestInsertRecommendationStoresRerunInstructions(t *testing.T) {
+	database := openTestDB(t)
+	if err := database.UpsertRepo(Repo{ID: "kunchenguid/ezoss", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("upsert repo: %v", err)
+	}
+	if err := database.UpsertItem(Item{
+		ID: "kunchenguid/ezoss#42", RepoID: "kunchenguid/ezoss",
+		Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "x", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("upsert item: %v", err)
+	}
+
+	rec, err := database.InsertRecommendation(NewRecommendation{
+		ItemID:            "kunchenguid/ezoss#42",
+		Agent:             sharedtypes.AgentClaude,
+		Model:             "claude-test",
+		RerunInstructions: "Focus on whether this is safe to close after maintainer clarification.",
+		Options: []NewRecommendationOption{{
+			StateChange: sharedtypes.StateChangeNone,
+			Confidence:  sharedtypes.ConfidenceMedium,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	got, err := database.GetRecommendation(rec.ID)
+	if err != nil {
+		t.Fatalf("GetRecommendation() error = %v", err)
+	}
+	if got.RerunInstructions != "Focus on whether this is safe to close after maintainer clarification." {
+		t.Fatalf("RerunInstructions = %q", got.RerunInstructions)
+	}
+
+	active, err := database.ListActiveRecommendations()
+	if err != nil {
+		t.Fatalf("ListActiveRecommendations() error = %v", err)
+	}
+	if len(active) != 1 || active[0].RerunInstructions != got.RerunInstructions {
+		t.Fatalf("active recommendations = %#v, want rerun instructions", active)
+	}
+}
+
 func TestInsertRecommendationRejectsEmptyOptions(t *testing.T) {
 	database := openTestDB(t)
 	if err := database.UpsertRepo(Repo{ID: "kunchenguid/ezoss"}); err != nil {
