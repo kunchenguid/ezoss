@@ -136,7 +136,7 @@ Copying fix prompts from the inbox also needs a platform clipboard command: `pbc
 ```
 
 - **GitHub is the visible truth** - `ezoss/triaged` is the public signal that an item has already been handled.
-- **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
+- **Local DB is the private memory** - drafts, fix prompts, rerun instructions, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
 - **Polling is deliberate** - v1 avoids webhook complexity and just re-triages when the GitHub label disappears.
 - **Approval is explicit** - nothing gets posted, closed, merged, or labeled until you do it from the inbox.
@@ -144,14 +144,14 @@ Copying fix prompts from the inbox also needs a platform clipboard command: `pbc
 
 ## Inbox Actions
 
-| Key     | Action       | Description                                                        |
-| ------- | ------------ | ------------------------------------------------------------------ |
-| `a`     | Approve      | Execute the selected GitHub action and sync triage labels          |
-| `c`     | Copy prompt  | Copy the active option's coding-agent fix prompt when one exists   |
-| `e`     | Edit         | Open the draft in your editor before approval                      |
-| `m`     | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation         |
-| `r`     | Rerun        | Re-triage the item and replace the active recommendation           |
-| `j`/`k` | Navigate     | Move between inbox items; use arrow keys to scroll overflowing text |
+| Key     | Action       | Description                                                               |
+| ------- | ------------ | ------------------------------------------------------------------------- |
+| `a`     | Approve      | Execute the selected GitHub action and sync triage labels                 |
+| `c`     | Copy prompt  | Copy the active option's coding-agent fix prompt when one exists          |
+| `e`     | Edit         | Open the draft in your editor before approval                             |
+| `m`     | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation                |
+| `r`     | Rerun        | Open private rerun instructions; submit with `ctrl+r` or cancel with `esc` |
+| `j`/`k` | Navigate     | Move between inbox items; use arrow keys to scroll overflowing text        |
 
 ## CLI Reference
 

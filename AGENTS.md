@@ -50,7 +50,9 @@ All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` 
 `internal/daemon/poll.go` runs each cycle in two stages:
 
 1. **Stage A (sync):** for each configured repo, call the GitHub client (`internal/ghclient`, which shells out to `gh`) to list items missing `ezoss/triaged` and items recently re-triaged. Reconcile into the `items` table. Phase reported as `"sync"`.
-2. **Stage B (agents):** for each item lacking a current recommendation, build a prompt via `internal/triage.Prompt`, hand it plus `triage.Schema()` to the resolved `agent.Agent`, parse the structured JSON output via `triage.Parse`, and write a `recommendations` row plus one row per option in `recommendation_options`. Phase reported as `"agents"`. A per-item timeout (default 30m, `Poller.PerItemTriageTimeout`) prevents one stuck subprocess from wedging the daemon.
+2. **Stage B (agents):** for each item lacking a current recommendation, build a prompt via `internal/triage.PromptWithRerunInstructions`, hand it plus `triage.Schema()` to the resolved `agent.Agent`, parse the structured JSON output via `triage.Parse`, and write a `recommendations` row plus one row per option in `recommendation_options`. Phase reported as `"agents"`. A per-item timeout (default 30m, `Poller.PerItemTriageTimeout`) prevents one stuck subprocess from wedging the daemon.
+
+Maintainer-provided TUI rerun instructions are threaded through `Poller.RerunInstructions`, appended to the agent prompt as private context, and stored on the refreshed `recommendations` row. Guided reruns use `InsertRecommendationReplacingActiveBefore` so an older in-flight triage result cannot supersede a newer active recommendation.
 
 The agent's contract is the `Recommendation` JSON schema in `internal/triage/triage.go` - a list of self-contained `RecommendationOption` entries, each with `state_change` (`none|close|merge|request_changes`), `rationale`, `waiting_on`, `draft_comment`, `confidence`, optional `followups`. The agent is asked to return 2-3 options when there are multiple reasonable next steps. **User-namespaced labels are deliberately not part of the agent contract** (the agent has no reliable view of which labels exist in the repo); only the `ezoss/*` namespace is managed automatically.
 
@@ -67,7 +69,7 @@ Tests for each agent should not require the real binary; the package ships a `mo
 Schema lives in `internal/db/schema.go`. Migrations are **additive only**, applied via `ensureColumnExists` in `db.Open`. There is also a `backfillRecommendationOptions` migration that splits legacy single-row recommendations into `recommendation_options`; keep that idempotent if you change the shape further. Key tables:
 
 - `repos`, `items` (issues + PRs interleaved, distinguished by `kind`)
-- `recommendations` (one per agent run on an item) with legacy single-row fields kept for backfill
+- `recommendations` (one per agent run on an item, including optional rerun instructions) with legacy single-row fields kept for backfill
 - `recommendation_options` (the agent's proposed alternatives, ordered by `position`)
 - `approvals` (the maintainer's decision; `option_id` points at the chosen option)
 
