@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.2.0...ezoss-v0.2.1) (2026-04-29)
+
+
+### Bug Fixes
+
+* failing test in workflow_test.go ([6f3d709](https://github.com/kunchenguid/ezoss/commit/6f3d70941ff4bd718248d45c2334a6a8f43b8934))
+
 ## [0.2.0](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.1.0...ezoss-v0.2.0) (2026-04-29)
 
 
