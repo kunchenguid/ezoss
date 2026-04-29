@@ -19,8 +19,23 @@ func TestReleaseWorkflowUploadUsesClobber(t *testing.T) {
 	}
 
 	text := string(data)
-	if !strings.Contains(text, "gh release upload ${{ needs.release-please.outputs.tag_name }} --clobber dist/*") {
-		t.Fatalf("release workflow upload step does not use --clobber:\n%s", text)
+	checks := []string{
+		"gh release upload ${{ needs.release-please.outputs.tag_name }} --clobber \\",
+		"dist/ezoss-${{ needs.release-please.outputs.tag_name }}-darwin-amd64.tar.gz \\",
+		"dist/ezoss-${{ needs.release-please.outputs.tag_name }}-darwin-arm64.tar.gz \\",
+		"dist/ezoss-${{ needs.release-please.outputs.tag_name }}-linux-amd64.tar.gz \\",
+		"dist/ezoss-${{ needs.release-please.outputs.tag_name }}-linux-arm64.tar.gz \\",
+		"dist/ezoss-${{ needs.release-please.outputs.tag_name }}-windows-amd64.zip \\",
+		"dist/ezoss-${{ needs.release-please.outputs.tag_name }}-windows-arm64.zip \\",
+		"dist/checksums.txt",
+	}
+	for _, want := range checks {
+		if !strings.Contains(text, want) {
+			t.Fatalf("release workflow upload step missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "gh release upload ${{ needs.release-please.outputs.tag_name }} --clobber dist/*") {
+		t.Fatalf("release workflow upload step must not pass dist/* because smoke directories may exist:\n%s", text)
 	}
 }
 

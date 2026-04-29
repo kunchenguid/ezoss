@@ -321,4 +321,12 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ needs.release-please.outputs.tag_name }} --clobber dist/*
+        run: |
+          gh release upload ${{ needs.release-please.outputs.tag_name }} --clobber \
+            dist/ezoss-${{ needs.release-please.outputs.tag_name }}-darwin-amd64.tar.gz \
+            dist/ezoss-${{ needs.release-please.outputs.tag_name }}-darwin-arm64.tar.gz \
+            dist/ezoss-${{ needs.release-please.outputs.tag_name }}-linux-amd64.tar.gz \
+            dist/ezoss-${{ needs.release-please.outputs.tag_name }}-linux-arm64.tar.gz \
+            dist/ezoss-${{ needs.release-please.outputs.tag_name }}-windows-amd64.zip \
+            dist/ezoss-${{ needs.release-please.outputs.tag_name }}-windows-arm64.zip \
+            dist/checksums.txt
