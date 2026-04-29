@@ -101,6 +101,7 @@ func Prompt(itemURL string, agentsInstructions string) string {
 	b.WriteString("How many options to return:\n")
 	b.WriteString("- Prefer returning multiple options (2-3) whenever there are multiple reasonable next steps. Surfacing the alternatives helps the maintainer pick instead of forcing them to think of the alternatives themselves. Examples: close-as-stale vs. one-more-nudge, merge-as-is vs. request small changes, ask for repro vs. close as 'works for me', approve label-only vs. ask a clarifying question.\n")
 	b.WriteString("- Return one option only when there's truly one obvious resolution and no other next step is reasonable (e.g. unambiguous duplicate, fully approved PR ready to merge, spam).\n")
+	b.WriteString("- Always include at least one option primarily about accepting the incoming item when it is a legitimate good-faith issue or pull request, even if your top pick is to ask for changes, ask a question, or close it: for an issue, acknowledge the contribution and include a useful fix_prompt if appropriate; for a pull request, acknowledge the contribution and set state_change 'merge'.\n")
 	b.WriteString("- Order options with your top pick first.\n")
 	b.WriteString("- Don't pad with weak alternatives just to fill the list. Each option must be a genuinely reasonable next step on its own.\n\n")
 	b.WriteString("Common combinations within an option:\n")

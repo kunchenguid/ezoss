@@ -273,6 +273,23 @@ func TestPromptEncouragesMultipleOptionsWhenReasonable(t *testing.T) {
 	}
 }
 
+func TestPromptRequiresAcknowledgementOption(t *testing.T) {
+	t.Parallel()
+
+	prompt := Prompt("https://github.com/acme/widgets/pull/42", "")
+
+	for _, want := range []string{
+		"Always include at least one option",
+		"primarily about accepting the incoming item",
+		"for an issue, acknowledge the contribution and include a useful fix_prompt if appropriate",
+		"for a pull request, acknowledge the contribution and set state_change 'merge'",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+}
+
 func TestPromptIncludesPRApprovalBeforeReviewGuidance(t *testing.T) {
 	t.Parallel()
 
