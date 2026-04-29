@@ -1,11 +1,15 @@
 package release
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+var releasePleaseVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$`)
 
 func TestReleaseWorkflowUploadUsesClobber(t *testing.T) {
 	workflowPath := filepath.Join("..", "..", ".github", "workflows", "release.yml")
@@ -458,21 +462,24 @@ func TestReleasePleaseConfigKeepsCurrentGoReleaseContract(t *testing.T) {
 	}
 }
 
-func TestReleasePleaseManifestKeepsCurrentSeedVersion(t *testing.T) {
+func TestReleasePleaseManifestKeepsRootPackageVersion(t *testing.T) {
 	manifestPath := filepath.Join("..", "..", ".release-please-manifest.json")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", manifestPath, err)
 	}
 
-	text := string(data)
-	checks := []string{
-		`".": "0.1.0"`,
+	var manifest map[string]string
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("release-please manifest is not valid JSON: %v\n%s", err, data)
 	}
-	for _, want := range checks {
-		if !strings.Contains(text, want) {
-			t.Fatalf("release-please manifest missing %q:\n%s", want, text)
-		}
+
+	version, ok := manifest["."]
+	if !ok {
+		t.Fatalf("release-please manifest missing root package entry: %s", data)
+	}
+	if !releasePleaseVersionPattern.MatchString(version) {
+		t.Fatalf("release-please manifest root package version %q is not semver-like", version)
 	}
 }
 
