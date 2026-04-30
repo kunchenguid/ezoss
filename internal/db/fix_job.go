@@ -111,7 +111,7 @@ func (d *DB) LatestFixJobForItem(itemID string) (*FixJob, error) {
 	rows, err := d.sql.Query(
 		`SELECT id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
 		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
-		 FROM fix_jobs WHERE item_id = ? ORDER BY created_at DESC LIMIT 1`, itemID,
+		 FROM fix_jobs WHERE item_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`, itemID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("latest fix job: %w", err)

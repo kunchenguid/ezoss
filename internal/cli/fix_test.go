@@ -381,3 +381,40 @@ func TestRunFixEntryAutoFallsBackToGHWhenNoMistakesCreateFails(t *testing.T) {
 		t.Fatalf("create modes = %#v, want no-mistakes then gh fallback", createModes)
 	}
 }
+
+func TestCreateFixPRWithFallbackDoesNotFallbackAfterNoMistakesPush(t *testing.T) {
+	originalResolvePRCreator := resolvePRCreator
+	originalCreateFixPR := createFixPR
+	t.Cleanup(func() {
+		resolvePRCreator = originalResolvePRCreator
+		createFixPR = originalCreateFixPR
+	})
+
+	resolvePRCreator = func(mode prcreator.Mode, _ func(string) (string, error)) (prcreator.Resolution, error) {
+		if mode != prcreator.ModeGH {
+			t.Fatalf("resolved fallback mode = %q, want gh", mode)
+		}
+		return prcreator.Resolution{Mode: prcreator.ModeGH, Requested: prcreator.ModeGH, Binary: "/bin/gh"}, nil
+	}
+	var createModes []prcreator.Mode
+	createFixPR = func(ctx context.Context, mode prcreator.Mode, opts prcreator.CreateOptions, _ prcreator.CommandRunner) (prcreator.Created, error) {
+		createModes = append(createModes, mode)
+		if mode == prcreator.ModeGH {
+			return prcreator.Created{URL: "https://github.com/acme/widgets/pull/99"}, nil
+		}
+		return prcreator.Create(ctx, mode, opts, func(_ context.Context, _ string, name string, _ ...string) ([]byte, error) {
+			if name == "gh" {
+				return nil, errors.New("gh pr list failed")
+			}
+			return nil, nil
+		})
+	}
+
+	_, _, err := createFixPRWithFallback(context.Background(), prcreator.Resolution{Mode: prcreator.ModeNoMistakes, Requested: prcreator.ModeAuto}, prcreator.CreateOptions{WorktreePath: "/tmp/worktree", Head: "ezoss/fix-42", Title: "Fix parser crash", Body: "Fixes #42", DetectAttempts: 1})
+	if !prcreator.IsNoMistakesDetectionError(err) {
+		t.Fatalf("IsNoMistakesDetectionError(%v) = false, want true", err)
+	}
+	if !reflect.DeepEqual(createModes, []prcreator.Mode{prcreator.ModeNoMistakes}) {
+		t.Fatalf("create modes = %#v, want no gh fallback after no-mistakes push", createModes)
+	}
+}

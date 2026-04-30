@@ -217,3 +217,25 @@ func TestCreateWithNoMistakesPollsUntilPRExists(t *testing.T) {
 		t.Fatalf("gh detection calls = %d, want 2; calls=%#v", ghCalls, calls)
 	}
 }
+
+func TestCreateWithNoMistakesMarksDetectionErrors(t *testing.T) {
+	want := errors.New("gh unavailable")
+	_, err := Create(context.Background(), ModeNoMistakes, CreateOptions{
+		WorktreePath:   "/tmp/worktree",
+		Head:           "ezoss/fix-42",
+		Title:          "Fix parser crash",
+		Body:           "Fixes #42",
+		DetectAttempts: 1,
+	}, func(_ context.Context, _ string, name string, _ ...string) ([]byte, error) {
+		if name == "gh" {
+			return nil, want
+		}
+		return nil, nil
+	})
+	if !IsNoMistakesDetectionError(err) {
+		t.Fatalf("IsNoMistakesDetectionError(%v) = false, want true", err)
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("Create() error = %v, want wrapped %v", err, want)
+	}
+}

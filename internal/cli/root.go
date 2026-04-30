@@ -627,7 +627,7 @@ func (r cliFixRunner) RunFix(ctx context.Context, job db.FixJob, progress func(d
 	}
 	created, usedResolution, err := createFixPRWithFallback(ctx, resolution, prcreator.CreateOptions{RepoID: job.RepoID, WorktreePath: worktree.WorktreePath, Base: baseBranch(worktree.BaseRef), Head: worktree.Branch, Title: fixPRTitle(entry), Body: fixPRBody(entry), Draft: true, DetectAttempts: 1, DetectInterval: -1})
 	if err != nil {
-		if usedResolution.Mode == prcreator.ModeNoMistakes && strings.Contains(err.Error(), "PR not found") {
+		if usedResolution.Mode == prcreator.ModeNoMistakes && prcreator.IsNoMistakesDetectionError(err) {
 			return &daemon.FixResult{Branch: worktree.Branch, WorktreePath: worktree.WorktreePath, WaitingForPR: true}, nil
 		}
 		return nil, err
@@ -652,7 +652,7 @@ func shouldFallbackFromNoMistakes(resolution prcreator.Resolution, err error) bo
 	if err == nil || resolution.Requested != prcreator.ModeAuto || resolution.Mode != prcreator.ModeNoMistakes {
 		return false
 	}
-	return !strings.Contains(err.Error(), "PR not found")
+	return !prcreator.IsNoMistakesDetectionError(err)
 }
 
 func (r cliFixRunner) DetectPR(ctx context.Context, job db.FixJob) (string, error) {

@@ -170,6 +170,35 @@ func TestClaimNextQueuedFixJobAndUpdateStatus(t *testing.T) {
 	}
 }
 
+func TestLatestFixJobForItemBreaksCreatedAtTiesByID(t *testing.T) {
+	database := openTestDB(t)
+	first, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() first error = %v", err)
+	}
+	if err := database.UpdateFixJob(first.ID, FixJobUpdate{Status: FixJobStatusFailed, Phase: FixJobPhaseFailed, Error: "retry"}); err != nil {
+		t.Fatalf("UpdateFixJob() first error = %v", err)
+	}
+	second, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-2", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it again.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() second error = %v", err)
+	}
+	if first.ID >= second.ID {
+		t.Fatalf("test setup IDs are not ordered: first=%q second=%q", first.ID, second.ID)
+	}
+	if _, err := database.sql.Exec(`UPDATE fix_jobs SET created_at = ? WHERE id IN (?, ?)`, int64(1234), first.ID, second.ID); err != nil {
+		t.Fatalf("force created_at tie: %v", err)
+	}
+
+	got, err := database.LatestFixJobForItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("LatestFixJobForItem() error = %v", err)
+	}
+	if got == nil || got.ID != second.ID {
+		t.Fatalf("LatestFixJobForItem() = %#v, want second job %s", got, second.ID)
+	}
+}
+
 func TestOpenReportsNoMigrationsForFreshDatabase(t *testing.T) {
 	database := openTestDB(t)
 	if applied := database.MigrationsApplied(); len(applied) != 0 {

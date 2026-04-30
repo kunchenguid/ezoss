@@ -119,6 +119,23 @@ type Created struct {
 	URL string
 }
 
+type noMistakesDetectionError struct {
+	err error
+}
+
+func (e *noMistakesDetectionError) Error() string {
+	return e.err.Error()
+}
+
+func (e *noMistakesDetectionError) Unwrap() error {
+	return e.err
+}
+
+func IsNoMistakesDetectionError(err error) bool {
+	var target *noMistakesDetectionError
+	return errors.As(err, &target)
+}
+
 type CommandRunner func(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
 
 func Create(ctx context.Context, mode Mode, opts CreateOptions, run CommandRunner) (Created, error) {
@@ -226,9 +243,9 @@ func detectPullRequest(ctx context.Context, opts CreateOptions, run CommandRunne
 		}
 	}
 	if lastErr != nil {
-		return "", fmt.Errorf("detect no-mistakes PR for %s: %w", opts.Head, lastErr)
+		return "", &noMistakesDetectionError{err: fmt.Errorf("detect no-mistakes PR for %s: %w", opts.Head, lastErr)}
 	}
-	return "", fmt.Errorf("detect no-mistakes PR for %s: PR not found", opts.Head)
+	return "", &noMistakesDetectionError{err: fmt.Errorf("detect no-mistakes PR for %s: PR not found", opts.Head)}
 }
 
 func runCommand(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
