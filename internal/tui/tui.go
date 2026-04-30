@@ -272,7 +272,7 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 // asyncVerbForms maps the internal action verb to its present-participle
 // and past forms for use in log lines and the action-bar morph. Keep this
-// aligned with the keys understood by Update (a/m/r).
+// aligned with the async action keys understood by Update (a/f/m/r).
 var asyncVerbForms = map[string]struct {
 	ing string
 	ed  string
@@ -950,7 +950,7 @@ const (
 //     proposed actions) is the focus and lives in a centered card.
 //   - On wide layouts a queue rail sits to the left, grouped by repo with
 //     dimmed repo headings, providing context without stealing focus.
-//   - The Decide bar (a/e/s/r) sits below the card so the actions are
+//   - The Decide bar (a/f/e/m/r/c) sits below the card so the actions are
 //     anchored to the item being decided on.
 //   - j/k navigate forward/back through the queue; arrow keys only scroll
 //     overflowing card content.
@@ -1217,8 +1217,8 @@ func formatLogElapsed(d time.Duration) string {
 // ends with "? more" instead of trying to expose every binding inline.
 //
 // When the entry has an action in flight, the bar morphs into a
-// spinner+verb so it's obvious that pressing a/m/r/e right now is a
-// no-op until the action completes.
+// spinner+verb so it's obvious that pressing another action key right now is
+// a no-op until the action completes.
 func renderDecideBar(maxWidth int, optionCount int) string {
 	hints := []string{"a approve", "f fix", "e edit", "m mark triaged", "r rerun", "c copy"}
 	if optionCount > 1 {

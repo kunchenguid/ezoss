@@ -63,7 +63,7 @@ All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` 
    A per-item timeout (default 30m, `Poller.PerItemTriageTimeout`) prevents one stuck subprocess from wedging the daemon.
 
 Fix work comes from `fix.start` in the TUI path or from `ezoss fix <owner/repo#number>` in the CLI path.
-`cliFixRunner` prepares an isolated worktree under `~/.ezoss/fixes`, resolves repo/global agent config, runs the selected agent with the option's `fix_prompt`, commits produced changes, and creates a draft PR according to `fixes.pr_create`.
+`cliFixRunner` prepares an isolated worktree under `~/.ezoss/fixes`, resolves repo/global agent config, runs the selected agent with the option's `fix_prompt`, commits produced changes, and then creates a draft PR or leaves the branch in the worktree according to `fixes.pr_create`.
 
 Maintainer-provided TUI rerun instructions are threaded through `Poller.RerunInstructions`, appended to the agent prompt as private context, and stored on the refreshed `recommendations` row. Guided reruns use `InsertRecommendationReplacingActiveBefore` so an older in-flight triage result cannot supersede a newer active recommendation.
 

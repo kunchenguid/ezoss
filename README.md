@@ -201,7 +201,7 @@ Per-repo overrides live in `.ezoss.yaml` at the repo root and currently support 
 `merge_method` controls how approved PR merges execute and supports `merge`, `squash`, or `rebase`.
 
 `fixes.pr_create` controls how fix PRs are created and supports `auto`, `no-mistakes`, `gh`, or `disabled`.
-`auto` prefers `no-mistakes` when both `no-mistakes` and `gh` are available, then uses `gh` when `no-mistakes` is unavailable.
+`auto` prefers `no-mistakes` when both `no-mistakes` and `gh` are available, then uses `gh` when `no-mistakes` is unavailable or fails before PR detection.
 `no-mistakes` pushes to the no-mistakes remote and uses `gh` to detect the created PR.
 If daemon detection misses the PR, the inbox keeps the job in `waiting_for_pr` and shows `cd <worktree> && no-mistakes attach` for manual recovery.
 `gh` pushes to origin and runs `gh pr create --draft`.
