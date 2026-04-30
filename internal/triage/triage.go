@@ -19,9 +19,10 @@ type Recommendation struct {
 
 // RecommendationOption is one self-contained proposed resolution. The
 // action it proposes is decomposed: post DraftComment if non-empty and
-// apply StateChange (none|close|merge|request_changes). User-namespaced
-// labels are deliberately not part of the agent's contract - the agent
-// has no reliable view of which labels exist in the target repo, and any
+// apply StateChange (none|close|merge|request_changes|fix_required).
+// FixPrompt carries the coding-agent handoff for fix_required options.
+// User-namespaced labels are deliberately not part of the agent's contract -
+// the agent has no reliable view of which labels exist in the target repo, and any
 // proposed but missing label used to break the atomic gh edit --add-label
 // call. Lifecycle labels in the ezoss/* namespace are managed
 // automatically downstream.
@@ -49,8 +50,8 @@ var schema = json.RawMessage(`{
 				"properties": {
 					"state_change": {
 						"type": "string",
-						"description": "The state transition to apply. 'none' means no state change.",
-						"enum": ["none", "close", "merge", "request_changes"]
+						"description": "The state transition to apply. 'none' means no state change. 'fix_required' means the item is legitimate and should be handed to a coding agent before closing.",
+						"enum": ["none", "close", "merge", "request_changes", "fix_required"]
 					},
 					"rationale": {"type": "string"},
 					"waiting_on": {
@@ -99,7 +100,7 @@ func PromptWithRerunInstructions(itemURL string, agentsInstructions string, reru
 	b.WriteString("Return one or more options. Each option is a self-contained proposed resolution with these fields:\n")
 	b.WriteString("- draft_comment: the comment to post on the item, or empty string if no comment.\n")
 	b.WriteString("- fix_prompt: a prompt the maintainer can copy into a coding agent when the item is a legitimate actionable issue or PR, or empty string if no coding-agent handoff is useful. Include the original issue/PR URL and enough context from your investigation for the coding agent to work on it. Prefer readable multi-line Markdown with short sections over a single long paragraph.\n")
-	b.WriteString("- state_change: the state transition to apply: 'none', 'close', 'merge', or 'request_changes'.\n")
+	b.WriteString("- state_change: the state transition to apply: 'none', 'close', 'merge', 'request_changes', or 'fix_required'. Use 'fix_required' when the item is legitimate and should be handed to a coding agent before it can be closed.\n")
 	b.WriteString("- waiting_on: who the item is waiting on after this action.\n")
 	b.WriteString("- confidence: how sure you are this is the right resolution.\n\n")
 	b.WriteString("How many options to return:\n")
@@ -113,8 +114,9 @@ func PromptWithRerunInstructions(itemURL string, agentsInstructions string, reru
 	b.WriteString("- explain why we are closing and close: draft_comment set, state_change 'close'.\n")
 	b.WriteString("- merge an approved PR: state_change 'merge' (draft_comment optional).\n")
 	b.WriteString("- request changes on a PR: draft_comment set with the review feedback, state_change 'request_changes'.\n")
+	b.WriteString("- hand a legitimate bug or feature request to a coding agent: fix_prompt set, state_change 'fix_required'.\n")
 	b.WriteString("- mark triaged with no further action: draft_comment empty, state_change 'none'.\n\n")
-	b.WriteString("For legitimate actionable issues, prefer setting fix_prompt to the handoff the maintainer can copy into a coding agent. The prompt should include the original URL, summary, reproduction or evidence, suspected files/components if found, acceptance criteria, and verification steps. Format it as multi-line Markdown so it is readable in a terminal and useful when copied.\n\n")
+	b.WriteString("For legitimate actionable issues, prefer state_change 'fix_required' and set fix_prompt to the handoff for a coding agent. The prompt should include the original URL, summary, reproduction or evidence, suspected files/components if found, acceptance criteria, and verification steps. Format it as multi-line Markdown so it is readable in a terminal and directly runnable by ezoss fix.\n\n")
 	b.WriteString("If the item is a pull request, first check whether it is linked to an issue where the approach was already discussed and agreed upon. If there is no prior agreement, set state_change 'none' and use draft_comment to ask whether the approach is wanted - do not request_changes or merge until the approach is confirmed. If there is prior agreement, proceed with code review and choose request_changes or merge based on the review.\n")
 	if strings.TrimSpace(agentsInstructions) != "" {
 		b.WriteString("\nUser instructions from ~/.ezoss/AGENTS.md:\n")
@@ -158,7 +160,8 @@ func isSupportedStateChange(value sharedtypes.StateChange) bool {
 	case sharedtypes.StateChangeNone,
 		sharedtypes.StateChangeClose,
 		sharedtypes.StateChangeMerge,
-		sharedtypes.StateChangeRequestChanges:
+		sharedtypes.StateChangeRequestChanges,
+		sharedtypes.StateChangeFixRequired:
 		return true
 	default:
 		return false

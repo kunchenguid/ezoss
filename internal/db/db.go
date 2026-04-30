@@ -20,6 +20,7 @@ var (
 type DB struct {
 	sql               *sql.DB
 	migrationsApplied []string
+	fixJobMu          sync.Mutex
 }
 
 func Open(path string) (*DB, error) {

@@ -30,6 +30,19 @@ type SyncLabels struct {
 	Stale     bool `yaml:"stale"`
 }
 
+type PRCreateMode string
+
+const (
+	PRCreateAuto       PRCreateMode = "auto"
+	PRCreateNoMistakes PRCreateMode = "no-mistakes"
+	PRCreateGH         PRCreateMode = "gh"
+	PRCreateDisabled   PRCreateMode = "disabled"
+)
+
+type FixesConfig struct {
+	PRCreate PRCreateMode `yaml:"pr_create"`
+}
+
 type syncLabelsRaw struct {
 	Triaged   *bool `yaml:"triaged"`
 	WaitingOn *bool `yaml:"waiting_on"`
@@ -44,6 +57,7 @@ type GlobalConfig struct {
 	MergeMethod     string
 	Repos           []string
 	SyncLabels      SyncLabels
+	Fixes           FixesConfig
 }
 
 type globalConfigRaw struct {
@@ -54,6 +68,7 @@ type globalConfigRaw struct {
 	MergeMethod     string         `yaml:"merge_method"`
 	Repos           []string       `yaml:"repos"`
 	SyncLabels      *syncLabelsRaw `yaml:"sync_labels"`
+	Fixes           *FixesConfig   `yaml:"fixes"`
 }
 
 type globalConfigFile struct {
@@ -63,6 +78,7 @@ type globalConfigFile struct {
 	IgnoreOlderThan string         `yaml:"ignore_older_than"`
 	MergeMethod     string         `yaml:"merge_method"`
 	Repos           []string       `yaml:"repos"`
+	Fixes           FixesConfig    `yaml:"fixes"`
 	SyncLabels      syncLabelsFile `yaml:"sync_labels"`
 }
 
@@ -83,6 +99,7 @@ type Config struct {
 	MergeMethod     string
 	Repos           []string
 	SyncLabels      SyncLabels
+	Fixes           FixesConfig
 }
 
 const defaultMergeMethod = "merge"
@@ -115,6 +132,19 @@ func normalizeMergeMethod(value string) (string, error) {
 	}
 }
 
+func normalizePRCreateMode(value PRCreateMode) (PRCreateMode, error) {
+	mode := PRCreateMode(strings.ToLower(strings.TrimSpace(string(value))))
+	if mode == "" {
+		return PRCreateAuto, nil
+	}
+	switch mode {
+	case PRCreateAuto, PRCreateNoMistakes, PRCreateGH, PRCreateDisabled:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid fixes.pr_create %q: must be auto, no-mistakes, gh, or disabled", value)
+	}
+}
+
 const defaultConfigYAML = `# ezoss global configuration
 
 # Agent to use for triage
@@ -132,6 +162,11 @@ ignore_older_than: 365d
 
 # Default PR merge method: merge, squash, or rebase
 merge_method: merge
+
+# How ezoss should create fix PRs.
+# Options: auto, no-mistakes, gh, disabled
+fixes:
+  pr_create: auto
 
 # Repositories to monitor
 repos: []
@@ -155,6 +190,7 @@ func defaultGlobalConfig() *GlobalConfig {
 		IgnoreOlderThan: 365 * 24 * time.Hour,
 		MergeMethod:     defaultMergeMethod,
 		SyncLabels:      defaultSyncLabels(),
+		Fixes:           FixesConfig{PRCreate: PRCreateAuto},
 	}
 }
 
@@ -192,6 +228,7 @@ func SaveGlobal(path string, cfg *GlobalConfig) error {
 		IgnoreOlderThan: formatConfigDuration(cfg.IgnoreOlderThan),
 		MergeMethod:     cfg.MergeMethod,
 		Repos:           append([]string(nil), cfg.Repos...),
+		Fixes:           cfg.Fixes,
 		SyncLabels: syncLabelsFile{
 			WaitingOn: cfg.SyncLabels.WaitingOn,
 			Stale:     cfg.SyncLabels.Stale,
@@ -217,6 +254,11 @@ func SaveGlobal(path string, cfg *GlobalConfig) error {
 		return err
 	}
 	file.MergeMethod = mergeMethod
+	prCreate, err := normalizePRCreateMode(file.Fixes.PRCreate)
+	if err != nil {
+		return err
+	}
+	file.Fixes.PRCreate = prCreate
 
 	data, err := yaml.Marshal(&file)
 	if err != nil {
@@ -278,6 +320,13 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 		}
 		cfg.MergeMethod = mergeMethod
 	}
+	if raw.Fixes != nil {
+		prCreate, err := normalizePRCreateMode(raw.Fixes.PRCreate)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Fixes.PRCreate = prCreate
+	}
 	if raw.Repos != nil {
 		cfg.Repos = append([]string(nil), raw.Repos...)
 	}
@@ -327,6 +376,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		MergeMethod:     global.MergeMethod,
 		Repos:           append([]string(nil), global.Repos...),
 		SyncLabels:      global.SyncLabels,
+		Fixes:           global.Fixes,
 	}
 	if repo.Agent != "" {
 		cfg.Agent = repo.Agent

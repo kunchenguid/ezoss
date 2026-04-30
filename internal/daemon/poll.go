@@ -27,6 +27,8 @@ const staleDetectorModel = "stale-detector"
 // hours.
 const defaultPerItemTriageTimeout = 30 * time.Minute
 
+const defaultPerFixJobTimeout = 30 * time.Minute
+
 type triageLister interface {
 	ListNeedingTriage(ctx context.Context, repo string) ([]ghclient.Item, error)
 	ListTriaged(ctx context.Context, repo string, sinceUpdated time.Time) ([]ghclient.Item, error)
@@ -38,6 +40,18 @@ type itemGetter interface {
 
 type triageRunner interface {
 	Triage(ctx context.Context, req TriageRequest) (*TriageResult, error)
+}
+
+type fixRunner interface {
+	RunFix(ctx context.Context, job db.FixJob, progress func(db.FixJobUpdate) error) (*FixResult, error)
+	DetectPR(ctx context.Context, job db.FixJob) (string, error)
+}
+
+type FixResult struct {
+	Branch       string
+	WorktreePath string
+	PRURL        string
+	WaitingForPR bool
 }
 
 type TriageRequest struct {
@@ -58,6 +72,7 @@ type Poller struct {
 	DB                 *db.DB
 	GitHub             triageLister
 	Triage             triageRunner
+	Fix                fixRunner
 	AgentsInstructions string
 	RerunInstructions  string
 	StaleThreshold     time.Duration
@@ -74,6 +89,9 @@ type Poller struct {
 	// PerItemTriageTimeout caps a single triage invocation. Zero means
 	// defaultPerItemTriageTimeout (30m).
 	PerItemTriageTimeout time.Duration
+	// PerFixJobTimeout caps a single fix job invocation. Zero means
+	// defaultPerFixJobTimeout (30m).
+	PerFixJobTimeout time.Duration
 }
 
 func (p Poller) log() *slog.Logger {
@@ -83,11 +101,11 @@ func (p Poller) log() *slog.Logger {
 	return p.Logger
 }
 
-// PollOnce runs a full poll cycle in two sequential stages: stage A
-// fetches GitHub data for every configured repo into the local DB,
-// stage B then iterates items in the DB that need agent attention and
-// invokes the triage runner. Both stages are sequential to avoid
-// hitting GitHub or agent provider rate limits.
+// PollOnce runs a full poll cycle in sequential stages: stage A fetches
+// GitHub data for every configured repo into the local DB, stage B processes
+// daemon-backed fix jobs, and stage C invokes the triage runner for items
+// that need agent attention. If stage B does fix work, the cycle stops before
+// agent triage so fix runs and triage runs do not contend for agent capacity.
 func PollOnce(ctx context.Context, poller Poller, repos []string) error {
 	if poller.DB == nil {
 		return fmt.Errorf("poller db: nil")
@@ -101,6 +119,16 @@ func PollOnce(ctx context.Context, poller Poller, repos []string) error {
 	var errs []error
 	if err := runSyncStage(ctx, poller, repos, polledAt); err != nil {
 		errs = append(errs, err)
+	}
+	fixDidWork, fixErr := runFixStage(ctx, poller)
+	if fixErr != nil {
+		errs = append(errs, fixErr)
+	}
+	if fixDidWork {
+		if len(errs) > 0 {
+			return errors.Join(errs...)
+		}
+		return nil
 	}
 	if err := runAgentsStage(ctx, poller, repos, polledAt); err != nil {
 		errs = append(errs, err)

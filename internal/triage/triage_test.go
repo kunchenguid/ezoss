@@ -152,6 +152,30 @@ func TestParseAllowsCommentOnlyWithStateChangeNone(t *testing.T) {
 	}
 }
 
+func TestParseAllowsFixRequiredStateChange(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := Parse([]byte(`{
+		"options": [{
+			"state_change":"fix_required",
+			"rationale":"This is a reproducible maintainer-side bug.",
+			"waiting_on":"maintainer",
+			"draft_comment":"Thanks, this looks real. I'll prepare a fix.",
+			"fix_prompt":"Fix https://github.com/acme/widgets/issues/42. Add a regression test, fix the parser, and run go test ./...",
+			"confidence":"high"
+		}]
+	}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if parsed.Options[0].StateChange != sharedtypes.StateChangeFixRequired {
+		t.Fatalf("StateChange = %q, want fix_required", parsed.Options[0].StateChange)
+	}
+	if parsed.Options[0].FixPrompt == "" {
+		t.Fatalf("FixPrompt empty, want coding-agent prompt")
+	}
+}
+
 func TestParseRejectsUnsupportedEnums(t *testing.T) {
 	t.Parallel()
 
@@ -204,6 +228,17 @@ func TestSchemaWrapsOptions(t *testing.T) {
 			t.Fatalf("option schema missing property %q", field)
 		}
 	}
+	stateChange, ok := itemProperties["state_change"].(map[string]any)
+	if !ok {
+		t.Fatalf("state_change schema = %#v", itemProperties["state_change"])
+	}
+	enums, ok := stateChange["enum"].([]any)
+	if !ok {
+		t.Fatalf("state_change enum = %#v", stateChange["enum"])
+	}
+	if !containsAny(enums, "fix_required") {
+		t.Fatalf("state_change enum = %#v, want fix_required", enums)
+	}
 	if _, ok := itemProperties["proposed_labels"]; ok {
 		t.Fatalf("option schema must not include proposed_labels - the agent has no view of repo-specific labels and the field caused half-finished approvals when proposed labels didn't exist")
 	}
@@ -212,6 +247,15 @@ func TestSchemaWrapsOptions(t *testing.T) {
 	if !ok || len(required) != 1 || required[0] != "options" {
 		t.Fatalf("schema required = %#v, want [options]", required)
 	}
+}
+
+func containsAny(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPromptIncludesURLAndAgentInstructions(t *testing.T) {

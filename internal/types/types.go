@@ -72,10 +72,10 @@ func (w WaitingOn) Value() (driver.Value, error) {
 	return string(w), nil
 }
 
-// StateChange represents the agent's proposed change to an item's state.
-// It composes with DraftComment and Labels on Recommendation - the agent
-// can independently choose to post a comment, change item state, and apply
-// labels in a single approval.
+// StateChange represents the agent's proposed state transition or handoff.
+// Most values map to GitHub item transitions composed with DraftComment on a
+// recommendation. StateChangeFixRequired hands the item to a coding-agent fix
+// prompt before a final GitHub state change.
 type StateChange string
 
 const (
@@ -83,6 +83,7 @@ const (
 	StateChangeClose          StateChange = "close"
 	StateChangeMerge          StateChange = "merge"
 	StateChangeRequestChanges StateChange = "request_changes"
+	StateChangeFixRequired    StateChange = "fix_required"
 )
 
 func (s *StateChange) Scan(src any) error {

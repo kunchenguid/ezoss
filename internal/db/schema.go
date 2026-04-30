@@ -82,4 +82,35 @@ CREATE TABLE IF NOT EXISTS approvals (
     acted_error        TEXT,
     created_at         INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS fix_jobs (
+    id                TEXT PRIMARY KEY,
+    item_id           TEXT NOT NULL,
+    recommendation_id TEXT NOT NULL,
+    option_id         TEXT,
+    repo_id           TEXT NOT NULL,
+    item_number       INTEGER NOT NULL,
+    item_kind         TEXT NOT NULL,
+    title             TEXT,
+    fix_prompt        TEXT NOT NULL,
+    agent             TEXT,
+    pr_create         TEXT NOT NULL,
+    branch            TEXT,
+    worktree_path     TEXT,
+    pr_url            TEXT,
+    status            TEXT NOT NULL,
+    phase             TEXT,
+    message           TEXT,
+    error             TEXT,
+    created_at        INTEGER NOT NULL,
+    started_at        INTEGER,
+    updated_at        INTEGER NOT NULL,
+    completed_at      INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_fix_jobs_item_active
+    ON fix_jobs(item_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_fix_jobs_rec_option
+    ON fix_jobs(recommendation_id, option_id);
 `

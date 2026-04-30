@@ -32,6 +32,9 @@ func TestLoadGlobalDefaults(t *testing.T) {
 	if len(cfg.Repos) != 0 {
 		t.Fatalf("Repos = %v, want empty", cfg.Repos)
 	}
+	if cfg.Fixes.PRCreate != PRCreateAuto {
+		t.Fatalf("Fixes.PRCreate = %q, want %q", cfg.Fixes.PRCreate, PRCreateAuto)
+	}
 }
 
 func TestEnsureDefaultGlobalConfigCreatesLoadableFile(t *testing.T) {
@@ -49,6 +52,7 @@ func TestEnsureDefaultGlobalConfigCreatesLoadableFile(t *testing.T) {
 		"poll_interval: 5m",
 		"stale_threshold: 30d",
 		"ignore_older_than: 365d",
+		"pr_create: auto",
 		"waiting_on: true",
 		"stale: true",
 	} {
@@ -94,6 +98,7 @@ func TestSaveGlobalWritesLoadableConfig(t *testing.T) {
 		PollInterval:   10 * time.Minute,
 		StaleThreshold: 14 * 24 * time.Hour,
 		MergeMethod:    "squash",
+		Fixes:          FixesConfig{PRCreate: PRCreateNoMistakes},
 		Repos:          []string{"kunchenguid/ezoss", "kunchenguid/no-mistakes"},
 		SyncLabels:     SyncLabels{Triaged: true, WaitingOn: false, Stale: true},
 	}
@@ -117,6 +122,9 @@ func TestSaveGlobalWritesLoadableConfig(t *testing.T) {
 	}
 	if got.MergeMethod != want.MergeMethod {
 		t.Fatalf("MergeMethod = %q, want %q", got.MergeMethod, want.MergeMethod)
+	}
+	if got.Fixes.PRCreate != want.Fixes.PRCreate {
+		t.Fatalf("Fixes.PRCreate = %q, want %q", got.Fixes.PRCreate, want.Fixes.PRCreate)
 	}
 	if strings.Join(got.Repos, ",") != strings.Join(want.Repos, ",") {
 		t.Fatalf("Repos = %v, want %v", got.Repos, want.Repos)
@@ -199,6 +207,8 @@ func TestLoadGlobalFromFile(t *testing.T) {
 poll_interval: 10m
 stale_threshold: 168h
 merge_method: rebase
+fixes:
+  pr_create: gh
 repos:
   - kunchenguid/no-mistakes
   - kunchenguid/ezoss
@@ -228,11 +238,32 @@ sync_labels:
 	if cfg.MergeMethod != "rebase" {
 		t.Fatalf("MergeMethod = %q, want %q", cfg.MergeMethod, "rebase")
 	}
+	if cfg.Fixes.PRCreate != PRCreateGH {
+		t.Fatalf("Fixes.PRCreate = %q, want %q", cfg.Fixes.PRCreate, PRCreateGH)
+	}
 	if len(cfg.Repos) != 2 {
 		t.Fatalf("Repos len = %d, want 2", len(cfg.Repos))
 	}
 	if cfg.SyncLabels.WaitingOn {
 		t.Fatalf("SyncLabels.WaitingOn = true, want false")
+	}
+}
+
+func TestLoadGlobalRejectsInvalidFixPRCreateMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := `fixes:
+  pr_create: magic
+`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := LoadGlobal(path)
+	if err == nil {
+		t.Fatal("LoadGlobal() error = nil, want invalid pr_create error")
+	}
+	if !strings.Contains(err.Error(), "invalid fixes.pr_create") {
+		t.Fatalf("LoadGlobal() error = %v, want invalid fixes.pr_create", err)
 	}
 }
 

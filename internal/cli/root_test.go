@@ -79,6 +79,18 @@ func TestRootCommandIncludesListSubcommandFromRootTests(t *testing.T) {
 	}
 }
 
+func TestRootCommandIncludesFixSubcommand(t *testing.T) {
+	cmd := NewRootCmd()
+
+	got, _, err := cmd.Find([]string{"fix"})
+	if err != nil {
+		t.Fatalf("Find(fix) error = %v", err)
+	}
+	if got == nil || got.Name() != "fix" {
+		t.Fatalf("Find(fix) = %v, want fix command", got)
+	}
+}
+
 func TestRootCommandAppliesShellEnvironmentBeforeRunningSubcommands(t *testing.T) {
 	originalApplyShellEnv := applyShellEnv
 	originalRunUpdate := runUpdate

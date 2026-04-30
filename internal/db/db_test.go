@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,10 +41,235 @@ func singleOptionRec(itemID string, agent sharedtypes.AgentName, opt NewRecommen
 func TestOpenCreatesSchema(t *testing.T) {
 	database := openTestDB(t)
 
-	for _, table := range []string{"repos", "items", "recommendations", "recommendation_options", "approvals"} {
+	for _, table := range []string{"repos", "items", "recommendations", "recommendation_options", "approvals", "fix_jobs"} {
 		if err := database.assertTableExists(table); err != nil {
 			t.Fatalf("expected table %q to exist: %v", table, err)
 		}
+	}
+}
+
+func TestCreateFixJobReturnsExistingActiveJob(t *testing.T) {
+	database := openTestDB(t)
+
+	job, err := database.CreateFixJob(NewFixJob{
+		ItemID:           "acme/widgets#42",
+		RecommendationID: "rec-1",
+		OptionID:         "opt-1",
+		RepoID:           "acme/widgets",
+		ItemNumber:       42,
+		ItemKind:         sharedtypes.ItemKindIssue,
+		Title:            "panic in parser",
+		FixPrompt:        "Fix the parser panic.",
+		PRCreate:         "no-mistakes",
+	})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if job.Status != FixJobStatusQueued || job.Phase != FixJobPhaseQueued {
+		t.Fatalf("job status/phase = %q/%q, want queued/queued", job.Status, job.Phase)
+	}
+
+	again, err := database.CreateFixJob(NewFixJob{
+		ItemID:           "acme/widgets#42",
+		RecommendationID: "rec-1",
+		OptionID:         "opt-1",
+		RepoID:           "acme/widgets",
+		ItemNumber:       42,
+		ItemKind:         sharedtypes.ItemKindIssue,
+		Title:            "panic in parser",
+		FixPrompt:        "Fix the parser panic.",
+		PRCreate:         "no-mistakes",
+	})
+	if err != nil {
+		t.Fatalf("CreateFixJob() second error = %v", err)
+	}
+	if again.ID != job.ID {
+		t.Fatalf("second job ID = %q, want existing active job %q", again.ID, job.ID)
+	}
+}
+
+func TestCreateFixJobAllowsOnlyOneConcurrentActiveJob(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	database, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	database.sql.SetMaxOpenConns(16)
+	t.Cleanup(func() { _ = database.Close() })
+
+	const workers = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+	ids := make(chan string, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+			if err != nil {
+				errCh <- err
+				return
+			}
+			ids <- job.ID
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	close(ids)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("CreateFixJob() concurrent error = %v", err)
+		}
+	}
+	seen := map[string]struct{}{}
+	for id := range ids {
+		seen[id] = struct{}{}
+	}
+	if len(seen) != 1 {
+		t.Fatalf("concurrent CreateFixJob() returned %d active jobs, want 1", len(seen))
+	}
+	jobs, err := database.ListFixJobs()
+	if err != nil {
+		t.Fatalf("ListFixJobs() error = %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("ListFixJobs() returned %d jobs, want 1", len(jobs))
+	}
+}
+
+func TestReclaimStaleRunningFixJobsFailsInterruptedJobs(t *testing.T) {
+	database := openTestDB(t)
+	stale, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() stale error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() stale error = %v", err)
+	}
+	if err := database.UpdateFixJob(stale.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseRunningAgent}); err != nil {
+		t.Fatalf("UpdateFixJob() stale error = %v", err)
+	}
+	waiting, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#43", RecommendationID: "rec-2", RepoID: "acme/widgets", ItemNumber: 43, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "no-mistakes"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() waiting error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() waiting error = %v", err)
+	}
+	if err := database.UpdateFixJob(waiting.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseWaitingForPR}); err != nil {
+		t.Fatalf("UpdateFixJob() waiting error = %v", err)
+	}
+	fresh, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#44", RecommendationID: "rec-3", RepoID: "acme/widgets", ItemNumber: 44, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() fresh error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() fresh error = %v", err)
+	}
+	if err := database.UpdateFixJob(fresh.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseRunningAgent}); err != nil {
+		t.Fatalf("UpdateFixJob() fresh error = %v", err)
+	}
+	oldUpdatedAt := time.Now().Add(-2 * time.Hour).Unix()
+	if _, err := database.sql.Exec(`UPDATE fix_jobs SET updated_at = ? WHERE id IN (?, ?)`, oldUpdatedAt, stale.ID, waiting.ID); err != nil {
+		t.Fatalf("force old updated_at: %v", err)
+	}
+
+	reclaimed, err := database.ReclaimStaleRunningFixJobs(time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ReclaimStaleRunningFixJobs() error = %v", err)
+	}
+	if reclaimed != 1 {
+		t.Fatalf("ReclaimStaleRunningFixJobs() = %d, want 1", reclaimed)
+	}
+	gotStale, err := database.GetFixJob(stale.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() stale error = %v", err)
+	}
+	if gotStale.Status != FixJobStatusFailed || gotStale.Phase != FixJobPhaseFailed || gotStale.CompletedAt == nil {
+		t.Fatalf("stale job = %#v, want failed", gotStale)
+	}
+	gotWaiting, err := database.GetFixJob(waiting.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() waiting error = %v", err)
+	}
+	if gotWaiting.Status != FixJobStatusRunning || gotWaiting.Phase != FixJobPhaseWaitingForPR {
+		t.Fatalf("waiting job = %#v, want still waiting", gotWaiting)
+	}
+	gotFresh, err := database.GetFixJob(fresh.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() fresh error = %v", err)
+	}
+	if gotFresh.Status != FixJobStatusRunning || gotFresh.Phase != FixJobPhaseRunningAgent {
+		t.Fatalf("fresh job = %#v, want still running", gotFresh)
+	}
+	newJob, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-4", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix retry.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() retry error = %v", err)
+	}
+	if newJob.ID == stale.ID {
+		t.Fatalf("CreateFixJob() retry returned stale active job %s", stale.ID)
+	}
+}
+
+func TestClaimNextQueuedFixJobAndUpdateStatus(t *testing.T) {
+	database := openTestDB(t)
+	job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+
+	claimed, err := database.ClaimNextQueuedFixJob()
+	if err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != job.ID {
+		t.Fatalf("claimed = %#v, want job %s", claimed, job.ID)
+	}
+	if claimed.Status != FixJobStatusRunning {
+		t.Fatalf("claimed status = %q, want running", claimed.Status)
+	}
+
+	if err := database.UpdateFixJob(job.ID, FixJobUpdate{Status: FixJobStatusSucceeded, Phase: FixJobPhasePROpened, Branch: "ezoss/fix-42", WorktreePath: "/tmp/w", PRURL: "https://github.com/acme/widgets/pull/99", Message: "PR opened"}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != FixJobStatusSucceeded || got.Phase != FixJobPhasePROpened || got.PRURL == "" || got.CompletedAt == nil {
+		t.Fatalf("updated job = %#v, want succeeded with PR URL and completed_at", got)
+	}
+}
+
+func TestLatestFixJobForItemBreaksCreatedAtTiesByID(t *testing.T) {
+	database := openTestDB(t)
+	first, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() first error = %v", err)
+	}
+	if err := database.UpdateFixJob(first.ID, FixJobUpdate{Status: FixJobStatusFailed, Phase: FixJobPhaseFailed, Error: "retry"}); err != nil {
+		t.Fatalf("UpdateFixJob() first error = %v", err)
+	}
+	second, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-2", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it again.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() second error = %v", err)
+	}
+	if first.ID >= second.ID {
+		t.Fatalf("test setup IDs are not ordered: first=%q second=%q", first.ID, second.ID)
+	}
+	if _, err := database.sql.Exec(`UPDATE fix_jobs SET created_at = ? WHERE id IN (?, ?)`, int64(1234), first.ID, second.ID); err != nil {
+		t.Fatalf("force created_at tie: %v", err)
+	}
+
+	got, err := database.LatestFixJobForItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("LatestFixJobForItem() error = %v", err)
+	}
+	if got == nil || got.ID != second.ID {
+		t.Fatalf("LatestFixJobForItem() = %#v, want second job %s", got, second.ID)
 	}
 }
 

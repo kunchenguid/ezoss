@@ -10,6 +10,7 @@ const (
 	MethodHealth     = "health"
 	MethodSubscribe  = "subscribe"
 	MethodSyncStatus = "sync.status"
+	MethodFixStart   = "fix.start"
 )
 
 // Poll-cycle phases reported via SyncStatusResult.Phase. Empty string
@@ -114,14 +115,28 @@ const (
 	EventRecommendationUpdated EventType = "recommendation_updated"
 	EventRecommendationRemoved EventType = "recommendation_removed"
 	EventDaemonStatus          EventType = "daemon_status"
+	EventFixJobCreated         EventType = "fix_job_created"
+	EventFixJobUpdated         EventType = "fix_job_updated"
 )
 
 type Event struct {
 	Type             EventType `json:"type"`
 	RecommendationID string    `json:"recommendation_id,omitempty"`
 	ItemID           string    `json:"item_id,omitempty"`
+	FixJobID         string    `json:"fix_job_id,omitempty"`
 	Status           *string   `json:"status,omitempty"`
 	Message          *string   `json:"message,omitempty"`
+}
+
+type FixStartParams struct {
+	RecommendationID string `json:"recommendation_id"`
+	OptionID         string `json:"option_id,omitempty"`
+}
+
+type FixStartResult struct {
+	JobID  string `json:"job_id"`
+	ItemID string `json:"item_id,omitempty"`
+	Status string `json:"status"`
 }
 
 var reqID atomic.Int64
