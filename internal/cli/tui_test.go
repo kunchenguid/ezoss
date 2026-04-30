@@ -2250,6 +2250,31 @@ func mustJSONTUI(t *testing.T, value any) []byte {
 	return data
 }
 
+func TestExecuteApprovalTreatsFixRequiredAsNoStateChange(t *testing.T) {
+	executor := &stubApprovalExecutor{}
+	entry := tui.Entry{
+		RepoID:       "acme/widgets",
+		Kind:         sharedtypes.ItemKindIssue,
+		Number:       42,
+		DraftComment: "Thanks for the report. I'll put up a fix.",
+		StateChange:  sharedtypes.StateChangeFixRequired,
+	}
+
+	if err := executeApproval(context.Background(), executor, entry, []string{"bug", ezossTriagedLabel}, nil, "merge"); err != nil {
+		t.Fatalf("executeApproval() error = %v", err)
+	}
+
+	if len(executor.labels) != 1 {
+		t.Fatalf("label edits = %d, want 1", len(executor.labels))
+	}
+	if len(executor.comments) != 1 || executor.comments[0].Body != entry.DraftComment {
+		t.Fatalf("comments = %#v, want draft comment", executor.comments)
+	}
+	if len(executor.closes) != 0 || len(executor.reviews) != 0 || len(executor.merges) != 0 {
+		t.Fatalf("state actions = closes:%#v reviews:%#v merges:%#v, want none", executor.closes, executor.reviews, executor.merges)
+	}
+}
+
 func TestApproveInboxEntriesExecutesCloseRecommendationAndMarksTriaged(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths

@@ -1422,7 +1422,7 @@ func executeApproval(ctx context.Context, executor approvalExecutor, entry tui.E
 		if _, err := executor.Merge(ctx, entry.RepoID, entry.Number, mergeMethod); err != nil {
 			return fmt.Errorf("merge %s#%d: %w", entry.RepoID, entry.Number, err)
 		}
-	case sharedtypes.StateChangeNone, "":
+	case sharedtypes.StateChangeFixRequired, sharedtypes.StateChangeNone, "":
 		if hasComment {
 			if err := executor.Comment(ctx, entry.RepoID, entry.Kind, entry.Number, entry.DraftComment); err != nil {
 				return fmt.Errorf("comment on %s#%d: %w", entry.RepoID, entry.Number, err)

@@ -48,6 +48,24 @@ func TestResolveExplicitNoMistakesFailsWhenUnavailable(t *testing.T) {
 	}
 }
 
+func TestResolveExplicitNoMistakesRequiresGHForDetection(t *testing.T) {
+	_, err := Resolve(ModeNoMistakes, fakeLookPath(map[string]bool{
+		"no-mistakes": true,
+	}))
+	if err == nil {
+		t.Fatal("Resolve() error = nil, want missing gh error")
+	}
+}
+
+func TestResolveAutoSkipsNoMistakesWhenGHUnavailable(t *testing.T) {
+	_, err := Resolve(ModeAuto, fakeLookPath(map[string]bool{
+		"no-mistakes": true,
+	}))
+	if err == nil {
+		t.Fatal("Resolve() error = nil, want missing PR creator error")
+	}
+}
+
 func fakeLookPath(available map[string]bool) func(string) (string, error) {
 	return func(name string) (string, error) {
 		if available[name] {

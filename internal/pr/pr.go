@@ -21,9 +21,9 @@ const (
 
 type Resolution struct {
 	Requested Mode
-	Mode    Mode
-	Binary  string
-	Skipped []Skip
+	Mode      Mode
+	Binary    string
+	Skipped   []Skip
 }
 
 type Skip struct {
@@ -43,6 +43,9 @@ func Resolve(mode Mode, lookPath func(string) (string, error)) (Resolution, erro
 		bin, err := lookPath("no-mistakes")
 		if err != nil {
 			return Resolution{}, fmt.Errorf("resolve no-mistakes PR creator: %w", err)
+		}
+		if _, err := lookPath("gh"); err != nil {
+			return Resolution{}, fmt.Errorf("resolve no-mistakes PR creator gh dependency: %w", err)
 		}
 		return Resolution{Requested: ModeNoMistakes, Mode: ModeNoMistakes, Binary: bin}, nil
 	case ModeGH:
@@ -69,6 +72,15 @@ func resolveAuto(lookPath func(string) (string, error)) (Resolution, error) {
 	} {
 		bin, err := lookPath(candidate.bin)
 		if err == nil {
+			if candidate.mode == ModeNoMistakes {
+				if _, err := lookPath("gh"); err != nil {
+					if !isNotFound(err) {
+						return Resolution{}, fmt.Errorf("resolve no-mistakes PR creator gh dependency: %w", err)
+					}
+					skipped = append(skipped, Skip{Mode: candidate.mode, Reason: "gh executable not found"})
+					continue
+				}
+			}
 			return Resolution{Requested: ModeAuto, Mode: candidate.mode, Binary: bin, Skipped: skipped}, nil
 		}
 		if !isNotFound(err) {

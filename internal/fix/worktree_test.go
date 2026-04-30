@@ -62,14 +62,54 @@ func TestPrepareWorktreeUsesDedicatedFixWorktreeFromInvestigationCheckout(t *tes
 	if strings.Contains(got.WorktreePath, "investigations") {
 		t.Fatalf("WorktreePath = %q, must not use investigations checkout", got.WorktreePath)
 	}
-	if got.Branch != "ezoss/fix-42" {
-		t.Fatalf("Branch = %q, want issue branch", got.Branch)
+	if !strings.HasPrefix(got.Branch, "ezoss/fix-42-") {
+		t.Fatalf("Branch = %q, want issue branch prefix", got.Branch)
 	}
 	if len(ghCalls) != 1 {
 		t.Fatalf("gh calls = %#v, want one investigation checkout clone", ghCalls)
 	}
 	if !containsGitCall(gitCalls, got.BasePath, "worktree", "add", "-b", got.Branch, got.WorktreePath, "origin/main") {
 		t.Fatalf("git calls = %#v, want worktree add from investigation checkout", gitCalls)
+	}
+}
+
+func TestPrepareWorktreeUsesUniqueBranchesForRepeatedItemFixes(t *testing.T) {
+	root := t.TempDir()
+	checkout := filepath.Join(root, "investigations", "acme__widgets")
+	if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	branches := map[string]bool{}
+	runGit := func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+		switch {
+		case reflect.DeepEqual(args, []string{"rev-parse", "--abbrev-ref", "origin/HEAD"}):
+			return []byte("origin/main\n"), nil
+		case len(args) == 6 && args[0] == "worktree" && args[1] == "add":
+			branch := args[3]
+			if branches[branch] {
+				return nil, errors.New("branch already exists")
+			}
+			branches[branch] = true
+			return nil, os.MkdirAll(args[4], 0o755)
+		}
+		return nil, nil
+	}
+
+	first, err := PrepareWorktree(context.Background(), WorktreeOptions{Root: root, RepoID: "acme/widgets", Number: 42, RunGit: runGit})
+	if err != nil {
+		t.Fatalf("first PrepareWorktree() error = %v", err)
+	}
+	second, err := PrepareWorktree(context.Background(), WorktreeOptions{Root: root, RepoID: "acme/widgets", Number: 42, RunGit: runGit})
+	if err != nil {
+		t.Fatalf("second PrepareWorktree() error = %v", err)
+	}
+
+	if first.Branch == second.Branch {
+		t.Fatalf("branches = %q and %q, want unique branches", first.Branch, second.Branch)
+	}
+	if !strings.HasPrefix(first.Branch, "ezoss/fix-42-") || !strings.HasPrefix(second.Branch, "ezoss/fix-42-") {
+		t.Fatalf("branches = %q and %q, want item-specific fix prefixes", first.Branch, second.Branch)
 	}
 }
 

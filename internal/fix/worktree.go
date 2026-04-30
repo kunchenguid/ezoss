@@ -91,8 +91,9 @@ func PrepareWorktree(ctx context.Context, opts WorktreeOptions) (Worktree, error
 		}
 	}
 
-	branch := branchName(opts.BranchPrefix, opts.Number)
-	worktreePath := filepath.Join(root, "fixes", safeRepo, strconv.Itoa(opts.Number)+"-"+runID())
+	run := runID()
+	branch := branchName(opts.BranchPrefix, opts.Number, run)
+	worktreePath := filepath.Join(root, "fixes", safeRepo, strconv.Itoa(opts.Number)+"-"+run)
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return Worktree{}, fmt.Errorf("create fix worktree parent: %w", err)
 	}
@@ -107,11 +108,15 @@ func SafeRepoName(repoID string) string {
 	return strings.NewReplacer("/", "__", "\\", "__", ":", "_").Replace(repoID)
 }
 
-func branchName(prefix string, number int) string {
+func branchName(prefix string, number int, run string) string {
 	if strings.TrimSpace(prefix) == "" {
 		prefix = "ezoss/"
 	}
-	return strings.TrimRight(prefix, "/") + "/fix-" + strconv.Itoa(number)
+	name := strings.TrimRight(prefix, "/") + "/fix-" + strconv.Itoa(number)
+	if strings.TrimSpace(run) != "" {
+		name += "-" + strings.TrimSpace(run)
+	}
+	return name
 }
 
 func runID() string {
