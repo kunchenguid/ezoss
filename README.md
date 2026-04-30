@@ -143,9 +143,9 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 - **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
   Rerun instructions are stored there too.
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
-- **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and create draft PRs via `no-mistakes` or `gh`.
+- **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and create draft PRs according to `fixes.pr_create`.
 - **Polling is deliberate** - v1 avoids webhook complexity and just re-triages when the GitHub label disappears.
-- **Approval is explicit** - nothing gets posted, closed, merged, or labeled until you do it from the inbox.
+- **Approval is explicit** - comments, labels, closes, merges, and fix PRs only happen after you approve an inbox action, queue a fix job, or run `ezoss fix`.
 - **PR review is gated when needed** - unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.
 
 ## Inbox Actions
@@ -154,7 +154,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | ------- | ------------ | ------------------------------------------------------------------------- |
 | `a`     | Approve      | Execute the selected GitHub action and sync triage labels                 |
 | `c`     | Copy prompt  | Copy the active option's coding-agent fix prompt when one exists          |
-| `f`     | Fix          | Queue a coding-agent fix job and open a draft PR when a fix prompt exists |
+| `f`     | Fix          | Queue a daemon-backed coding-agent fix job when a fix prompt exists        |
 | `e`     | Edit         | Open the draft in your editor before approval                             |
 | `m`     | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation                |
 | `r`     | Rerun        | Re-triage the item and replace the active recommendation                  |
@@ -170,7 +170,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | `ezoss status`                 | Open the realtime status TUI; in non-interactive output, print rich text status               |
 | `ezoss status --short`         | Print a one-line summary of pending recommendations and configured repos                      |
 | `ezoss list`                   | Print pending recommendations in a text format                                                |
-| `ezoss fix <repo>#<number>`    | Run the active fix prompt in an isolated worktree and open a draft PR                         |
+| `ezoss fix <repo>#<number>`    | Run the active fix prompt in an isolated worktree; PR creation follows config                 |
 | `ezoss triage <repo>#<number>` | Manually triage one issue or PR                                                               |
 | `ezoss update`                 | Download and install the latest released binary for the current platform                      |
 | `ezoss daemon start`           | Start the background poller                                                                   |
@@ -201,6 +201,10 @@ Per-repo overrides live in `.ezoss.yaml` at the repo root and currently support 
 `merge_method` controls how approved PR merges execute and supports `merge`, `squash`, or `rebase`.
 
 `fixes.pr_create` controls how fix PRs are created and supports `auto`, `no-mistakes`, `gh`, or `disabled`.
+`auto` prefers `no-mistakes` when both `no-mistakes` and `gh` are available, then uses `gh` when `no-mistakes` is unavailable.
+`no-mistakes` pushes to the no-mistakes remote and uses `gh` to detect the created PR.
+`gh` pushes to origin and runs `gh pr create --draft`.
+`disabled` commits the fix branch in the worktree without opening a PR.
 
 ```yaml
 # ~/.ezoss/config.yaml
