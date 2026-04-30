@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,6 +85,58 @@ func TestCreateFixJobReturnsExistingActiveJob(t *testing.T) {
 	}
 	if again.ID != job.ID {
 		t.Fatalf("second job ID = %q, want existing active job %q", again.ID, job.ID)
+	}
+}
+
+func TestCreateFixJobAllowsOnlyOneConcurrentActiveJob(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	database, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	database.sql.SetMaxOpenConns(16)
+	t.Cleanup(func() { _ = database.Close() })
+
+	const workers = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+	ids := make(chan string, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+			if err != nil {
+				errCh <- err
+				return
+			}
+			ids <- job.ID
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	close(ids)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("CreateFixJob() concurrent error = %v", err)
+		}
+	}
+	seen := map[string]struct{}{}
+	for id := range ids {
+		seen[id] = struct{}{}
+	}
+	if len(seen) != 1 {
+		t.Fatalf("concurrent CreateFixJob() returned %d active jobs, want 1", len(seen))
+	}
+	jobs, err := database.ListFixJobs()
+	if err != nil {
+		t.Fatalf("ListFixJobs() error = %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("ListFixJobs() returned %d jobs, want 1", len(jobs))
 	}
 }
 

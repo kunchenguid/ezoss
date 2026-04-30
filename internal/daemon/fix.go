@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kunchenguid/ezoss/internal/db"
 )
@@ -30,7 +31,9 @@ func runFixStage(ctx context.Context, poller Poller) (bool, error) {
 		}
 		return poller.DB.UpdateFixJob(job.ID, update)
 	}
-	result, err := poller.Fix.RunFix(ctx, *job, progress)
+	fixCtx, cancel := context.WithTimeout(ctx, fixJobTimeout(poller))
+	defer cancel()
+	result, err := poller.Fix.RunFix(fixCtx, *job, progress)
 	if err != nil {
 		_ = poller.DB.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusFailed, Phase: db.FixJobPhaseFailed, Error: err.Error()})
 		return true, fmt.Errorf("fix job %s: %w", job.ID, err)
@@ -67,22 +70,32 @@ func detectWaitingFixPRs(ctx context.Context, poller Poller) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	didWork := false
 	for _, job := range waiting {
 		if job.Phase != db.FixJobPhaseWaitingForPR {
 			continue
 		}
-		url, err := poller.Fix.DetectPR(ctx, job)
+		detectCtx, cancel := context.WithTimeout(ctx, fixJobTimeout(poller))
+		url, err := poller.Fix.DetectPR(detectCtx, job)
+		cancel()
 		if err != nil {
 			_ = poller.DB.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusFailed, Phase: db.FixJobPhaseFailed, Error: err.Error()})
 			return true, fmt.Errorf("detect fix PR %s: %w", job.ID, err)
 		}
 		if strings.TrimSpace(url) == "" {
-			return false, nil
+			continue
 		}
 		if err := poller.DB.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusSucceeded, Phase: db.FixJobPhasePROpened, PRURL: url, Message: "PR opened"}); err != nil {
 			return true, err
 		}
-		return true, nil
+		didWork = true
 	}
-	return false, nil
+	return didWork, nil
+}
+
+func fixJobTimeout(poller Poller) time.Duration {
+	if poller.PerFixJobTimeout > 0 {
+		return poller.PerFixJobTimeout
+	}
+	return defaultPerFixJobTimeout
 }

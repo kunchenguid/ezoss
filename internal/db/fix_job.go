@@ -25,9 +25,34 @@ func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 		input.PRCreate = "auto"
 	}
 
-	if existing, err := d.ActiveFixJobForItem(input.ItemID); err != nil {
+	d.fixJobMu.Lock()
+	defer d.fixJobMu.Unlock()
+
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("create fix job: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(
+		`SELECT id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
+		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
+		 FROM fix_jobs
+		 WHERE item_id = ? AND status IN (?, ?)
+		 ORDER BY created_at ASC LIMIT 1`,
+		input.ItemID, FixJobStatusQueued, FixJobStatusRunning,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("active fix job: %w", err)
+	}
+	existing, err := scanOptionalFixJob(rows)
+	if closeErr := rows.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		return nil, err
-	} else if existing != nil {
+	}
+	if existing != nil {
 		return existing, nil
 	}
 
@@ -49,7 +74,7 @@ func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	_, err := d.sql.Exec(
+	_, err = tx.Exec(
 		`INSERT INTO fix_jobs (
 		 id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
 		 branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
@@ -59,6 +84,9 @@ func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create fix job: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("create fix job: commit: %w", err)
 	}
 	return job, nil
 }

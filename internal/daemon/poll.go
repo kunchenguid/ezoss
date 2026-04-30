@@ -27,6 +27,8 @@ const staleDetectorModel = "stale-detector"
 // hours.
 const defaultPerItemTriageTimeout = 30 * time.Minute
 
+const defaultPerFixJobTimeout = 30 * time.Minute
+
 type triageLister interface {
 	ListNeedingTriage(ctx context.Context, repo string) ([]ghclient.Item, error)
 	ListTriaged(ctx context.Context, repo string, sinceUpdated time.Time) ([]ghclient.Item, error)
@@ -87,6 +89,9 @@ type Poller struct {
 	// PerItemTriageTimeout caps a single triage invocation. Zero means
 	// defaultPerItemTriageTimeout (30m).
 	PerItemTriageTimeout time.Duration
+	// PerFixJobTimeout caps a single fix job invocation. Zero means
+	// defaultPerFixJobTimeout (30m).
+	PerFixJobTimeout time.Duration
 }
 
 func (p Poller) log() *slog.Logger {
