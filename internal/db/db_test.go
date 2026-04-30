@@ -40,10 +40,80 @@ func singleOptionRec(itemID string, agent sharedtypes.AgentName, opt NewRecommen
 func TestOpenCreatesSchema(t *testing.T) {
 	database := openTestDB(t)
 
-	for _, table := range []string{"repos", "items", "recommendations", "recommendation_options", "approvals"} {
+	for _, table := range []string{"repos", "items", "recommendations", "recommendation_options", "approvals", "fix_jobs"} {
 		if err := database.assertTableExists(table); err != nil {
 			t.Fatalf("expected table %q to exist: %v", table, err)
 		}
+	}
+}
+
+func TestCreateFixJobReturnsExistingActiveJob(t *testing.T) {
+	database := openTestDB(t)
+
+	job, err := database.CreateFixJob(NewFixJob{
+		ItemID:           "acme/widgets#42",
+		RecommendationID: "rec-1",
+		OptionID:         "opt-1",
+		RepoID:           "acme/widgets",
+		ItemNumber:       42,
+		ItemKind:         sharedtypes.ItemKindIssue,
+		Title:            "panic in parser",
+		FixPrompt:        "Fix the parser panic.",
+		PRCreate:         "no-mistakes",
+	})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if job.Status != FixJobStatusQueued || job.Phase != FixJobPhaseQueued {
+		t.Fatalf("job status/phase = %q/%q, want queued/queued", job.Status, job.Phase)
+	}
+
+	again, err := database.CreateFixJob(NewFixJob{
+		ItemID:           "acme/widgets#42",
+		RecommendationID: "rec-1",
+		OptionID:         "opt-1",
+		RepoID:           "acme/widgets",
+		ItemNumber:       42,
+		ItemKind:         sharedtypes.ItemKindIssue,
+		Title:            "panic in parser",
+		FixPrompt:        "Fix the parser panic.",
+		PRCreate:         "no-mistakes",
+	})
+	if err != nil {
+		t.Fatalf("CreateFixJob() second error = %v", err)
+	}
+	if again.ID != job.ID {
+		t.Fatalf("second job ID = %q, want existing active job %q", again.ID, job.ID)
+	}
+}
+
+func TestClaimNextQueuedFixJobAndUpdateStatus(t *testing.T) {
+	database := openTestDB(t)
+	job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+
+	claimed, err := database.ClaimNextQueuedFixJob()
+	if err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != job.ID {
+		t.Fatalf("claimed = %#v, want job %s", claimed, job.ID)
+	}
+	if claimed.Status != FixJobStatusRunning {
+		t.Fatalf("claimed status = %q, want running", claimed.Status)
+	}
+
+	if err := database.UpdateFixJob(job.ID, FixJobUpdate{Status: FixJobStatusSucceeded, Phase: FixJobPhasePROpened, Branch: "ezoss/fix-42", WorktreePath: "/tmp/w", PRURL: "https://github.com/acme/widgets/pull/99", Message: "PR opened"}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != FixJobStatusSucceeded || got.Phase != FixJobPhasePROpened || got.PRURL == "" || got.CompletedAt == nil {
+		t.Fatalf("updated job = %#v, want succeeded with PR URL and completed_at", got)
 	}
 }
 

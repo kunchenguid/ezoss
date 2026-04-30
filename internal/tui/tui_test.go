@@ -335,6 +335,55 @@ func TestModelViewFormatsSingleLineFixPromptIntoReadableSections(t *testing.T) {
 	}
 }
 
+func TestModelViewShowsConciseFixJobStatus(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:      "acme/widgets",
+		Number:      42,
+		Kind:        sharedtypes.ItemKindIssue,
+		Title:       "Bug: triage queue stalls",
+		FixJobID:    "fix-1",
+		FixStatus:   "running",
+		FixPhase:    "running_agent",
+		FixMessage:  "running agent",
+		Rationale:   "Need a fix.",
+		Confidence:  sharedtypes.ConfidenceMedium,
+		StateChange: sharedtypes.StateChangeFixRequired,
+	}})
+	m.width = 100
+
+	details := stripANSI(m.renderDetails())
+	if !strings.Contains(details, "Fix: running agent") {
+		t.Fatalf("renderDetails() missing concise fix status in:\n%s", details)
+	}
+	if strings.Contains(details, "running · running_agent") || strings.Contains(details, "running_agent") {
+		t.Fatalf("renderDetails() should not show redundant raw fix status/phase in:\n%s", details)
+	}
+}
+
+func TestModelViewShowsNoMistakesAttachCommandWhenWaitingForPR(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:          "acme/widgets",
+		Number:          42,
+		Kind:            sharedtypes.ItemKindIssue,
+		Title:           "Bug: triage queue stalls",
+		FixJobID:        "fix-1",
+		FixStatus:       "running",
+		FixPhase:        "waiting_for_pr",
+		FixMessage:      "waiting for PR",
+		FixWorktreePath: "/tmp/ezoss fix/widgets/42-run",
+		Rationale:       "Need a fix.",
+		Confidence:      sharedtypes.ConfidenceMedium,
+		StateChange:     sharedtypes.StateChangeFixRequired,
+	}})
+	m.width = 120
+
+	details := stripANSI(m.renderDetails())
+	want := "attach: cd '/tmp/ezoss fix/widgets/42-run' && no-mistakes attach"
+	if !strings.Contains(details, want) {
+		t.Fatalf("renderDetails() missing no-mistakes attach command %q in:\n%s", want, details)
+	}
+}
+
 func TestModelHelpExplainsSkipMarksTriaged(t *testing.T) {
 	m := NewModel(nil)
 	help := stripANSI(m.renderHelp())
@@ -532,6 +581,49 @@ func TestModelCopyPromptCopiesCurrentEntryPrompt(t *testing.T) {
 	}
 	if !strings.Contains(stripANSI(next.View()), "copied prompt for acme/widgets #42") {
 		t.Fatalf("View() missing copy status in:\n%s", next.View())
+	}
+}
+
+func TestModelFixRunsCurrentEntryPrompt(t *testing.T) {
+	var fixed []Entry
+	m := NewModelWithActions([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "panic in parser",
+		StateChange:      sharedtypes.StateChangeFixRequired,
+		FixPrompt:        "Fix https://github.com/acme/widgets/issues/42 by adding a regression test.",
+	}}, ModelActions{
+		Fix: func(entry Entry) error {
+			fixed = append(fixed, entry)
+			return nil
+		},
+	})
+	m.width = 100
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if cmd == nil {
+		t.Fatal("expected fix command")
+	}
+	next := updated.(Model)
+	if _, ok := next.pendingActions["rec-1"]; !ok {
+		t.Fatalf("expected pending fix action, got %#v", next.pendingActions)
+	}
+	finishMsg := runActionCmd(t, cmd)
+	if finishMsg.err != nil {
+		t.Fatalf("fix command error = %v", finishMsg.err)
+	}
+	if finishMsg.verb != "fix" {
+		t.Fatalf("verb = %q, want fix", finishMsg.verb)
+	}
+	updated, _ = next.Update(finishMsg)
+	next = updated.(Model)
+	if len(fixed) != 1 || fixed[0].FixPrompt == "" {
+		t.Fatalf("fixed = %#v, want entry with fix prompt", fixed)
+	}
+	if !strings.Contains(stripANSI(next.View()), "queued fix acme/widgets #42") {
+		t.Fatalf("View() missing fix status in:\n%s", next.View())
 	}
 }
 
@@ -779,6 +871,29 @@ func TestModelPendingRendersSpinnerAndMorphsActionBar(t *testing.T) {
 	}
 	if !strings.Contains(view, "…") {
 		t.Fatalf("View() should show pending glyph in the rail:\n%s", view)
+	}
+}
+
+func TestModelQueueRailShowsPendingGlyphForInProgressFixJob(t *testing.T) {
+	m := NewModel([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "fix is running",
+		FixJobID:         "fix-1",
+		FixStatus:        "running",
+		FixPhase:         "running_agent",
+	}})
+	m.width = 120
+	m.height = 30
+
+	rail := stripANSI(m.renderQueueRail(44, 12))
+	if !strings.Contains(rail, "… #42") {
+		t.Fatalf("renderQueueRail() should show pending glyph for running fix job:\n%s", rail)
+	}
+	if strings.Contains(rail, "○ #42") {
+		t.Fatalf("renderQueueRail() should replace issue glyph while fix job is running:\n%s", rail)
 	}
 }
 

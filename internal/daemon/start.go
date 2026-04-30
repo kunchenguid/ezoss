@@ -35,6 +35,8 @@ type RunOptions struct {
 	NewTicker              func(time.Duration) Ticker
 	Sleep                  func(time.Duration)
 	RecommendationSnapshot func() ([]db.Recommendation, error)
+	FixJobSnapshot         func() ([]db.FixJob, error)
+	FixStart               func(context.Context, ipc.FixStartParams) (ipc.FixStartResult, error)
 	// SyncState, if non-nil, is updated as the poll loop runs and exposed
 	// over IPC via MethodSyncStatus. The caller is responsible for wiring
 	// SyncState.Hooks() into the Poller it backs PollOnce with.
@@ -154,9 +156,15 @@ func RunWithOptions(pidFile string, sigCh <-chan os.Signal, opts RunOptions) (re
 	opts.log().Info("daemon started", startAttrs...)
 
 	var notify func(ipc.Event)
+	wake := make(chan struct{}, 1)
 	if opts.IPCPath != "" {
 		var stopIPC func()
-		stopIPCFn, notifyFn, err := startIPCServer(opts.IPCPath, opts.RecommendationSnapshot, opts.SyncState)
+		stopIPCFn, notifyFn, err := startIPCServer(opts.IPCPath, opts.RecommendationSnapshot, opts.SyncState, opts.FixStart, func() {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		})
 		if err != nil {
 			opts.log().Error("ipc startup failed", "err", err)
 			return fmt.Errorf("start ipc server: %w", err)
@@ -167,7 +175,7 @@ func RunWithOptions(pidFile string, sigCh <-chan os.Signal, opts RunOptions) (re
 		defer stopIPC()
 	}
 
-	if err := runPollLoop(sigCh, opts, notify); err != nil {
+	if err := runPollLoop(sigCh, opts, notify, wake); err != nil {
 		opts.log().Error("daemon exiting on error", "err", err)
 		return err
 	}
@@ -183,7 +191,7 @@ func (o RunOptions) log() *slog.Logger {
 	return o.Logger
 }
 
-func startIPCServer(socketPath string, snapshot func() ([]db.Recommendation, error), syncState *SyncState) (func(), func(ipc.Event), error) {
+func startIPCServer(socketPath string, snapshot func() ([]db.Recommendation, error), syncState *SyncState, fixStart func(context.Context, ipc.FixStartParams) (ipc.FixStartResult, error), wake func()) (func(), func(ipc.Event), error) {
 	srv := ipc.NewServer()
 	broadcaster := newEventBroadcaster()
 	srv.Handle(ipc.MethodHealth, func(_ context.Context, _ json.RawMessage) (interface{}, error) {
@@ -192,6 +200,23 @@ func startIPCServer(socketPath string, snapshot func() ([]db.Recommendation, err
 	srv.Handle(ipc.MethodSyncStatus, func(_ context.Context, _ json.RawMessage) (interface{}, error) {
 		return syncState.Snapshot(), nil
 	})
+	if fixStart != nil {
+		srv.Handle(ipc.MethodFixStart, func(ctx context.Context, raw json.RawMessage) (interface{}, error) {
+			var params ipc.FixStartParams
+			if err := json.Unmarshal(raw, &params); err != nil {
+				return nil, err
+			}
+			result, err := fixStart(ctx, params)
+			if err == nil {
+				status := result.Status
+				broadcaster.Publish(ipc.Event{Type: ipc.EventFixJobCreated, FixJobID: result.JobID, ItemID: result.ItemID, Status: &status})
+				if wake != nil {
+					wake()
+				}
+			}
+			return result, err
+		})
+	}
 	srv.HandleStream(ipc.MethodSubscribe, func(ctx context.Context, raw json.RawMessage, send func(interface{}) error) error {
 		var params ipc.SubscribeParams
 		if len(raw) > 0 {
@@ -270,7 +295,7 @@ func startIPCServer(socketPath string, snapshot func() ([]db.Recommendation, err
 	}, broadcaster.Publish, nil
 }
 
-func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)) error {
+func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event), wake <-chan struct{}) error {
 	if opts.PollOnce == nil || len(opts.Repos) == 0 {
 		opts.log().Info("poll loop idle", "reason", reasonForIdle(opts))
 		<-sigCh
@@ -300,6 +325,10 @@ func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)
 		before, err := recommendationSnapshot(opts)
 		if err != nil {
 			return fmt.Errorf("snapshot recommendations: %w", err), nil
+		}
+		fixBefore, err := fixJobSnapshot(opts)
+		if err != nil {
+			return fmt.Errorf("snapshot fix jobs: %w", err), nil
 		}
 		opts.log().Info("cycle started", "cycle", cycleNum, "repos", len(opts.Repos))
 		cycleStart := time.Now()
@@ -343,6 +372,9 @@ func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)
 		if err := emitRecommendationEvents(opts, before, notify); err != nil {
 			return err, nil
 		}
+		if err := emitFixJobEvents(opts, fixBefore, notify); err != nil {
+			return err, nil
+		}
 		return nil, nil
 	}
 
@@ -368,6 +400,17 @@ waitForTicker:
 		case <-sigCh:
 			opts.log().Info("received signal", "action", "stop")
 			return nil
+		case <-wake:
+			cycleErr, fatalErr := runCycle(ticker)
+			if fatalErr != nil {
+				return fatalErr
+			}
+			if cycleErr != nil {
+				_, waitErr := handlePollError(sigCh, interval, sleep, customSleep, cycleErr, opts.log())
+				if waitErr != nil {
+					return waitErr
+				}
+			}
 		case <-ticker.Chan():
 			cycleErr, fatalErr := runCycle(ticker)
 			if fatalErr != nil {
@@ -564,6 +607,27 @@ func recommendationSnapshot(opts RunOptions) ([]db.Recommendation, error) {
 	return opts.RecommendationSnapshot()
 }
 
+func fixJobSnapshot(opts RunOptions) ([]db.FixJob, error) {
+	if opts.FixJobSnapshot == nil {
+		return nil, nil
+	}
+	return opts.FixJobSnapshot()
+}
+
+func emitFixJobEvents(opts RunOptions, before []db.FixJob, notify func(ipc.Event)) error {
+	if notify == nil || opts.FixJobSnapshot == nil {
+		return nil
+	}
+	after, err := opts.FixJobSnapshot()
+	if err != nil {
+		return fmt.Errorf("snapshot fix jobs: %w", err)
+	}
+	for _, event := range diffFixJobEvents(before, after) {
+		notify(event)
+	}
+	return nil
+}
+
 func diffRecommendationEvents(before []db.Recommendation, after []db.Recommendation) []ipc.Event {
 	beforeByID := make(map[string]db.Recommendation, len(before))
 	for _, recommendation := range before {
@@ -594,6 +658,33 @@ func diffRecommendationEvents(before []db.Recommendation, after []db.Recommendat
 			RecommendationID: recommendation.ID,
 			ItemID:           recommendation.ItemID,
 		})
+	}
+	return events
+}
+
+func diffFixJobEvents(before []db.FixJob, after []db.FixJob) []ipc.Event {
+	beforeByID := make(map[string]db.FixJob, len(before))
+	for _, job := range before {
+		beforeByID[job.ID] = job
+	}
+	events := make([]ipc.Event, 0, len(after))
+	for _, job := range after {
+		beforeJob, existed := beforeByID[job.ID]
+		status := string(job.Status)
+		message := job.Message
+		event := ipc.Event{FixJobID: job.ID, ItemID: job.ItemID, Status: &status}
+		if strings.TrimSpace(message) != "" {
+			event.Message = &message
+		}
+		if !existed {
+			event.Type = ipc.EventFixJobCreated
+			events = append(events, event)
+			continue
+		}
+		if beforeJob.Status != job.Status || beforeJob.Phase != job.Phase || beforeJob.Message != job.Message || beforeJob.PRURL != job.PRURL || beforeJob.Error != job.Error {
+			event.Type = ipc.EventFixJobUpdated
+			events = append(events, event)
+		}
 	}
 	return events
 }

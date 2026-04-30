@@ -83,6 +83,7 @@ const (
 	StateChangeClose          StateChange = "close"
 	StateChangeMerge          StateChange = "merge"
 	StateChangeRequestChanges StateChange = "request_changes"
+	StateChangeFixRequired    StateChange = "fix_required"
 )
 
 func (s *StateChange) Scan(src any) error {

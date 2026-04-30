@@ -40,6 +40,18 @@ type triageRunner interface {
 	Triage(ctx context.Context, req TriageRequest) (*TriageResult, error)
 }
 
+type fixRunner interface {
+	RunFix(ctx context.Context, job db.FixJob, progress func(db.FixJobUpdate) error) (*FixResult, error)
+	DetectPR(ctx context.Context, job db.FixJob) (string, error)
+}
+
+type FixResult struct {
+	Branch       string
+	WorktreePath string
+	PRURL        string
+	WaitingForPR bool
+}
+
 type TriageRequest struct {
 	Item   ghclient.Item
 	Prompt string
@@ -58,6 +70,7 @@ type Poller struct {
 	DB                 *db.DB
 	GitHub             triageLister
 	Triage             triageRunner
+	Fix                fixRunner
 	AgentsInstructions string
 	RerunInstructions  string
 	StaleThreshold     time.Duration
@@ -101,6 +114,16 @@ func PollOnce(ctx context.Context, poller Poller, repos []string) error {
 	var errs []error
 	if err := runSyncStage(ctx, poller, repos, polledAt); err != nil {
 		errs = append(errs, err)
+	}
+	fixDidWork, fixErr := runFixStage(ctx, poller)
+	if fixErr != nil {
+		errs = append(errs, fixErr)
+	}
+	if fixDidWork {
+		if len(errs) > 0 {
+			return errors.Join(errs...)
+		}
+		return nil
 	}
 	if err := runAgentsStage(ctx, poller, repos, polledAt); err != nil {
 		errs = append(errs, err)

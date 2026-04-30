@@ -82,6 +82,13 @@ type Entry struct {
 	ApprovalError     string
 	CurrentWaitingOn  sharedtypes.WaitingOn
 	RerunInstructions string
+	FixJobID          string
+	FixStatus         string
+	FixPhase          string
+	FixMessage        string
+	FixError          string
+	FixPRURL          string
+	FixWorktreePath   string
 
 	Options      []EntryOption
 	ActiveOption int
@@ -181,6 +188,7 @@ type ModelActions struct {
 	Reload        func() ([]Entry, error)
 	Rerun         func([]Entry, string) ([]Entry, error)
 	CopyPrompt    func(Entry) error
+	Fix           func(Entry) error
 }
 
 type Model struct {
@@ -197,6 +205,7 @@ type Model struct {
 	reload     func() ([]Entry, error)
 	rerun      func([]Entry, string) ([]Entry, error)
 	copyPrompt func(Entry) error
+	fix        func(Entry) error
 	showHelp   bool
 	quitting   bool
 	rerunInput *rerunInputState
@@ -269,6 +278,7 @@ var asyncVerbForms = map[string]struct {
 	ed  string
 }{
 	"approve": {"approving", "approved"},
+	"fix":     {"queueing fix", "queued fix"},
 	"mark":    {"marking triaged", "marked triaged"},
 	"rerun":   {"rerunning", "reran"},
 }
@@ -331,6 +341,7 @@ func NewModelWithActions(entries []Entry, actions ModelActions) Model {
 	m.reload = actions.Reload
 	m.rerun = actions.Rerun
 	m.copyPrompt = actions.CopyPrompt
+	m.fix = actions.Fix
 	return m
 }
 
@@ -446,6 +457,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			if cmd := m.copyPromptCurrent(); cmd != nil {
 				return m, cmd
+			}
+		case "f":
+			if cmd := m.fixCurrent(); cmd != nil {
+				return m, withSpinner(cmd, m.kickSpinnerIfPending())
 			}
 		case "r":
 			m.openRerunInput()
@@ -636,6 +651,31 @@ func (m *Model) copyPromptCurrent() tea.Cmd {
 			err:    copyPrompt(entry),
 		}
 	}
+}
+
+func (m *Model) fixCurrent() tea.Cmd {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	entry := m.entries[m.cursor]
+	if cmd, blocked := m.guardConflict(entry, "fix"); blocked {
+		return cmd
+	}
+	if strings.TrimSpace(entry.FixPrompt) == "" {
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("no fix prompt for %s #%d", entry.RepoID, entry.Number)})
+		return nil
+	}
+	if m.fix == nil {
+		m.pushLog(logEntry{state: logStateInfo, note: "fix unavailable"})
+		return nil
+	}
+	return m.startAction(entry, "fix", func() tea.Msg {
+		return actionFinishedMsg{
+			verb:             "fix",
+			recommendationID: entry.RecommendationID,
+			err:              m.fix(entry),
+		}
+	})
 }
 
 // guardConflict reports whether an action on entry should be refused
@@ -1180,7 +1220,7 @@ func formatLogElapsed(d time.Duration) string {
 // spinner+verb so it's obvious that pressing a/m/r/e right now is a
 // no-op until the action completes.
 func renderDecideBar(maxWidth int, optionCount int) string {
-	hints := []string{"a approve", "e edit", "m mark triaged", "r rerun", "c copy"}
+	hints := []string{"a approve", "f fix", "e edit", "m mark triaged", "r rerun", "c copy"}
 	if optionCount > 1 {
 		hints = append(hints, "tab switch option")
 	}
@@ -1281,6 +1321,7 @@ func (m Model) renderHelp() string {
 		"1-9                jump directly to that recommendation option",
 		"a                  approve active option (post comment, apply state change, sync labels)",
 		"c                  copy active option's coding-agent prompt",
+		"f                  run coding agent and open a fix PR for active option",
 		"e                  edit active option's draft, action, or labels",
 		"m                  mark triaged without approving",
 		"r                  rerun the agent on the current item with instructions",
@@ -1382,6 +1423,18 @@ func entryNumberLabelPaddedWithPending(entry Entry, digitWidth int, pending bool
 	return glyph + fmt.Sprintf(" #%-*d", digitWidth, entry.Number)
 }
 
+func fixJobInProgress(entry Entry) bool {
+	if strings.TrimSpace(entry.FixJobID) == "" {
+		return false
+	}
+	switch strings.TrimSpace(entry.FixStatus) {
+	case "queued", "running":
+		return true
+	default:
+		return false
+	}
+}
+
 // maxNumberDigits returns the digit count of the widest Number in entries
 // (minimum 1) so labels can be padded to a uniform width.
 func maxNumberDigits(entries []Entry) int {
@@ -1407,6 +1460,9 @@ func (m Model) renderDetails() string {
 	}
 	if strip := renderStatusStrip(entry); strip != "" {
 		lines = append(lines, strip)
+	}
+	if fixStatus := renderFixJobStatus(entry); fixStatus != "" {
+		lines = append(lines, fixStatus)
 	}
 	if strings.TrimSpace(entry.RerunInstructions) != "" {
 		lines = append(lines, sectionLabel("Rerun instructions"), renderIndentedBlock(entry.RerunInstructions, "  "))
@@ -1453,6 +1509,9 @@ func cardBodyLines(entry Entry) []string {
 	if strip := renderStatusStrip(entry); strip != "" {
 		lines = append(lines, strip, "")
 	}
+	if fixStatus := renderFixJobStatus(entry); fixStatus != "" {
+		lines = append(lines, fixStatus, "")
+	}
 	if strings.TrimSpace(entry.RerunInstructions) != "" {
 		lines = append(lines, sectionLabel("Rerun instructions"), renderIndentedBlock(entry.RerunInstructions, "  "), "")
 	}
@@ -1478,6 +1537,67 @@ func cardBodyLines(entry Entry) []string {
 		lines = append(lines, footer)
 	}
 	return lines
+}
+
+func renderFixJobStatus(entry Entry) string {
+	if strings.TrimSpace(entry.FixJobID) == "" {
+		return ""
+	}
+	state := strings.TrimSpace(entry.FixMessage)
+	if state == "" {
+		state = fixPhaseLabel(entry.FixPhase)
+	}
+	if state == "" {
+		state = strings.TrimSpace(entry.FixStatus)
+	}
+	parts := []string{"Fix: " + state}
+	if strings.TrimSpace(entry.FixPRURL) != "" {
+		parts = append(parts, strings.TrimSpace(entry.FixPRURL))
+	}
+	if attach := renderNoMistakesAttachCommand(entry); attach != "" {
+		parts = append(parts, "attach: "+attach)
+	}
+	if strings.TrimSpace(entry.FixError) != "" {
+		parts = append(parts, "error: "+strings.TrimSpace(entry.FixError))
+	}
+	return metaStyle().Render(strings.Join(parts, " · "))
+}
+
+func renderNoMistakesAttachCommand(entry Entry) string {
+	if strings.TrimSpace(entry.FixPhase) != "waiting_for_pr" || strings.TrimSpace(entry.FixWorktreePath) == "" {
+		return ""
+	}
+	return "cd " + shellQuote(entry.FixWorktreePath) + " && no-mistakes attach"
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func fixPhaseLabel(phase string) string {
+	switch strings.TrimSpace(phase) {
+	case "preparing_worktree":
+		return "preparing worktree"
+	case "running_agent":
+		return "running agent"
+	case "committing":
+		return "committing changes"
+	case "pushing":
+		return "pushing branch"
+	case "waiting_for_pr":
+		return "waiting for PR"
+	case "pr_opened":
+		return "PR opened"
+	case "queued":
+		return "queued"
+	case "failed":
+		return "failed"
+	default:
+		return strings.TrimSpace(phase)
+	}
 }
 
 func (m Model) cardWrappedLines(width int) []string {
@@ -1729,6 +1849,7 @@ func (m Model) renderQueueRail(width, boxHeight int) string {
 			lastRepo = entry.RepoID
 		}
 		_, isPending := m.pendingActions[entry.RecommendationID]
+		isPending = isPending || fixJobInProgress(entry)
 		label := entryNumberLabelPaddedWithPending(entry, digitWidth, isPending)
 		marker := "  "
 		text := fmt.Sprintf("%s%s  %s", marker, label, entry.Title)

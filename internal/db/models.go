@@ -113,3 +113,75 @@ type NewApproval struct {
 	ActedAt          *time.Time
 	ActedError       string
 }
+
+type FixJobStatus string
+
+const (
+	FixJobStatusQueued    FixJobStatus = "queued"
+	FixJobStatusRunning   FixJobStatus = "running"
+	FixJobStatusSucceeded FixJobStatus = "succeeded"
+	FixJobStatusFailed    FixJobStatus = "failed"
+	FixJobStatusCancelled FixJobStatus = "cancelled"
+)
+
+type FixJobPhase string
+
+const (
+	FixJobPhaseQueued            FixJobPhase = "queued"
+	FixJobPhasePreparingWorktree FixJobPhase = "preparing_worktree"
+	FixJobPhaseRunningAgent      FixJobPhase = "running_agent"
+	FixJobPhaseCommitting        FixJobPhase = "committing"
+	FixJobPhasePushing           FixJobPhase = "pushing"
+	FixJobPhaseWaitingForPR      FixJobPhase = "waiting_for_pr"
+	FixJobPhasePROpened          FixJobPhase = "pr_opened"
+	FixJobPhaseFailed            FixJobPhase = "failed"
+)
+
+type FixJob struct {
+	ID               string
+	ItemID           string
+	RecommendationID string
+	OptionID         string
+	RepoID           string
+	ItemNumber       int
+	ItemKind         sharedtypes.ItemKind
+	Title            string
+	FixPrompt        string
+	Agent            sharedtypes.AgentName
+	PRCreate         string
+	Branch           string
+	WorktreePath     string
+	PRURL            string
+	Status           FixJobStatus
+	Phase            FixJobPhase
+	Message          string
+	Error            string
+	CreatedAt        int64
+	StartedAt        *time.Time
+	UpdatedAt        int64
+	CompletedAt      *time.Time
+}
+
+type NewFixJob struct {
+	ItemID           string
+	RecommendationID string
+	OptionID         string
+	RepoID           string
+	ItemNumber       int
+	ItemKind         sharedtypes.ItemKind
+	Title            string
+	FixPrompt        string
+	Agent            sharedtypes.AgentName
+	PRCreate         string
+}
+
+type FixJobUpdate struct {
+	Status       FixJobStatus
+	Phase        FixJobPhase
+	Message      string
+	Error        string
+	Agent        sharedtypes.AgentName
+	Branch       string
+	WorktreePath string
+	PRURL        string
+}

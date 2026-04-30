@@ -25,10 +25,12 @@ import (
 	"github.com/kunchenguid/ezoss/internal/daemon"
 	"github.com/kunchenguid/ezoss/internal/db"
 	"github.com/kunchenguid/ezoss/internal/doctor"
+	fixflow "github.com/kunchenguid/ezoss/internal/fix"
 	"github.com/kunchenguid/ezoss/internal/ghclient"
 	ghmock "github.com/kunchenguid/ezoss/internal/ghclient/mock"
 	"github.com/kunchenguid/ezoss/internal/ipc"
 	"github.com/kunchenguid/ezoss/internal/paths"
+	prcreator "github.com/kunchenguid/ezoss/internal/pr"
 	"github.com/kunchenguid/ezoss/internal/shellenv"
 	"github.com/kunchenguid/ezoss/internal/telemetry"
 	"github.com/kunchenguid/ezoss/internal/triage"
@@ -99,6 +101,10 @@ var newApprovalExecutor = func() approvalExecutor {
 	return ghclient.New(nil)
 }
 var loadGlobalConfig = config.LoadGlobal
+var prepareFixWorktree = fixflow.PrepareWorktree
+var resolvePRCreator = prcreator.Resolve
+var createFixPR = prcreator.Create
+var runFixGitCommand = runGitCommand
 var newDraftEditor = func() draftEditor {
 	return envDraftEditor{}
 }
@@ -279,6 +285,7 @@ func NewRootCmd() *cobra.Command {
 
 	cmd.AddCommand(newDoctorCmd())
 	cmd.AddCommand(newDaemonCmd())
+	cmd.AddCommand(newFixCmd())
 	cmd.AddCommand(newInitCmd())
 	cmd.AddCommand(newListCmd())
 	cmd.AddCommand(newStatusCmd())
@@ -299,6 +306,369 @@ func shouldSkipShellEnvSetup(cmd *cobra.Command) bool {
 	default:
 		return false
 	}
+}
+
+func newFixCmd() *cobra.Command {
+	var prCreate string
+	var prepareOnly bool
+	cmd := &cobra.Command{
+		Use:   "fix <owner/repo#number>",
+		Short: "Run a coding agent in an isolated worktree and open a fix PR",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoID, number, err := parseFixTarget(args[0])
+			if err != nil {
+				return err
+			}
+			p, err := newPaths()
+			if err != nil {
+				return fmt.Errorf("resolve paths: %w", err)
+			}
+			cfg, err := loadGlobalConfig(filepath.Join(p.Root(), "config.yaml"))
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			mode := prcreator.Mode(cfg.Fixes.PRCreate)
+			if strings.TrimSpace(prCreate) != "" {
+				mode = prcreator.Mode(prCreate)
+			}
+			resolution, err := resolvePRCreator(mode, lookPath)
+			if err != nil {
+				return err
+			}
+			var entry tui.Entry
+			if !prepareOnly {
+				entry, err = loadFixEntry(repoID, number)
+				if err != nil {
+					return err
+				}
+			}
+			worktree, err := prepareFixWorktree(cmd.Context(), fixflow.WorktreeOptions{
+				Root:   p.Root(),
+				RepoID: repoID,
+				Number: number,
+			})
+			if err != nil {
+				return fmt.Errorf("prepare fix worktree: %w", err)
+			}
+
+			w := cmd.OutOrStdout()
+			fmt.Fprintln(w, "fix:")
+			fmt.Fprintf(w, "  repo: %s\n", repoID)
+			fmt.Fprintf(w, "  number: %d\n", number)
+			fmt.Fprintf(w, "  base_checkout: %s\n", worktree.BasePath)
+			fmt.Fprintf(w, "  worktree: %s\n", worktree.WorktreePath)
+			fmt.Fprintf(w, "  branch: %s\n", worktree.Branch)
+			fmt.Fprintf(w, "  base_ref: %s\n", worktree.BaseRef)
+			fmt.Fprintf(w, "  pr_create: %s\n", resolution.Mode)
+			if resolution.Binary != "" {
+				fmt.Fprintf(w, "  pr_create_binary: %s\n", resolution.Binary)
+			}
+			for _, skipped := range resolution.Skipped {
+				fmt.Fprintf(w, "  skipped_%s: %s\n", skipped.Mode, skipped.Reason)
+			}
+			if prepareOnly {
+				telemetry.Track("command", telemetry.Fields{"command": "fix", "entrypoint": "fix", "pr_create": string(resolution.Mode), "prepare_only": true})
+				return nil
+			}
+			result, err := runFixEntryWithPrepared(cmd.Context(), entry, w, fixRunPrepared{
+				Root:     p.Root(),
+				Config:   cfg,
+				Worktree: worktree,
+				PRCreate: resolution,
+			})
+			if err != nil {
+				return err
+			}
+			if result.PRURL != "" {
+				fmt.Fprintf(w, "  pr_url: %s\n", result.PRURL)
+			}
+
+			telemetry.Track("command", telemetry.Fields{"command": "fix", "entrypoint": "fix", "pr_create": string(resolution.Mode)})
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&prCreate, "pr-create", "", "PR creation mode override (auto, no-mistakes, gh, disabled)")
+	cmd.Flags().BoolVar(&prepareOnly, "prepare-only", false, "Only prepare the isolated worktree without running the coding agent")
+	return cmd
+}
+
+func parseFixTarget(value string) (string, int, error) {
+	trimmed := strings.TrimSpace(value)
+	repoPart, numberPart, ok := strings.Cut(trimmed, "#")
+	if !ok {
+		return "", 0, fmt.Errorf("invalid fix target %q: use owner/repo#number", value)
+	}
+	repoID := strings.TrimSpace(repoPart)
+	if repoID == "" || !strings.Contains(repoID, "/") {
+		return "", 0, fmt.Errorf("invalid fix target %q: use owner/repo#number", value)
+	}
+	number, err := strconv.Atoi(strings.TrimSpace(numberPart))
+	if err != nil || number <= 0 {
+		return "", 0, fmt.Errorf("invalid fix target %q: issue number must be positive", value)
+	}
+	return repoID, number, nil
+}
+
+type fixRunPrepared struct {
+	Root     string
+	Config   *config.GlobalConfig
+	Worktree fixflow.Worktree
+	PRCreate prcreator.Resolution
+}
+
+type fixRunResult struct {
+	WorktreePath string
+	Branch       string
+	PRURL        string
+}
+
+func loadFixEntry(repoID string, number int) (tui.Entry, error) {
+	entries, err := loadInboxEntries()
+	if err != nil {
+		return tui.Entry{}, err
+	}
+	for _, entry := range entries {
+		if entry.RepoID == repoID && entry.Number == number {
+			if strings.TrimSpace(entry.FixPrompt) == "" {
+				return tui.Entry{}, fmt.Errorf("%s#%d has no fix prompt; rerun triage or choose a fix_required option first", repoID, number)
+			}
+			return entry, nil
+		}
+	}
+	return tui.Entry{}, fmt.Errorf("no active recommendation found for %s#%d", repoID, number)
+}
+
+func runFixEntry(ctx context.Context, entry tui.Entry, out io.Writer) (*fixRunResult, error) {
+	p, err := newPaths()
+	if err != nil {
+		return nil, fmt.Errorf("resolve paths: %w", err)
+	}
+	cfg, err := loadGlobalConfig(filepath.Join(p.Root(), "config.yaml"))
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	worktree, err := prepareFixWorktree(ctx, fixflow.WorktreeOptions{
+		Root:   p.Root(),
+		RepoID: entry.RepoID,
+		Number: entry.Number,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prepare fix worktree: %w", err)
+	}
+	resolution, err := resolvePRCreator(prcreator.Mode(cfg.Fixes.PRCreate), lookPath)
+	if err != nil {
+		return nil, err
+	}
+	return runFixEntryWithPrepared(ctx, entry, out, fixRunPrepared{
+		Root:     p.Root(),
+		Config:   cfg,
+		Worktree: worktree,
+		PRCreate: resolution,
+	})
+}
+
+func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer, prepared fixRunPrepared) (*fixRunResult, error) {
+	if out == nil {
+		out = io.Discard
+	}
+	if strings.TrimSpace(entry.FixPrompt) == "" {
+		return nil, fmt.Errorf("%s#%d has no fix prompt", entry.RepoID, entry.Number)
+	}
+	cfg := prepared.Config
+	if cfg == nil {
+		cfg = &config.GlobalConfig{Agent: config.AgentAuto, Fixes: config.FixesConfig{PRCreate: config.PRCreateAuto}}
+	}
+	agentName := cfg.Agent
+	if agentName == "" {
+		agentName = config.AgentAuto
+	}
+	resolvedAgent, bin, err := agent.Resolve(agentName, lookPath)
+	if err != nil {
+		return nil, err
+	}
+	agentRunner, err := newAgent(resolvedAgent, bin)
+	if err != nil {
+		return nil, err
+	}
+	defer agentRunner.Close()
+
+	worktree := prepared.Worktree
+	prompt := promptWithFixWorktree(entry.FixPrompt, worktree.WorktreePath)
+	fmt.Fprintf(out, "  agent: %s\n", resolvedAgent)
+	result, err := agentRunner.Run(ctx, agent.RunOpts{Prompt: prompt, CWD: worktree.WorktreePath})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("agent returned no result")
+	}
+
+	status, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(status)) != "" {
+		if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "add", "-A"); err != nil {
+			return nil, err
+		}
+		if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "commit", "-m", fmt.Sprintf("fix: %s#%d", entry.RepoID, entry.Number)); err != nil {
+			return nil, err
+		}
+		fmt.Fprintln(out, "  committed: true")
+	} else {
+		fmt.Fprintln(out, "  committed: false")
+	}
+
+	created, _, err := createFixPRWithFallback(ctx, prepared.PRCreate, prcreator.CreateOptions{
+		RepoID:       entry.RepoID,
+		WorktreePath: worktree.WorktreePath,
+		Base:         baseBranch(worktree.BaseRef),
+		Head:         worktree.Branch,
+		Title:        fixPRTitle(entry),
+		Body:         fixPRBody(entry),
+		Draft:        true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &fixRunResult{WorktreePath: worktree.WorktreePath, Branch: worktree.Branch, PRURL: created.URL}, nil
+}
+
+func promptWithFixWorktree(prompt string, checkout string) string {
+	return strings.TrimSpace(prompt) + "\n\nRepository checkout for fixing:\n" + checkout + "\n\nThis checkout is an isolated ezoss fix worktree. Implement the smallest correct fix and add or update regression tests when appropriate. Do not open the pull request yourself; ezoss will create it after the fix run."
+}
+
+func baseBranch(ref string) string {
+	ref = strings.TrimSpace(ref)
+	ref = strings.TrimPrefix(ref, "refs/remotes/")
+	ref = strings.TrimPrefix(ref, "origin/")
+	if ref == "" || ref == "HEAD" {
+		return "main"
+	}
+	return ref
+}
+
+func fixPRTitle(entry tui.Entry) string {
+	title := strings.TrimSpace(entry.Title)
+	if title == "" {
+		return fmt.Sprintf("Fix %s#%d", entry.RepoID, entry.Number)
+	}
+	return fmt.Sprintf("Fix %s#%d: %s", entry.RepoID, entry.Number, title)
+}
+
+func fixPRBody(entry tui.Entry) string {
+	return strings.TrimSpace(fmt.Sprintf("Fixes #%d\n\nGenerated from ezoss recommendation %s.\n", entry.Number, entry.RecommendationID))
+}
+
+type cliFixRunner struct {
+	root string
+	cfg  *config.GlobalConfig
+}
+
+func (r cliFixRunner) RunFix(ctx context.Context, job db.FixJob, progress func(db.FixJobUpdate) error) (*daemon.FixResult, error) {
+	entry := tui.Entry{RecommendationID: job.RecommendationID, OptionID: job.OptionID, RepoID: job.RepoID, Number: job.ItemNumber, Kind: job.ItemKind, Title: job.Title, FixPrompt: job.FixPrompt}
+	if progress != nil {
+		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhasePreparingWorktree, Message: "preparing worktree"})
+	}
+	worktree, err := prepareFixWorktree(ctx, fixflow.WorktreeOptions{Root: r.root, RepoID: job.RepoID, Number: job.ItemNumber})
+	if err != nil {
+		return nil, fmt.Errorf("prepare fix worktree: %w", err)
+	}
+	resolution, err := resolvePRCreator(prcreator.Mode(job.PRCreate), lookPath)
+	if err != nil {
+		return nil, err
+	}
+	cfg := r.cfg
+	if cfg == nil {
+		cfg = &config.GlobalConfig{Agent: config.AgentAuto}
+	}
+	agentName := cfg.Agent
+	if agentName == "" {
+		agentName = config.AgentAuto
+	}
+	resolvedAgent, bin, err := agent.Resolve(agentName, lookPath)
+	if err != nil {
+		return nil, err
+	}
+	if progress != nil {
+		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhaseRunningAgent, Agent: resolvedAgent, Branch: worktree.Branch, WorktreePath: worktree.WorktreePath, Message: "running agent"})
+	}
+	agentRunner, err := newAgent(resolvedAgent, bin)
+	if err != nil {
+		return nil, err
+	}
+	defer agentRunner.Close()
+	result, err := agentRunner.Run(ctx, agent.RunOpts{Prompt: promptWithFixWorktree(job.FixPrompt, worktree.WorktreePath), CWD: worktree.WorktreePath})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("agent returned no result")
+	}
+	if progress != nil {
+		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhaseCommitting, Message: "committing changes"})
+	}
+	status, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(status)) != "" {
+		if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "add", "-A"); err != nil {
+			return nil, err
+		}
+		if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "commit", "-m", fmt.Sprintf("fix: %s#%d", job.RepoID, job.ItemNumber)); err != nil {
+			return nil, err
+		}
+	}
+	if progress != nil {
+		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhasePushing, Message: "pushing branch"})
+	}
+	created, usedResolution, err := createFixPRWithFallback(ctx, resolution, prcreator.CreateOptions{RepoID: job.RepoID, WorktreePath: worktree.WorktreePath, Base: baseBranch(worktree.BaseRef), Head: worktree.Branch, Title: fixPRTitle(entry), Body: fixPRBody(entry), Draft: true, DetectAttempts: 1, DetectInterval: -1})
+	if err != nil {
+		if usedResolution.Mode == prcreator.ModeNoMistakes && strings.Contains(err.Error(), "PR not found") {
+			return &daemon.FixResult{Branch: worktree.Branch, WorktreePath: worktree.WorktreePath, WaitingForPR: true}, nil
+		}
+		return nil, err
+	}
+	return &daemon.FixResult{Branch: worktree.Branch, WorktreePath: worktree.WorktreePath, PRURL: created.URL}, nil
+}
+
+func createFixPRWithFallback(ctx context.Context, resolution prcreator.Resolution, opts prcreator.CreateOptions) (prcreator.Created, prcreator.Resolution, error) {
+	created, err := createFixPR(ctx, resolution.Mode, opts, nil)
+	if err == nil || !shouldFallbackFromNoMistakes(resolution, err) {
+		return created, resolution, err
+	}
+	ghResolution, resolveErr := resolvePRCreator(prcreator.ModeGH, lookPath)
+	if resolveErr != nil {
+		return prcreator.Created{}, resolution, fmt.Errorf("%w (also failed to resolve gh fallback: %v)", err, resolveErr)
+	}
+	created, err = createFixPR(ctx, ghResolution.Mode, opts, nil)
+	return created, ghResolution, err
+}
+
+func shouldFallbackFromNoMistakes(resolution prcreator.Resolution, err error) bool {
+	if err == nil || resolution.Requested != prcreator.ModeAuto || resolution.Mode != prcreator.ModeNoMistakes {
+		return false
+	}
+	return !strings.Contains(err.Error(), "PR not found")
+}
+
+func (r cliFixRunner) DetectPR(ctx context.Context, job db.FixJob) (string, error) {
+	args := []string{"pr", "list", "--head", job.Branch, "--state", "all", "--json", "url", "--jq", ".[0].url"}
+	if job.RepoID != "" {
+		args = append(args, "--repo", job.RepoID)
+	}
+	out, err := runGhCommand(ctx, job.WorktreePath, args...)
+	if err != nil {
+		return "", err
+	}
+	url := strings.TrimSpace(string(out))
+	if url == "null" {
+		return "", nil
+	}
+	return url, nil
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -400,6 +770,7 @@ func newDaemonRunCmd() *cobra.Command {
 					return fmt.Errorf("create triage runner: %w", err)
 				}
 				poller.Triage = runner
+				poller.Fix = cliFixRunner{root: p.Root(), cfg: cfg}
 				poller.AgentsInstructions = readAgentsInstructions(p.Root())
 			}
 
@@ -415,9 +786,14 @@ func newDaemonRunCmd() *cobra.Command {
 					"version", buildinfo.Version,
 					"mock", useMock,
 				},
+				RecommendationSnapshot: database.ListActiveRecommendations,
 				PollOnce: func(ctx context.Context, repos []string) error {
 					return daemon.PollOnce(ctx, poller, repos)
 				},
+				FixStart: func(ctx context.Context, params ipc.FixStartParams) (ipc.FixStartResult, error) {
+					return createFixJobFromIPC(ctx, database, cfg, params)
+				},
+				FixJobSnapshot: database.ListFixJobs,
 				NewTicker: func(interval time.Duration) daemon.Ticker {
 					return daemon.NewTicker(interval)
 				},
@@ -693,6 +1069,15 @@ func loadInboxEntries() ([]tui.Entry, error) {
 			RerunInstructions: rec.RerunInstructions,
 			Options:           buildEntryOptions(rec.Options),
 		}
+		if fixJob, err := database.LatestFixJobForItem(item.ID); err == nil && fixJob != nil {
+			entry.FixJobID = fixJob.ID
+			entry.FixStatus = string(fixJob.Status)
+			entry.FixPhase = string(fixJob.Phase)
+			entry.FixMessage = fixJob.Message
+			entry.FixError = fixJob.Error
+			entry.FixPRURL = fixJob.PRURL
+			entry.FixWorktreePath = fixJob.WorktreePath
+		}
 		entry.SyncActive()
 		entries = append(entries, entry)
 	}
@@ -780,6 +1165,10 @@ func inboxModelActions(notify <-chan struct{}) tui.ModelActions {
 		CopyPrompt: func(entry tui.Entry) error {
 			return copyTextToClipboard(context.Background(), entry.FixPrompt)
 		},
+		Fix: func(entry tui.Entry) error {
+			_, err := startDaemonFixJob(context.Background(), entry)
+			return err
+		},
 		Reload: loadInboxEntries,
 	}
 }
@@ -826,11 +1215,69 @@ func subscribeInboxNotifications() (<-chan struct{}, func(), error) {
 
 func isRecommendationEvent(eventType ipc.EventType) bool {
 	switch eventType {
-	case ipc.EventRecommendationCreated, ipc.EventRecommendationUpdated, ipc.EventRecommendationRemoved:
+	case ipc.EventRecommendationCreated, ipc.EventRecommendationUpdated, ipc.EventRecommendationRemoved, ipc.EventFixJobCreated, ipc.EventFixJobUpdated:
 		return true
 	default:
 		return false
 	}
+}
+
+func startDaemonFixJob(ctx context.Context, entry tui.Entry) (ipc.FixStartResult, error) {
+	p, err := newPaths()
+	if err != nil {
+		return ipc.FixStartResult{}, fmt.Errorf("resolve paths: %w", err)
+	}
+	client, err := dialDaemonIPC(p.IPCPath())
+	if err != nil {
+		return ipc.FixStartResult{}, fmt.Errorf("connect daemon: %w", err)
+	}
+	defer client.Close()
+	var result ipc.FixStartResult
+	if err := client.Call(ipc.MethodFixStart, ipc.FixStartParams{RecommendationID: entry.RecommendationID, OptionID: entry.OptionID}, &result); err != nil {
+		return ipc.FixStartResult{}, err
+	}
+	return result, nil
+}
+
+func createFixJobFromIPC(_ context.Context, database *db.DB, cfg *config.GlobalConfig, params ipc.FixStartParams) (ipc.FixStartResult, error) {
+	rec, err := database.GetRecommendation(params.RecommendationID)
+	if err != nil {
+		return ipc.FixStartResult{}, err
+	}
+	if rec == nil {
+		return ipc.FixStartResult{}, fmt.Errorf("recommendation %s not found", params.RecommendationID)
+	}
+	item, err := database.GetItem(rec.ItemID)
+	if err != nil {
+		return ipc.FixStartResult{}, err
+	}
+	if item == nil {
+		return ipc.FixStartResult{}, fmt.Errorf("item %s not found", rec.ItemID)
+	}
+	var option *db.RecommendationOption
+	for i := range rec.Options {
+		if params.OptionID == "" || rec.Options[i].ID == params.OptionID {
+			option = &rec.Options[i]
+			break
+		}
+	}
+	if option == nil {
+		return ipc.FixStartResult{}, fmt.Errorf("option %s not found", params.OptionID)
+	}
+	if strings.TrimSpace(option.FixPrompt) == "" {
+		return ipc.FixStartResult{}, fmt.Errorf("option has no fix prompt")
+	}
+	prCreate := config.PRCreateAuto
+	agentName := config.AgentAuto
+	if cfg != nil {
+		prCreate = cfg.Fixes.PRCreate
+		agentName = cfg.Agent
+	}
+	job, err := database.CreateFixJob(db.NewFixJob{ItemID: item.ID, RecommendationID: rec.ID, OptionID: option.ID, RepoID: item.RepoID, ItemNumber: item.Number, ItemKind: item.Kind, Title: item.Title, FixPrompt: option.FixPrompt, Agent: agentName, PRCreate: string(prCreate)})
+	if err != nil {
+		return ipc.FixStartResult{}, err
+	}
+	return ipc.FixStartResult{JobID: job.ID, ItemID: job.ItemID, Status: string(job.Status)}, nil
 }
 
 func rerunInboxEntries(ctx context.Context, entries []tui.Entry, instructions string) ([]tui.Entry, error) {
@@ -1325,7 +1772,8 @@ func parseStateChange(raw string) (sharedtypes.StateChange, error) {
 	case sharedtypes.StateChangeNone,
 		sharedtypes.StateChangeClose,
 		sharedtypes.StateChangeMerge,
-		sharedtypes.StateChangeRequestChanges:
+		sharedtypes.StateChangeRequestChanges,
+		sharedtypes.StateChangeFixRequired:
 		return value, nil
 	case "":
 		return sharedtypes.StateChangeNone, nil
