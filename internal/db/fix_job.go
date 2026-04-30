@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
 )
@@ -213,6 +214,39 @@ func (d *DB) ListFixJobs() ([]FixJob, error) {
 		return nil, fmt.Errorf("list fix jobs: %w", err)
 	}
 	return jobs, nil
+}
+
+func (d *DB) ReclaimStaleRunningFixJobs(cutoff time.Time) (int, error) {
+	now := nowUnix()
+	result, err := d.sql.Exec(
+		`UPDATE fix_jobs SET
+		 status = ?,
+		 phase = ?,
+		 message = ?,
+		 error = ?,
+		 updated_at = ?,
+		 completed_at = COALESCE(completed_at, ?)
+		 WHERE status = ?
+		   AND COALESCE(phase, '') <> ?
+		   AND updated_at <= ?`,
+		FixJobStatusFailed,
+		FixJobPhaseFailed,
+		"fix job interrupted",
+		"fix job interrupted before completion",
+		now,
+		now,
+		FixJobStatusRunning,
+		FixJobPhaseWaitingForPR,
+		cutoff.Unix(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("reclaim stale fix jobs: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("reclaim stale fix jobs: rows affected: %w", err)
+	}
+	return int(rows), nil
 }
 
 func (d *DB) UpdateFixJob(id string, update FixJobUpdate) error {

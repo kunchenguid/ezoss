@@ -140,6 +140,80 @@ func TestCreateFixJobAllowsOnlyOneConcurrentActiveJob(t *testing.T) {
 	}
 }
 
+func TestReclaimStaleRunningFixJobsFailsInterruptedJobs(t *testing.T) {
+	database := openTestDB(t)
+	stale, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() stale error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() stale error = %v", err)
+	}
+	if err := database.UpdateFixJob(stale.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseRunningAgent}); err != nil {
+		t.Fatalf("UpdateFixJob() stale error = %v", err)
+	}
+	waiting, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#43", RecommendationID: "rec-2", RepoID: "acme/widgets", ItemNumber: 43, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "no-mistakes"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() waiting error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() waiting error = %v", err)
+	}
+	if err := database.UpdateFixJob(waiting.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseWaitingForPR}); err != nil {
+		t.Fatalf("UpdateFixJob() waiting error = %v", err)
+	}
+	fresh, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#44", RecommendationID: "rec-3", RepoID: "acme/widgets", ItemNumber: 44, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() fresh error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() fresh error = %v", err)
+	}
+	if err := database.UpdateFixJob(fresh.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseRunningAgent}); err != nil {
+		t.Fatalf("UpdateFixJob() fresh error = %v", err)
+	}
+	oldUpdatedAt := time.Now().Add(-2 * time.Hour).Unix()
+	if _, err := database.sql.Exec(`UPDATE fix_jobs SET updated_at = ? WHERE id IN (?, ?)`, oldUpdatedAt, stale.ID, waiting.ID); err != nil {
+		t.Fatalf("force old updated_at: %v", err)
+	}
+
+	reclaimed, err := database.ReclaimStaleRunningFixJobs(time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ReclaimStaleRunningFixJobs() error = %v", err)
+	}
+	if reclaimed != 1 {
+		t.Fatalf("ReclaimStaleRunningFixJobs() = %d, want 1", reclaimed)
+	}
+	gotStale, err := database.GetFixJob(stale.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() stale error = %v", err)
+	}
+	if gotStale.Status != FixJobStatusFailed || gotStale.Phase != FixJobPhaseFailed || gotStale.CompletedAt == nil {
+		t.Fatalf("stale job = %#v, want failed", gotStale)
+	}
+	gotWaiting, err := database.GetFixJob(waiting.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() waiting error = %v", err)
+	}
+	if gotWaiting.Status != FixJobStatusRunning || gotWaiting.Phase != FixJobPhaseWaitingForPR {
+		t.Fatalf("waiting job = %#v, want still waiting", gotWaiting)
+	}
+	gotFresh, err := database.GetFixJob(fresh.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() fresh error = %v", err)
+	}
+	if gotFresh.Status != FixJobStatusRunning || gotFresh.Phase != FixJobPhaseRunningAgent {
+		t.Fatalf("fresh job = %#v, want still running", gotFresh)
+	}
+	newJob, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-4", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix retry.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() retry error = %v", err)
+	}
+	if newJob.ID == stale.ID {
+		t.Fatalf("CreateFixJob() retry returned stale active job %s", stale.ID)
+	}
+}
+
 func TestClaimNextQueuedFixJobAndUpdateStatus(t *testing.T) {
 	database := openTestDB(t)
 	job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})

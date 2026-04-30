@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -115,8 +116,8 @@ func TestPollOnceKeepsWaitingFixJobRunningWhenPRDetectionFails(t *testing.T) {
 	}
 	runner := &stubFixRunner{err: errors.New("gh temporarily unavailable")}
 
-	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: emptyTriageLister{}, Fix: runner}, []string{"acme/widgets"}); err == nil {
-		t.Fatalf("PollOnce() error = nil, want detection error")
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: emptyTriageLister{}, Fix: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v, want detection error to be retried later", err)
 	}
 	got, err := database.GetFixJob(job.ID)
 	if err != nil {
@@ -163,6 +164,85 @@ func TestPollOnceChecksLaterWaitingFixJobsWhenEarlierPRIsMissing(t *testing.T) {
 	}
 }
 
+func TestPollOnceRunsQueuedFixJobAfterWaitingPRDetectionError(t *testing.T) {
+	database := openDaemonTestDB(t)
+	waiting, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#41", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 41, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix first.", PRCreate: "no-mistakes"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() waiting error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() waiting error = %v", err)
+	}
+	if err := database.UpdateFixJob(waiting.ID, db.FixJobUpdate{Status: db.FixJobStatusRunning, Phase: db.FixJobPhaseWaitingForPR, Branch: "ezoss/fix-41"}); err != nil {
+		t.Fatalf("UpdateFixJob() waiting error = %v", err)
+	}
+	queued, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-2", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix second.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() queued error = %v", err)
+	}
+	runner := &stubFixRunner{errByDetectJob: map[string]error{waiting.ID: errors.New("gh temporarily unavailable")}, result: &FixResult{Branch: "ezoss/fix-42", WorktreePath: "/tmp/w", PRURL: "https://github.com/acme/widgets/pull/99"}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: emptyTriageLister{}, Fix: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	if len(runner.ran) != 1 || runner.ran[0].ID != queued.ID {
+		t.Fatalf("fix runner jobs = %#v, want queued job %s", runner.ran, queued.ID)
+	}
+	gotWaiting, err := database.GetFixJob(waiting.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() waiting error = %v", err)
+	}
+	if gotWaiting.Status != db.FixJobStatusRunning || gotWaiting.Phase != db.FixJobPhaseWaitingForPR {
+		t.Fatalf("waiting job = %#v, want still waiting", gotWaiting)
+	}
+}
+
+func TestPollOnceReclaimsStaleRunningFixJob(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	rawDB, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)")
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	t.Cleanup(func() { _ = rawDB.Close() })
+	stale, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#41", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 41, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix first.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() stale error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() stale error = %v", err)
+	}
+	if err := database.UpdateFixJob(stale.ID, db.FixJobUpdate{Status: db.FixJobStatusRunning, Phase: db.FixJobPhaseRunningAgent}); err != nil {
+		t.Fatalf("UpdateFixJob() stale error = %v", err)
+	}
+	if _, err := rawDB.Exec(`UPDATE fix_jobs SET updated_at = ? WHERE id = ?`, time.Now().Add(-2*time.Hour).Unix(), stale.ID); err != nil {
+		t.Fatalf("force old updated_at: %v", err)
+	}
+	queued, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-2", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix second.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() queued error = %v", err)
+	}
+	runner := &stubFixRunner{result: &FixResult{Branch: "ezoss/fix-42", WorktreePath: "/tmp/w", PRURL: "https://github.com/acme/widgets/pull/99"}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: emptyTriageLister{}, Fix: runner, PerFixJobTimeout: time.Hour}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	gotStale, err := database.GetFixJob(stale.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() stale error = %v", err)
+	}
+	if gotStale.Status != db.FixJobStatusFailed || gotStale.Phase != db.FixJobPhaseFailed {
+		t.Fatalf("stale job = %#v, want failed", gotStale)
+	}
+	if len(runner.ran) != 1 || runner.ran[0].ID != queued.ID {
+		t.Fatalf("fix runner jobs = %#v, want queued job %s", runner.ran, queued.ID)
+	}
+}
+
 func TestPollOnceRunsFixJobWithTimeout(t *testing.T) {
 	database := openDaemonTestDB(t)
 	job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
@@ -187,11 +267,12 @@ func TestPollOnceRunsFixJobWithTimeout(t *testing.T) {
 }
 
 type stubFixRunner struct {
-	result        *FixResult
-	err           error
-	detectedPR    string
-	detectedByJob map[string]string
-	ran           []db.FixJob
+	result         *FixResult
+	err            error
+	detectedPR     string
+	detectedByJob  map[string]string
+	errByDetectJob map[string]error
+	ran            []db.FixJob
 }
 
 func (s *stubFixRunner) RunFix(_ context.Context, job db.FixJob, progress func(db.FixJobUpdate) error) (*FixResult, error) {
@@ -203,6 +284,9 @@ func (s *stubFixRunner) RunFix(_ context.Context, job db.FixJob, progress func(d
 }
 
 func (s *stubFixRunner) DetectPR(_ context.Context, job db.FixJob) (string, error) {
+	if s.errByDetectJob != nil && s.errByDetectJob[job.ID] != nil {
+		return "", s.errByDetectJob[job.ID]
+	}
 	if s.err != nil {
 		return "", s.err
 	}

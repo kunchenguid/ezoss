@@ -14,8 +14,14 @@ func runFixStage(ctx context.Context, poller Poller) (bool, error) {
 		return false, nil
 	}
 
+	reclaimed, err := poller.DB.ReclaimStaleRunningFixJobs(time.Now().Add(-fixJobTimeout(poller)))
+	if err != nil {
+		return false, err
+	}
+	reclaimedWork := reclaimed > 0
+
 	if didWork, err := detectWaitingFixPRs(ctx, poller); didWork || err != nil {
-		return didWork, err
+		return reclaimedWork || didWork, err
 	}
 
 	job, err := poller.DB.ClaimNextQueuedFixJob()
@@ -23,7 +29,7 @@ func runFixStage(ctx context.Context, poller Poller) (bool, error) {
 		return false, err
 	}
 	if job == nil {
-		return false, nil
+		return reclaimedWork, nil
 	}
 	progress := func(update db.FixJobUpdate) error {
 		if update.Status == "" {
@@ -79,7 +85,11 @@ func detectWaitingFixPRs(ctx context.Context, poller Poller) (bool, error) {
 		url, err := poller.Fix.DetectPR(detectCtx, job)
 		cancel()
 		if err != nil {
-			return true, fmt.Errorf("detect fix PR %s: %w", job.ID, err)
+			if ctx.Err() != nil {
+				return didWork, ctx.Err()
+			}
+			poller.log().Warn("detect fix PR failed", "job", job.ID, "err", err)
+			continue
 		}
 		if strings.TrimSpace(url) == "" {
 			continue

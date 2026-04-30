@@ -3,6 +3,7 @@ package pr
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"reflect"
 	"testing"
@@ -85,6 +86,20 @@ func TestResolvePropagatesUnexpectedProbeErrors(t *testing.T) {
 	})
 	if !errors.Is(err, want) {
 		t.Fatalf("Resolve() error = %v, want %v", err, want)
+	}
+}
+
+func TestRunCommandDisablesInteractivePrompts(t *testing.T) {
+	if os.Getenv("EZOSS_PR_RUN_COMMAND_ENV_HELPER") == "1" {
+		if os.Getenv("GIT_TERMINAL_PROMPT") != "0" || os.Getenv("GIT_ASKPASS") != "true" || os.Getenv("GCM_INTERACTIVE") != "never" {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	t.Setenv("EZOSS_PR_RUN_COMMAND_ENV_HELPER", "1")
+
+	if _, err := runCommand(context.Background(), "", os.Args[0], "-test.run=TestRunCommandDisablesInteractivePrompts"); err != nil {
+		t.Fatalf("runCommand() error = %v", err)
 	}
 }
 
