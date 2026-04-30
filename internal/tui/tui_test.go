@@ -20,7 +20,7 @@ func stripANSI(s string) string {
 }
 
 // runActionCmd extracts an actionFinishedMsg from the cmd returned by an
-// async key press (a/m/r). The cmd is either the bare action func or a
+// async key press (a/f/m/r). The cmd is either the bare action func or a
 // tea.Batch whose first child is the action - by convention startAction
 // places it first so tests can bypass the sibling spinner-tick cmd
 // (tea.Tick blocks for real wall-clock time).
