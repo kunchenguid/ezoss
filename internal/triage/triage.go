@@ -19,9 +19,10 @@ type Recommendation struct {
 
 // RecommendationOption is one self-contained proposed resolution. The
 // action it proposes is decomposed: post DraftComment if non-empty and
-// apply StateChange (none|close|merge|request_changes). User-namespaced
-// labels are deliberately not part of the agent's contract - the agent
-// has no reliable view of which labels exist in the target repo, and any
+// apply StateChange (none|close|merge|request_changes|fix_required).
+// FixPrompt carries the coding-agent handoff for fix_required options.
+// User-namespaced labels are deliberately not part of the agent's contract -
+// the agent has no reliable view of which labels exist in the target repo, and any
 // proposed but missing label used to break the atomic gh edit --add-label
 // call. Lifecycle labels in the ezoss/* namespace are managed
 // automatically downstream.

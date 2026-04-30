@@ -42,7 +42,7 @@ You stay in control. The agent drafts. The maintainer decides.
 
 - **Private by default** - agent rationale, draft comments, fix prompts, and token usage stay in local SQLite until you approve an action.
 - **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.
-- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/copy-prompt/edit/rerun flows already work end to end.
+- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/fix-PR/copy-prompt/edit/rerun flows already work end to end.
 - **PRs can pause before review** - PRs without prior agreement can be routed into a maintainer approval step before code review.
 
 ## Quick Start
@@ -61,7 +61,7 @@ $ ezoss list
 kunchenguid/ezoss#42	issue	comment	low	panic in sync loop
 
 $ ezoss
-# opens the inbox TUI for approve, copy prompt, edit, mark triaged, and rerun
+# opens the inbox TUI for approve, fix PR, copy prompt, edit, mark triaged, and rerun
 ```
 
 ## Install
@@ -99,6 +99,8 @@ Live triage requires `gh auth login`, `git`, one supported agent backend, and a 
 
 Copying fix prompts from the inbox also needs a platform clipboard command: `pbcopy` on macOS, `clip` on Windows, or `wl-copy`, `xclip`, or `xsel` on Linux.
 
+Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistakes`.
+
 ## How It Works
 
 ```
@@ -122,16 +124,18 @@ Copying fix prompts from the inbox also needs a platform clipboard command: `pbc
 ┌────────────────────┐
 │ local SQLite cache │
 └─────────┬──────────┘
-          │ review/edit/approve
+          │ review/edit/approve/fix
           ▼
 ┌────────────────────┐
 │ inbox TUI          │
 └─────────┬──────────┘
           │ execute approved gh action
+          │ or queued fix job
           ▼
 ┌────────────────────┐
 │ GitHub labels /    │
 │ comments / reviews │
+│ / draft fix PRs    │
 └────────────────────┘
 ```
 
@@ -139,6 +143,7 @@ Copying fix prompts from the inbox also needs a platform clipboard command: `pbc
 - **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
   Rerun instructions are stored there too.
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
+- **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and create draft PRs via `no-mistakes` or `gh`.
 - **Polling is deliberate** - v1 avoids webhook complexity and just re-triages when the GitHub label disappears.
 - **Approval is explicit** - nothing gets posted, closed, merged, or labeled until you do it from the inbox.
 - **PR review is gated when needed** - unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.
@@ -149,6 +154,7 @@ Copying fix prompts from the inbox also needs a platform clipboard command: `pbc
 | ------- | ------------ | ------------------------------------------------------------------------- |
 | `a`     | Approve      | Execute the selected GitHub action and sync triage labels                 |
 | `c`     | Copy prompt  | Copy the active option's coding-agent fix prompt when one exists          |
+| `f`     | Fix          | Queue a coding-agent fix job and open a draft PR when a fix prompt exists |
 | `e`     | Edit         | Open the draft in your editor before approval                             |
 | `m`     | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation                |
 | `r`     | Rerun        | Re-triage the item and replace the active recommendation                  |
@@ -164,6 +170,7 @@ Copying fix prompts from the inbox also needs a platform clipboard command: `pbc
 | `ezoss status`                 | Open the realtime status TUI; in non-interactive output, print rich text status               |
 | `ezoss status --short`         | Print a one-line summary of pending recommendations and configured repos                      |
 | `ezoss list`                   | Print pending recommendations in a text format                                                |
+| `ezoss fix <repo>#<number>`    | Run the active fix prompt in an isolated worktree and open a draft PR                         |
 | `ezoss triage <repo>#<number>` | Manually triage one issue or PR                                                               |
 | `ezoss update`                 | Download and install the latest released binary for the current platform                      |
 | `ezoss daemon start`           | Start the background poller                                                                   |
@@ -177,6 +184,8 @@ Copying fix prompts from the inbox also needs a platform clipboard command: `pbc
 | `daemon start`           | `--mock`            | Use canned GitHub items and recommendations                            |
 | `status`                 | `--short`           | Print a one-line key=value summary                                     |
 | `triage <repo>#<number>` | `--mock`            | Triage against canned fixtures instead of live GitHub + agent backends |
+| `fix <repo>#<number>`    | `--pr-create`       | Override fix PR creation: `auto`, `no-mistakes`, `gh`, or `disabled`   |
+| `fix <repo>#<number>`    | `--prepare-only`    | Prepare the isolated worktree without running the coding agent         |
 | `init`                   | `--repo`            | Repository to monitor, repeatable                                      |
 | `init`                   | `--agent`           | Agent backend: `auto`, `claude`, `codex`, `rovodev`, `opencode`        |
 | `init`                   | `--merge-method`    | Default PR merge method: `merge`, `squash`, or `rebase`                |
@@ -191,12 +200,16 @@ Per-repo overrides live in `.ezoss.yaml` at the repo root and currently support 
 
 `merge_method` controls how approved PR merges execute and supports `merge`, `squash`, or `rebase`.
 
+`fixes.pr_create` controls how fix PRs are created and supports `auto`, `no-mistakes`, `gh`, or `disabled`.
+
 ```yaml
 # ~/.ezoss/config.yaml
 agent: auto
 poll_interval: 5m
 stale_threshold: 30d
 merge_method: merge
+fixes:
+  pr_create: auto
 repos:
   - kunchenguid/ezoss
 sync_labels:

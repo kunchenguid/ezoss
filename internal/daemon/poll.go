@@ -101,11 +101,11 @@ func (p Poller) log() *slog.Logger {
 	return p.Logger
 }
 
-// PollOnce runs a full poll cycle in two sequential stages: stage A
-// fetches GitHub data for every configured repo into the local DB,
-// stage B then iterates items in the DB that need agent attention and
-// invokes the triage runner. Both stages are sequential to avoid
-// hitting GitHub or agent provider rate limits.
+// PollOnce runs a full poll cycle in sequential stages: stage A fetches
+// GitHub data for every configured repo into the local DB, stage B processes
+// daemon-backed fix jobs, and stage C invokes the triage runner for items
+// that need agent attention. If stage B does fix work, the cycle stops before
+// agent triage so fix runs and triage runs do not contend for agent capacity.
 func PollOnce(ctx context.Context, poller Poller, repos []string) error {
 	if poller.DB == nil {
 		return fmt.Errorf("poller db: nil")

@@ -4,7 +4,9 @@ This file provides shared guidance for coding agents working in this repository.
 
 ## Project
 
-`ezoss` is a single-user, maintainer-side orchestrator written in Go. A background daemon polls configured GitHub repos, runs a coding agent (`claude`, `codex`, `rovodev`, or `opencode`) against any issue or PR that does not yet carry the `ezoss/triaged` label, stores a structured recommendation in a local SQLite cache, and surfaces drafts in a Bubble Tea TUI inbox where the maintainer approves, edits, marks triaged, or reruns. Nothing is posted to GitHub until the maintainer approves an action; the daemon then stamps `ezoss/triaged`.
+`ezoss` is a single-user, maintainer-side orchestrator written in Go.
+A background daemon polls configured GitHub repos, runs a coding agent (`claude`, `codex`, `rovodev`, or `opencode`) against any issue or PR that does not yet carry the `ezoss/triaged` label, stores a structured recommendation in a local SQLite cache, and surfaces drafts in a Bubble Tea TUI inbox where the maintainer approves, queues fixes, edits, marks triaged, or reruns.
+Nothing is posted to GitHub until the maintainer approves an action or queues a fix job; fix jobs run only after the maintainer queues them.
 
 `README.md` is the user-facing surface. This file is the agent-facing implementation guide.
 
@@ -33,28 +35,42 @@ CI runs `fmt-check`, `lint`, `test`, and `build` on Ubuntu, macOS, and Windows; 
 
 There are two long-lived processes plus on-demand CLI invocations:
 
-- The **CLI** (`cmd/ezoss` -> `internal/cli`) is one cobra binary that fans out to subcommands (`doctor`, `init`, `list`, `status`, `triage`, `update`, `daemon {run,start,stop,restart,install,uninstall}`) and, with no args, opens the **inbox TUI**.
+- The **CLI** (`cmd/ezoss` -> `internal/cli`) is one cobra binary that fans out to subcommands (`doctor`, `fix`, `init`, `list`, `status`, `triage`, `update`, `daemon {run,start,stop,restart,install,uninstall}`) and, with no args, opens the **inbox TUI**.
 - The **daemon** is the same binary invoked as `ezoss daemon run`, started in the background by `daemon start`. PID lives at `~/.ezoss/daemon.pid`.
-- The CLI and TUI talk to a running daemon over a **JSON-RPC IPC channel** at `~/.ezoss/daemon.sock` (Unix domain socket / Windows named pipe). `ipc.Subscribe` streams `recommendation_*` and `daemon_status` events so the TUI updates live.
+- The CLI and TUI talk to a running daemon over a **JSON-RPC IPC channel** at `~/.ezoss/daemon.sock` (Unix domain socket / Windows named pipe).
+  `fix.start` queues fix jobs, and `ipc.Subscribe` streams `recommendation_*`, `fix_job_*`, and `daemon_status` events so the TUI updates live.
 
 All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` by default; overridable via the `AM_HOME` env var, useful in tests):
 - `ezoss.db` - SQLite (modernc.org/sqlite, pure Go, no CGO)
 - `daemon.pid`, `daemon.sock`
 - `logs/`
 - `investigations/` - managed per-repo checkouts the agent runs against
+- `fixes/` - isolated worktrees used by coding-agent fix jobs
 - `update-check.json` - cached self-update state
 - Optional `AGENTS.md` whose contents get appended to every triage prompt
 
 ### Triage pipeline (the core loop)
 
-`internal/daemon/poll.go` runs each cycle in two stages:
+`internal/daemon/poll.go` runs each cycle in three sequential stages:
 
-1. **Stage A (sync):** for each configured repo, call the GitHub client (`internal/ghclient`, which shells out to `gh`) to list items missing `ezoss/triaged` and items recently re-triaged. Reconcile into the `items` table. Phase reported as `"sync"`.
-2. **Stage B (agents):** for each item lacking a current recommendation, build a prompt via `internal/triage.PromptWithRerunInstructions`, hand it plus `triage.Schema()` to the resolved `agent.Agent`, parse the structured JSON output via `triage.Parse`, and write a `recommendations` row plus one row per option in `recommendation_options`. Phase reported as `"agents"`. A per-item timeout (default 30m, `Poller.PerItemTriageTimeout`) prevents one stuck subprocess from wedging the daemon.
+1. **Stage A (sync):** for each configured repo, call the GitHub client (`internal/ghclient`, which shells out to `gh`) to list items missing `ezoss/triaged` and items recently re-triaged.
+   Reconcile into the `items` table.
+   Phase reported as `"sync"`.
+2. **Stage B (fixes):** reclaim stale running fix jobs, detect PRs for jobs waiting on `no-mistakes`, then claim at most one queued fix job.
+   If fix work happened, the cycle stops before agent triage so fix runs do not contend with new triage runs.
+3. **Stage C (agents):** for each item lacking a current recommendation, build a prompt via `internal/triage.PromptWithRerunInstructions`, hand it plus `triage.Schema()` to the resolved `agent.Agent`, parse the structured JSON output via `triage.Parse`, and write a `recommendations` row plus one row per option in `recommendation_options`.
+   Phase reported as `"agents"`.
+   A per-item timeout (default 30m, `Poller.PerItemTriageTimeout`) prevents one stuck subprocess from wedging the daemon.
+
+Fix work comes from `fix.start` in the TUI path or from `ezoss fix <owner/repo#number>` in the CLI path.
+`cliFixRunner` prepares an isolated worktree under `~/.ezoss/fixes`, resolves repo/global agent config, runs the selected agent with the option's `fix_prompt`, commits produced changes, and creates a draft PR according to `fixes.pr_create`.
 
 Maintainer-provided TUI rerun instructions are threaded through `Poller.RerunInstructions`, appended to the agent prompt as private context, and stored on the refreshed `recommendations` row. Guided reruns use `InsertRecommendationReplacingActiveBefore` so an older in-flight triage result cannot supersede a newer active recommendation.
 
-The agent's contract is the `Recommendation` JSON schema in `internal/triage/triage.go` - a list of self-contained `RecommendationOption` entries, each with `state_change` (`none|close|merge|request_changes`), `rationale`, `waiting_on`, `draft_comment`, `confidence`, optional `followups`. The agent is asked to return 2-3 options when there are multiple reasonable next steps. **User-namespaced labels are deliberately not part of the agent contract** (the agent has no reliable view of which labels exist in the repo); only the `ezoss/*` namespace is managed automatically.
+The agent's contract is the `Recommendation` JSON schema in `internal/triage/triage.go` - a list of self-contained `RecommendationOption` entries, each with `state_change` (`none|close|merge|request_changes|fix_required`), `rationale`, `waiting_on`, `draft_comment`, `fix_prompt`, `confidence`, optional `followups`.
+Use `fix_required` plus `fix_prompt` when the item should be handed to a coding agent before it can be closed.
+The agent is asked to return 2-3 options when there are multiple reasonable next steps.
+**User-namespaced labels are deliberately not part of the agent contract** (the agent has no reliable view of which labels exist in the repo); only the `ezoss/*` namespace is managed automatically.
 
 For PRs without prior issue-level agreement on the approach, the prompt instructs the agent to set `state_change: none` and ask in `draft_comment` rather than going straight to `request_changes` or `merge`.
 
@@ -71,17 +87,26 @@ Schema lives in `internal/db/schema.go`. Migrations are **additive only**, appli
 - `repos`, `items` (issues + PRs interleaved, distinguished by `kind`)
 - `recommendations` (one per agent run on an item, including optional rerun instructions) with legacy single-row fields kept for backfill
 - `recommendation_options` (the agent's proposed alternatives, ordered by `position`)
+- `fix_jobs` (daemon-backed coding-agent runs for selected fix prompts, including branch, worktree path, PR URL, status, phase, and errors)
 - `approvals` (the maintainer's decision; `option_id` points at the chosen option)
 
 `gh_triaged` on `items` mirrors the GitHub label state. The label is the public source of truth: removing it on GitHub re-queues the item for triage.
 
 ### TUI
 
-`internal/tui/tui.go` is a Bubble Tea program (`bubbletea` + `bubbles` + `lipgloss`). It pins `lipgloss.SetColorProfile(termenv.ANSI)` for portable styling. The TUI subscribes to the daemon over IPC and reacts to events; it can also operate against the DB directly (used in tests and when no daemon is running). Layout is inbox list on top, details pane below, action bar.
+`internal/tui/tui.go` is a Bubble Tea program (`bubbletea` + `bubbles` + `lipgloss`).
+It pins `lipgloss.SetColorProfile(termenv.ANSI)` for portable styling.
+The TUI subscribes to the daemon over IPC and reacts to recommendation and fix-job events; it can also operate against the DB directly (used in tests and when no daemon is running).
+Layout is inbox list on top, details pane below, action bar.
+The `f` action queues a fix job for the active option when a fix prompt exists.
 
 ### Configuration
 
-Precedence (low -> high): built-in defaults -> `~/.ezoss/config.yaml` (`internal/config.LoadGlobal`) -> per-repo `.ezoss.yaml` at the repo root (currently `agent` only). Agent values: `auto`, `claude`, `codex`, `rovodev`, `opencode`. Merge methods: `merge`, `squash`, `rebase`. Durations parse Go `time.Duration` plus the suffix `d` for days (e.g. `30d`).
+Precedence (low -> high): built-in defaults -> `~/.ezoss/config.yaml` (`internal/config.LoadGlobal`) -> per-repo `.ezoss.yaml` at the repo root (currently `agent` only).
+Agent values: `auto`, `claude`, `codex`, `rovodev`, `opencode`.
+Merge methods: `merge`, `squash`, `rebase`.
+Fix PR creation modes under `fixes.pr_create`: `auto`, `no-mistakes`, `gh`, `disabled`.
+Durations parse Go `time.Duration` plus the suffix `d` for days (e.g. `30d`).
 
 ### Self-update
 
