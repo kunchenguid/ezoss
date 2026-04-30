@@ -774,6 +774,15 @@ func newDaemonRunCmd() *cobra.Command {
 				poller.AgentsInstructions = readAgentsInstructions(p.Root())
 			}
 
+			fixStart := func(ctx context.Context, params ipc.FixStartParams) (ipc.FixStartResult, error) {
+				return createFixJobFromIPC(ctx, database, cfg, params)
+			}
+			if useMock {
+				fixStart = func(context.Context, ipc.FixStartParams) (ipc.FixStartResult, error) {
+					return ipc.FixStartResult{}, fmt.Errorf("fix is unavailable in mock mode")
+				}
+			}
+
 			if err := runDaemonWithOptions(p.PIDPath(), nil, daemon.RunOptions{
 				Repos:           append([]string(nil), cfg.Repos...),
 				PollInterval:    cfg.PollInterval,
@@ -790,9 +799,7 @@ func newDaemonRunCmd() *cobra.Command {
 				PollOnce: func(ctx context.Context, repos []string) error {
 					return daemon.PollOnce(ctx, poller, repos)
 				},
-				FixStart: func(ctx context.Context, params ipc.FixStartParams) (ipc.FixStartResult, error) {
-					return createFixJobFromIPC(ctx, database, cfg, params)
-				},
+				FixStart:       fixStart,
 				FixJobSnapshot: database.ListFixJobs,
 				NewTicker: func(interval time.Duration) daemon.Ticker {
 					return daemon.NewTicker(interval)

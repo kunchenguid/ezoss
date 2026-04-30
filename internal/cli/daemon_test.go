@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/kunchenguid/ezoss/internal/daemon"
 	"github.com/kunchenguid/ezoss/internal/db"
 	"github.com/kunchenguid/ezoss/internal/ghclient"
+	"github.com/kunchenguid/ezoss/internal/ipc"
 	"github.com/kunchenguid/ezoss/internal/paths"
 	"github.com/kunchenguid/ezoss/internal/triage"
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
@@ -85,6 +87,81 @@ func TestDaemonRunCommandMockModeSeedsRecommendations(t *testing.T) {
 	}
 	if count == 0 {
 		t.Fatal("expected mock daemon run to persist at least one recommendation")
+	}
+}
+
+func TestDaemonRunCommandMockModeRejectsFixStart(t *testing.T) {
+	tempRoot := t.TempDir()
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
+		Repos:        []string{"acme/widgets"},
+		PollInterval: 2 * time.Minute,
+	}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	originalNewPaths := newPaths
+	originalRunDaemon := runDaemonWithOptions
+	originalInstallLogPipe := installTimestampedLogPipe
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		runDaemonWithOptions = originalRunDaemon
+		installTimestampedLogPipe = originalInstallLogPipe
+	})
+
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	installTimestampedLogPipe = func(_ io.Writer) (func(), error) {
+		return func() {}, nil
+	}
+
+	runDaemonWithOptions = func(_ string, _ <-chan os.Signal, opts daemon.RunOptions) error {
+		if err := opts.PollOnce(context.Background(), opts.Repos); err != nil {
+			return err
+		}
+		recommendations, err := opts.RecommendationSnapshot()
+		if err != nil {
+			return err
+		}
+		var params ipc.FixStartParams
+		for _, recommendation := range recommendations {
+			for _, option := range recommendation.Options {
+				if strings.TrimSpace(option.FixPrompt) != "" {
+					params = ipc.FixStartParams{RecommendationID: recommendation.ID, OptionID: option.ID}
+					break
+				}
+			}
+			if params.RecommendationID != "" {
+				break
+			}
+		}
+		if params.RecommendationID == "" {
+			t.Fatalf("mock recommendations = %#v, want at least one fixable option", recommendations)
+		}
+		if opts.FixStart == nil {
+			t.Fatalf("FixStart is nil, want explicit mock-mode rejection")
+		}
+		_, err = opts.FixStart(context.Background(), params)
+		if err == nil || !strings.Contains(err.Error(), "fix is unavailable in mock mode") {
+			t.Fatalf("FixStart() error = %v, want mock-mode rejection", err)
+		}
+		jobs, err := opts.FixJobSnapshot()
+		if err != nil {
+			return err
+		}
+		if len(jobs) != 0 {
+			t.Fatalf("fix jobs = %#v, want none", jobs)
+		}
+		return nil
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"daemon", "run", "--mock"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
 	}
 }
 

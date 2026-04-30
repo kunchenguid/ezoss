@@ -79,7 +79,6 @@ func detectWaitingFixPRs(ctx context.Context, poller Poller) (bool, error) {
 		url, err := poller.Fix.DetectPR(detectCtx, job)
 		cancel()
 		if err != nil {
-			_ = poller.DB.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusFailed, Phase: db.FixJobPhaseFailed, Error: err.Error()})
 			return true, fmt.Errorf("detect fix PR %s: %w", job.ID, err)
 		}
 		if strings.TrimSpace(url) == "" {

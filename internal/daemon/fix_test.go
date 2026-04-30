@@ -101,6 +101,32 @@ func TestPollOnceDetectsWaitingFixPR(t *testing.T) {
 	}
 }
 
+func TestPollOnceKeepsWaitingFixJobRunningWhenPRDetectionFails(t *testing.T) {
+	database := openDaemonTestDB(t)
+	job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "no-mistakes"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusRunning, Phase: db.FixJobPhaseWaitingForPR, Branch: "ezoss/fix-42"}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+	runner := &stubFixRunner{err: errors.New("gh temporarily unavailable")}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: emptyTriageLister{}, Fix: runner}, []string{"acme/widgets"}); err == nil {
+		t.Fatalf("PollOnce() error = nil, want detection error")
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != db.FixJobStatusRunning || got.Phase != db.FixJobPhaseWaitingForPR || got.Error != "" {
+		t.Fatalf("job after detection error = %#v, want still running/waiting_for_pr without stored error", got)
+	}
+}
+
 func TestPollOnceChecksLaterWaitingFixJobsWhenEarlierPRIsMissing(t *testing.T) {
 	database := openDaemonTestDB(t)
 	first, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#41", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 41, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix first.", PRCreate: "no-mistakes"})
