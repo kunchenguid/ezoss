@@ -534,7 +534,7 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 }
 
 func promptWithFixWorktree(prompt string, checkout string) string {
-	return strings.TrimSpace(prompt) + "\n\nRepository checkout for fixing:\n" + checkout + "\n\nThis checkout is an isolated ezoss fix worktree. Implement the smallest correct fix and add or update regression tests when appropriate. Do not open the pull request yourself; ezoss will create it after the fix run."
+	return strings.TrimSpace(prompt) + "\n\nRepository checkout for fixing:\n" + checkout + "\n\nThis checkout is an isolated ezoss fix worktree. Implement the smallest correct fix and add or update regression tests when appropriate. Do not open the pull request yourself; ezoss will handle PR creation according to configuration after the fix run."
 }
 
 func loadFixRunConfig(globalCfg *config.GlobalConfig, worktreePath string) (*config.Config, error) {

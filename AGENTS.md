@@ -38,7 +38,7 @@ There are two long-lived processes plus on-demand CLI invocations:
 - The **CLI** (`cmd/ezoss` -> `internal/cli`) is one cobra binary that fans out to subcommands (`doctor`, `fix`, `init`, `list`, `status`, `triage`, `update`, `daemon {run,start,stop,restart,install,uninstall}`) and, with no args, opens the **inbox TUI**.
 - The **daemon** is the same binary invoked as `ezoss daemon run`, started in the background by `daemon start`. PID lives at `~/.ezoss/daemon.pid`.
 - The CLI and TUI talk to a running daemon over a **JSON-RPC IPC channel** at `~/.ezoss/daemon.sock` (Unix domain socket / Windows named pipe).
-  `fix.start` queues fix jobs, and `ipc.Subscribe` streams `recommendation_*`, `fix_job_*`, and `daemon_status` events so the TUI updates live.
+  `fix.start` queues fix jobs, `sync.status` reports daemon progress, and `ipc.Subscribe` streams `recommendation_*` and `fix_job_*` events so the TUI updates live.
 
 All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` by default; overridable via the `AM_HOME` env var, useful in tests):
 - `ezoss.db` - SQLite (modernc.org/sqlite, pure Go, no CGO)
@@ -78,7 +78,8 @@ For PRs without prior issue-level agreement on the approach, the prompt instruct
 
 `internal/agent` defines a single `Agent` interface (`Name() / Run(ctx, RunOpts) / Close()`) with implementations for `claude`, `codex`, `rovodev`, `opencode`. `agent.Resolve` walks `autoProbeOrder` (claude -> codex -> opencode -> rovodev) when the user picks `auto`. `RunOpts.JSONSchema` requests structured output; `OnChunk` streams partial text. `TokenUsage.TotalInputTokens()` adds cached + cache-creation to plain input tokens (matches what users see in `claude /usage`).
 
-Tests for each agent should not require the real binary; the package ships a `mock` subpackage and the daemon supports a `--mock` flag end-to-end (canned items + canned recommendations) so the full pipeline can be exercised without `gh`, agent binaries, or network.
+Tests for each agent should not require the real binary; the package ships a `mock` subpackage and the daemon supports a `--mock` flag for canned items and recommendations so the triage pipeline can be exercised without `gh`, agent binaries, or network.
+Mock daemon mode does not run coding-agent fix jobs.
 
 ### Data model
 
