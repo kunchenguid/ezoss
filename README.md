@@ -61,7 +61,7 @@ $ ezoss list
 kunchenguid/ezoss#42	issue	comment	low	panic in sync loop
 
 $ ezoss
-# opens the inbox TUI for approve, fix PR, copy prompt, edit, mark triaged, and rerun
+# opens the mock inbox TUI for approve, copy prompt, edit, mark triaged, and rerun
 ```
 
 ## Install

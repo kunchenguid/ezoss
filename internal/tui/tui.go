@@ -32,7 +32,7 @@ func init() {
 // EntryOption is one self-contained resolution the agent proposed. An
 // Entry has at least one option; the agent is encouraged to surface
 // multiple options whenever there are multiple reasonable next steps.
-// The user cycles between options and approves/edits/marks one of them triaged.
+// The user cycles between options and approves, edits, fixes, or marks one of them triaged.
 type EntryOption struct {
 	ID                     string
 	StateChange            sharedtypes.StateChange
@@ -210,7 +210,7 @@ type Model struct {
 	quitting   bool
 	rerunInput *rerunInputState
 
-	// Async-action state. Approve/mark-triaged/rerun run in a goroutine via tea.Cmd
+	// Async-action state. Approve/mark-triaged/rerun/fix run in a goroutine via tea.Cmd
 	// so the event loop stays responsive; until the goroutine reports back
 	// via actionFinishedMsg, the entry is "pending" and conflicting key
 	// presses on the same entry are blocked with a warning in the log.
@@ -301,7 +301,7 @@ type editFinishedMsg struct {
 	execErr          error
 }
 
-// actionFinishedMsg is delivered when an async approve/mark/rerun
+// actionFinishedMsg is delivered when an async approve/mark/rerun/fix
 // completes. The entry is matched by recommendationID so reloads or
 // reorderings during the action don't clobber the wrong row.
 type actionFinishedMsg struct {
@@ -494,7 +494,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // currentEntries returns the cursor's entry as a single-element slice (and
-// its index), used to drive approve/mark/rerun actions on the focused item.
+// its index), used to drive actions on the focused item.
 func (m *Model) currentEntries() ([]Entry, []int) {
 	if len(m.entries) == 0 {
 		return nil, nil
@@ -1321,7 +1321,7 @@ func (m Model) renderHelp() string {
 		"1-9                jump directly to that recommendation option",
 		"a                  approve active option (post comment, apply state change, sync labels)",
 		"c                  copy active option's coding-agent prompt",
-		"f                  run coding agent and open a fix PR for active option",
+		"f                  queue a coding-agent fix job for active option",
 		"e                  edit active option's draft, action, or labels",
 		"m                  mark triaged without approving",
 		"r                  rerun the agent on the current item with instructions",

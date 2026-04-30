@@ -313,7 +313,7 @@ func newFixCmd() *cobra.Command {
 	var prepareOnly bool
 	cmd := &cobra.Command{
 		Use:   "fix <owner/repo#number>",
-		Short: "Run a coding agent in an isolated worktree and open a fix PR",
+		Short: "Run a coding agent in an isolated worktree for a fix prompt",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoID, number, err := parseFixTarget(args[0])

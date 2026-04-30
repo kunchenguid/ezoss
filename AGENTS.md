@@ -6,7 +6,7 @@ This file provides shared guidance for coding agents working in this repository.
 
 `ezoss` is a single-user, maintainer-side orchestrator written in Go.
 A background daemon polls configured GitHub repos, runs a coding agent (`claude`, `codex`, `rovodev`, or `opencode`) against any issue or PR that does not yet carry the `ezoss/triaged` label, stores a structured recommendation in a local SQLite cache, and surfaces drafts in a Bubble Tea TUI inbox where the maintainer approves, queues fixes, edits, marks triaged, or reruns.
-Nothing is posted to GitHub until the maintainer approves an action or queues a fix job; fix jobs run only after the maintainer queues them.
+Nothing is posted to GitHub until the maintainer approves an action, queues a fix job, or runs `ezoss fix`; daemon fix jobs run only after the maintainer queues them.
 
 `README.md` is the user-facing surface. This file is the agent-facing implementation guide.
 
