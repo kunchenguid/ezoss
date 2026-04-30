@@ -476,9 +476,9 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 	if strings.TrimSpace(entry.FixPrompt) == "" {
 		return nil, fmt.Errorf("%s#%d has no fix prompt", entry.RepoID, entry.Number)
 	}
-	cfg := prepared.Config
-	if cfg == nil {
-		cfg = &config.GlobalConfig{Agent: config.AgentAuto, Fixes: config.FixesConfig{PRCreate: config.PRCreateAuto}}
+	cfg, err := loadFixRunConfig(prepared.Config, prepared.Worktree.WorktreePath)
+	if err != nil {
+		return nil, err
 	}
 	agentName := cfg.Agent
 	if agentName == "" {
@@ -505,20 +505,17 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 		return nil, errors.New("agent returned no result")
 	}
 
-	status, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "status", "--porcelain")
+	committed, err := commitFixWorktreeChanges(ctx, worktree.WorktreePath, fmt.Sprintf("fix: %s#%d", entry.RepoID, entry.Number))
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(string(status)) != "" {
-		if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "add", "-A"); err != nil {
-			return nil, err
-		}
-		if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "commit", "-m", fmt.Sprintf("fix: %s#%d", entry.RepoID, entry.Number)); err != nil {
-			return nil, err
-		}
+	if committed {
 		fmt.Fprintln(out, "  committed: true")
 	} else {
 		fmt.Fprintln(out, "  committed: false")
+	}
+	if err := ensureFixBranchHasCommit(ctx, worktree.WorktreePath, worktree.BaseRef); err != nil {
+		return nil, err
 	}
 
 	created, _, err := createFixPRWithFallback(ctx, prepared.PRCreate, prcreator.CreateOptions{
@@ -538,6 +535,50 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 
 func promptWithFixWorktree(prompt string, checkout string) string {
 	return strings.TrimSpace(prompt) + "\n\nRepository checkout for fixing:\n" + checkout + "\n\nThis checkout is an isolated ezoss fix worktree. Implement the smallest correct fix and add or update regression tests when appropriate. Do not open the pull request yourself; ezoss will create it after the fix run."
+}
+
+func loadFixRunConfig(globalCfg *config.GlobalConfig, worktreePath string) (*config.Config, error) {
+	repoCfg, err := config.LoadRepo(worktreePath)
+	if err != nil {
+		return nil, fmt.Errorf("load repo config: %w", err)
+	}
+	return config.Merge(globalCfg, repoCfg), nil
+}
+
+func commitFixWorktreeChanges(ctx context.Context, worktreePath string, message string) (bool, error) {
+	status, err := runFixGitCommand(ctx, worktreePath, nil, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(string(status)) == "" {
+		return false, nil
+	}
+	if _, err := runFixGitCommand(ctx, worktreePath, nil, "add", "-A"); err != nil {
+		return false, err
+	}
+	if _, err := runFixGitCommand(ctx, worktreePath, nil, "commit", "-m", message); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func ensureFixBranchHasCommit(ctx context.Context, worktreePath string, baseRef string) error {
+	baseRef = strings.TrimSpace(baseRef)
+	if baseRef == "" || baseRef == "HEAD" {
+		baseRef = "main"
+	}
+	out, err := runFixGitCommand(ctx, worktreePath, nil, "rev-list", "--count", baseRef+"..HEAD")
+	if err != nil {
+		return fmt.Errorf("check fix commits: %w", err)
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return fmt.Errorf("check fix commits: parse rev-list count: %w", err)
+	}
+	if count <= 0 {
+		return errors.New("no fix changes produced; branch has no commits ahead of base")
+	}
+	return nil
 }
 
 func baseBranch(ref string) string {
@@ -580,9 +621,9 @@ func (r cliFixRunner) RunFix(ctx context.Context, job db.FixJob, progress func(d
 	if err != nil {
 		return nil, err
 	}
-	cfg := r.cfg
-	if cfg == nil {
-		cfg = &config.GlobalConfig{Agent: config.AgentAuto}
+	cfg, err := loadFixRunConfig(r.cfg, worktree.WorktreePath)
+	if err != nil {
+		return nil, err
 	}
 	agentName := cfg.Agent
 	if agentName == "" {
@@ -610,17 +651,11 @@ func (r cliFixRunner) RunFix(ctx context.Context, job db.FixJob, progress func(d
 	if progress != nil {
 		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhaseCommitting, Message: "committing changes"})
 	}
-	status, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "status", "--porcelain")
-	if err != nil {
+	if _, err := commitFixWorktreeChanges(ctx, worktree.WorktreePath, fmt.Sprintf("fix: %s#%d", job.RepoID, job.ItemNumber)); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(string(status)) != "" {
-		if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "add", "-A"); err != nil {
-			return nil, err
-		}
-		if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "commit", "-m", fmt.Sprintf("fix: %s#%d", job.RepoID, job.ItemNumber)); err != nil {
-			return nil, err
-		}
+	if err := ensureFixBranchHasCommit(ctx, worktree.WorktreePath, worktree.BaseRef); err != nil {
+		return nil, err
 	}
 	if progress != nil {
 		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhasePushing, Message: "pushing branch"})

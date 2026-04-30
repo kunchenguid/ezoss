@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/kunchenguid/ezoss/internal/agent"
 	"github.com/kunchenguid/ezoss/internal/config"
+	"github.com/kunchenguid/ezoss/internal/db"
 	fixflow "github.com/kunchenguid/ezoss/internal/fix"
 	"github.com/kunchenguid/ezoss/internal/paths"
 	prcreator "github.com/kunchenguid/ezoss/internal/pr"
@@ -198,6 +200,9 @@ func TestRunFixEntryWithNoMistakesCommitsBeforePushingToGate(t *testing.T) {
 		if reflect.DeepEqual(args, []string{"status", "--porcelain"}) {
 			return []byte(" M internal/parser.go\n"), nil
 		}
+		if reflect.DeepEqual(args, []string{"rev-list", "--count", "origin/main..HEAD"}) {
+			return []byte("1\n"), nil
+		}
 		return nil, nil
 	}
 	var prOpts prcreator.CreateOptions
@@ -234,6 +239,7 @@ func TestRunFixEntryWithNoMistakesCommitsBeforePushingToGate(t *testing.T) {
 		{filepath.Join(root, "fixes", "acme__widgets", "42-run"), "status", "--porcelain"},
 		{filepath.Join(root, "fixes", "acme__widgets", "42-run"), "add", "-A"},
 		{filepath.Join(root, "fixes", "acme__widgets", "42-run"), "commit", "-m", "fix: acme/widgets#42"},
+		{filepath.Join(root, "fixes", "acme__widgets", "42-run"), "rev-list", "--count", "origin/main..HEAD"},
 	}
 	if !reflect.DeepEqual(gitCalls, wantGit) {
 		t.Fatalf("git calls = %#v, want %#v", gitCalls, wantGit)
@@ -287,6 +293,9 @@ func TestRunFixEntryWithGHCommitsBeforeCreatingPR(t *testing.T) {
 		if reflect.DeepEqual(args, []string{"status", "--porcelain"}) {
 			return []byte(" M internal/parser.go\n"), nil
 		}
+		if reflect.DeepEqual(args, []string{"rev-list", "--count", "origin/main..HEAD"}) {
+			return []byte("1\n"), nil
+		}
 		return nil, nil
 	}
 	createFixPR = func(context.Context, prcreator.Mode, prcreator.CreateOptions, prcreator.CommandRunner) (prcreator.Created, error) {
@@ -301,9 +310,181 @@ func TestRunFixEntryWithGHCommitsBeforeCreatingPR(t *testing.T) {
 		{filepath.Join(root, "fixes", "acme__widgets", "42-run"), "status", "--porcelain"},
 		{filepath.Join(root, "fixes", "acme__widgets", "42-run"), "add", "-A"},
 		{filepath.Join(root, "fixes", "acme__widgets", "42-run"), "commit", "-m", "fix: acme/widgets#42"},
+		{filepath.Join(root, "fixes", "acme__widgets", "42-run"), "rev-list", "--count", "origin/main..HEAD"},
 	}
 	if !reflect.DeepEqual(gitCalls, wantGit) {
 		t.Fatalf("git calls = %#v, want %#v", gitCalls, wantGit)
+	}
+}
+
+func TestRunFixEntryFailsWhenAgentProducesNoCommits(t *testing.T) {
+	root := t.TempDir()
+	originalNewPaths := newPaths
+	originalLoadGlobalConfig := loadGlobalConfig
+	originalPrepareFixWorktree := prepareFixWorktree
+	originalResolvePRCreator := resolvePRCreator
+	originalNewAgent := newAgent
+	originalLookPath := lookPath
+	originalRunFixGitCommand := runFixGitCommand
+	originalCreateFixPR := createFixPR
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		loadGlobalConfig = originalLoadGlobalConfig
+		prepareFixWorktree = originalPrepareFixWorktree
+		resolvePRCreator = originalResolvePRCreator
+		newAgent = originalNewAgent
+		lookPath = originalLookPath
+		runFixGitCommand = originalRunFixGitCommand
+		createFixPR = originalCreateFixPR
+	})
+
+	newPaths = func() (*paths.Paths, error) { return paths.WithRoot(root), nil }
+	loadGlobalConfig = func(string) (*config.GlobalConfig, error) {
+		return &config.GlobalConfig{Agent: config.AgentCodex, Fixes: config.FixesConfig{PRCreate: config.PRCreateGH}}, nil
+	}
+	prepareFixWorktree = func(context.Context, fixflow.WorktreeOptions) (fixflow.Worktree, error) {
+		return fixflow.Worktree{WorktreePath: filepath.Join(root, "fixes", "acme__widgets", "42-run"), Branch: "ezoss/fix-42", BaseRef: "origin/main"}, nil
+	}
+	resolvePRCreator = func(mode prcreator.Mode, _ func(string) (string, error)) (prcreator.Resolution, error) {
+		return prcreator.Resolution{Mode: mode, Binary: "/bin/gh"}, nil
+	}
+	lookPath = func(string) (string, error) { return "/bin/codex", nil }
+	newAgent = func(sharedtypes.AgentName, string) (triageAgent, error) {
+		return stubTriageAgent{result: &agent.Result{Text: "fixed"}}, nil
+	}
+	runFixGitCommand = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+		if reflect.DeepEqual(args, []string{"status", "--porcelain"}) {
+			return nil, nil
+		}
+		if reflect.DeepEqual(args, []string{"rev-list", "--count", "origin/main..HEAD"}) {
+			return []byte("0\n"), nil
+		}
+		return nil, nil
+	}
+	createFixPR = func(context.Context, prcreator.Mode, prcreator.CreateOptions, prcreator.CommandRunner) (prcreator.Created, error) {
+		t.Fatal("createFixPR called despite no commits ahead of base")
+		return prcreator.Created{}, nil
+	}
+
+	_, err := runFixEntry(context.Background(), tui.Entry{RepoID: "acme/widgets", Number: 42, Title: "panic in parser", FixPrompt: "Fix it."}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "no fix changes produced") {
+		t.Fatalf("runFixEntry() error = %v, want no fix changes produced", err)
+	}
+}
+
+func TestRunFixEntryUsesRepoLocalAgentConfig(t *testing.T) {
+	root := t.TempDir()
+	worktreePath := filepath.Join(root, "fixes", "acme__widgets", "42-run")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreePath, ".ezoss.yaml"), []byte("agent: opencode\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	originalNewPaths := newPaths
+	originalLoadGlobalConfig := loadGlobalConfig
+	originalPrepareFixWorktree := prepareFixWorktree
+	originalResolvePRCreator := resolvePRCreator
+	originalNewAgent := newAgent
+	originalLookPath := lookPath
+	originalRunFixGitCommand := runFixGitCommand
+	originalCreateFixPR := createFixPR
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		loadGlobalConfig = originalLoadGlobalConfig
+		prepareFixWorktree = originalPrepareFixWorktree
+		resolvePRCreator = originalResolvePRCreator
+		newAgent = originalNewAgent
+		lookPath = originalLookPath
+		runFixGitCommand = originalRunFixGitCommand
+		createFixPR = originalCreateFixPR
+	})
+
+	newPaths = func() (*paths.Paths, error) { return paths.WithRoot(root), nil }
+	loadGlobalConfig = func(string) (*config.GlobalConfig, error) {
+		return &config.GlobalConfig{Agent: config.AgentCodex, Fixes: config.FixesConfig{PRCreate: config.PRCreateGH}}, nil
+	}
+	prepareFixWorktree = func(context.Context, fixflow.WorktreeOptions) (fixflow.Worktree, error) {
+		return fixflow.Worktree{WorktreePath: worktreePath, Branch: "ezoss/fix-42", BaseRef: "origin/main"}, nil
+	}
+	resolvePRCreator = func(mode prcreator.Mode, _ func(string) (string, error)) (prcreator.Resolution, error) {
+		return prcreator.Resolution{Mode: mode, Binary: "/bin/gh"}, nil
+	}
+	lookPath = func(name string) (string, error) {
+		if name != "opencode" {
+			t.Fatalf("lookPath name = %q, want opencode", name)
+		}
+		return "/bin/opencode", nil
+	}
+	newAgent = func(name sharedtypes.AgentName, bin string) (triageAgent, error) {
+		if name != sharedtypes.AgentOpenCode || bin != "/bin/opencode" {
+			t.Fatalf("newAgent(%q, %q), want opencode", name, bin)
+		}
+		return stubTriageAgent{result: &agent.Result{Text: "fixed"}}, nil
+	}
+	runFixGitCommand = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+		if reflect.DeepEqual(args, []string{"status", "--porcelain"}) {
+			return []byte(" M internal/parser.go\n"), nil
+		}
+		if reflect.DeepEqual(args, []string{"rev-list", "--count", "origin/main..HEAD"}) {
+			return []byte("1\n"), nil
+		}
+		return nil, nil
+	}
+	createFixPR = func(context.Context, prcreator.Mode, prcreator.CreateOptions, prcreator.CommandRunner) (prcreator.Created, error) {
+		return prcreator.Created{URL: "https://github.com/acme/widgets/pull/99"}, nil
+	}
+
+	if _, err := runFixEntry(context.Background(), tui.Entry{RepoID: "acme/widgets", Number: 42, Title: "panic in parser", FixPrompt: "Fix it."}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("runFixEntry() error = %v", err)
+	}
+}
+
+func TestCLIFixRunnerFailsWhenAgentProducesNoCommits(t *testing.T) {
+	root := t.TempDir()
+	originalPrepareFixWorktree := prepareFixWorktree
+	originalResolvePRCreator := resolvePRCreator
+	originalNewAgent := newAgent
+	originalLookPath := lookPath
+	originalRunFixGitCommand := runFixGitCommand
+	originalCreateFixPR := createFixPR
+	t.Cleanup(func() {
+		prepareFixWorktree = originalPrepareFixWorktree
+		resolvePRCreator = originalResolvePRCreator
+		newAgent = originalNewAgent
+		lookPath = originalLookPath
+		runFixGitCommand = originalRunFixGitCommand
+		createFixPR = originalCreateFixPR
+	})
+
+	prepareFixWorktree = func(context.Context, fixflow.WorktreeOptions) (fixflow.Worktree, error) {
+		return fixflow.Worktree{WorktreePath: filepath.Join(root, "fixes", "acme__widgets", "42-run"), Branch: "ezoss/fix-42", BaseRef: "origin/main"}, nil
+	}
+	resolvePRCreator = func(mode prcreator.Mode, _ func(string) (string, error)) (prcreator.Resolution, error) {
+		return prcreator.Resolution{Mode: mode, Binary: "/bin/gh"}, nil
+	}
+	lookPath = func(string) (string, error) { return "/bin/codex", nil }
+	newAgent = func(sharedtypes.AgentName, string) (triageAgent, error) {
+		return stubTriageAgent{result: &agent.Result{Text: "fixed"}}, nil
+	}
+	runFixGitCommand = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+		if reflect.DeepEqual(args, []string{"status", "--porcelain"}) {
+			return nil, nil
+		}
+		if reflect.DeepEqual(args, []string{"rev-list", "--count", "origin/main..HEAD"}) {
+			return []byte("0\n"), nil
+		}
+		return nil, nil
+	}
+	createFixPR = func(context.Context, prcreator.Mode, prcreator.CreateOptions, prcreator.CommandRunner) (prcreator.Created, error) {
+		t.Fatal("createFixPR called despite no commits ahead of base")
+		return prcreator.Created{}, nil
+	}
+
+	_, err := (cliFixRunner{root: root, cfg: &config.GlobalConfig{Agent: config.AgentCodex}}).RunFix(context.Background(), fixJobForTest(), nil)
+	if err == nil || !strings.Contains(err.Error(), "no fix changes produced") {
+		t.Fatalf("RunFix() error = %v, want no fix changes produced", err)
 	}
 }
 
@@ -356,6 +537,9 @@ func TestRunFixEntryAutoFallsBackToGHWhenNoMistakesCreateFails(t *testing.T) {
 		if reflect.DeepEqual(args, []string{"status", "--porcelain"}) {
 			return []byte(" M internal/parser.go\n"), nil
 		}
+		if reflect.DeepEqual(args, []string{"rev-list", "--count", "main..HEAD"}) {
+			return []byte("1\n"), nil
+		}
 		return nil, nil
 	}
 	var createModes []prcreator.Mode
@@ -380,6 +564,10 @@ func TestRunFixEntryAutoFallsBackToGHWhenNoMistakesCreateFails(t *testing.T) {
 	if !reflect.DeepEqual(createModes, []prcreator.Mode{prcreator.ModeNoMistakes, prcreator.ModeGH}) {
 		t.Fatalf("create modes = %#v, want no-mistakes then gh fallback", createModes)
 	}
+}
+
+func fixJobForTest() db.FixJob {
+	return db.FixJob{ID: "fix-1", ItemID: "item-1", RecommendationID: "rec-1", OptionID: "opt-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, Title: "panic in parser", FixPrompt: "Fix it.", PRCreate: string(prcreator.ModeGH)}
 }
 
 func TestCreateFixPRWithFallbackDoesNotFallbackAfterNoMistakesPush(t *testing.T) {
