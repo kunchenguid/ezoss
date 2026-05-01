@@ -580,13 +580,15 @@ func (m *Model) approveCurrent() tea.Cmd {
 		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("approved %s #%d", entry.RepoID, entry.Number)})
 		return nil
 	}
-	return m.startAction(entry, "approve", func() tea.Msg {
+	cmd := m.startAction(entry, "approve", func() tea.Msg {
 		return actionFinishedMsg{
 			verb:             "approve",
 			recommendationID: entry.RecommendationID,
 			err:              m.approve([]Entry{entry}),
 		}
 	})
+	m.advanceCursorPastPending()
+	return cmd
 }
 
 func (m *Model) editCurrent() tea.Cmd {
@@ -2234,19 +2236,34 @@ func (m *Model) dismissCurrent() tea.Cmd {
 		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("marked triaged %s #%d", entry.RepoID, entry.Number)})
 		return nil
 	}
-	return m.startAction(entry, "mark", func() tea.Msg {
+	cmd := m.startAction(entry, "mark", func() tea.Msg {
 		return actionFinishedMsg{
 			verb:             "mark",
 			recommendationID: entry.RecommendationID,
 			err:              m.dismiss([]Entry{entry}),
 		}
 	})
+	m.advanceCursorPastPending()
+	return cmd
+}
+
+// advanceCursorPastPending moves the selection to the next entry when an
+// action expected to remove the current entry has just been started. The
+// pending entry stays visible (with its spinner) until the async action
+// finishes, but the cursor moves on so the maintainer can immediately
+// see what's next.
+func (m *Model) advanceCursorPastPending() {
+	if m.cursor < len(m.entries)-1 {
+		m.cursor++
+		m.cardScroll = 0
+	}
 }
 
 func (m *Model) removeEntries(indices []int) {
 	if len(indices) == 0 {
 		return
 	}
+	origCursor := m.cursor
 	currentID := m.currentRecommendationID()
 	remove := make(map[int]struct{}, len(indices))
 	for _, index := range indices {
@@ -2260,10 +2277,39 @@ func (m *Model) removeEntries(indices []int) {
 		kept = append(kept, entry)
 	}
 	m.entries = kept
-	if m.cursor >= len(m.entries) && len(m.entries) > 0 {
+
+	// Try to keep the cursor on the same recommendation it pointed at
+	// before the removal - critical when an earlier entry (one before
+	// the cursor) is being removed by an async action that resolved
+	// after the user already advanced.
+	newIdx := -1
+	if currentID != "" {
+		for i, e := range m.entries {
+			if e.RecommendationID == currentID {
+				newIdx = i
+				break
+			}
+		}
+	}
+	if newIdx >= 0 {
+		m.cursor = newIdx
+	} else {
+		// The cursor's own entry was removed. Keep cursor on whatever
+		// now occupies its position - which is the entry that came
+		// immediately after the removed one - by subtracting the
+		// number of removed entries that sat before it.
+		removedBefore := 0
+		for _, idx := range indices {
+			if idx < origCursor {
+				removedBefore++
+			}
+		}
+		m.cursor = origCursor - removedBefore
+	}
+	if m.cursor >= len(m.entries) {
 		m.cursor = len(m.entries) - 1
 	}
-	if len(m.entries) == 0 {
+	if m.cursor < 0 || len(m.entries) == 0 {
 		m.cursor = 0
 	}
 	if currentID != m.currentRecommendationID() {

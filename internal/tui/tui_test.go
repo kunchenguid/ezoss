@@ -466,6 +466,94 @@ func TestModelNavigationIgnoresArrowNPKeysForInboxCursor(t *testing.T) {
 	}
 }
 
+// TestApproveAdvancesCursorToNextEntry pins the behavior where pressing
+// 'a' on a recommendation that's about to be approved (and thus removed
+// from the inbox once the async action lands) immediately advances the
+// selection to the next item, so the maintainer can see what's next
+// while the original entry is still pending.
+func TestApproveAdvancesCursorToNextEntry(t *testing.T) {
+	m := NewModelWithActions([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two"},
+	}, ModelActions{
+		Approve: func([]Entry) error { return nil },
+	})
+	m.width = 100
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	next := updated.(Model)
+	if next.cursor != 1 {
+		t.Fatalf("cursor after approve should advance to next entry; got %d, want 1", next.cursor)
+	}
+	if len(next.entries) != 2 {
+		t.Fatalf("entry should remain in list until actionFinishedMsg, got %d entries", len(next.entries))
+	}
+}
+
+// TestMarkTriagedAdvancesCursorToNextEntry mirrors the approve advance
+// behavior for 'm'.
+func TestMarkTriagedAdvancesCursorToNextEntry(t *testing.T) {
+	m := NewModelWithDismiss([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two"},
+	}, func([]Entry) error { return nil })
+	m.width = 100
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	next := updated.(Model)
+	if next.cursor != 1 {
+		t.Fatalf("cursor after mark triaged should advance; got %d, want 1", next.cursor)
+	}
+}
+
+// TestApproveOnLastEntryKeepsCursor verifies that the advance is a no-op
+// when there is no next entry to move to.
+func TestApproveOnLastEntryKeepsCursor(t *testing.T) {
+	m := NewModelWithActions([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two"},
+	}, ModelActions{
+		Approve: func([]Entry) error { return nil },
+	})
+	m.width = 100
+	m.cursor = 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	next := updated.(Model)
+	if next.cursor != 1 {
+		t.Fatalf("cursor on last entry should stay; got %d, want 1", next.cursor)
+	}
+}
+
+// TestSelectionStableWhenEarlierActionResolves verifies that once the
+// cursor has been advanced past a pending action, the cursor stays on
+// the new selection when the earlier async action finally resolves and
+// removes its entry - the cursor does not visually jump just because an
+// item before it disappeared.
+func TestSelectionStableWhenEarlierActionResolves(t *testing.T) {
+	m := NewModelWithActions([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two"},
+		{RecommendationID: "rec-3", RepoID: "acme/widgets", Number: 3, Kind: sharedtypes.ItemKindIssue, Title: "three"},
+	}, ModelActions{
+		Approve: func([]Entry) error { return nil },
+	})
+	m.width = 100
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	updated, _ = updated.(Model).Update(actionFinishedMsg{
+		verb:             "approve",
+		recommendationID: "rec-1",
+	})
+	next := updated.(Model)
+	if next.cursor < 0 || next.cursor >= len(next.entries) {
+		t.Fatalf("cursor out of range: %d (entries=%d)", next.cursor, len(next.entries))
+	}
+	if got := next.entries[next.cursor].RecommendationID; got != "rec-2" {
+		t.Fatalf("cursor should remain on rec-2 after rec-1 was removed; got %q", got)
+	}
+}
+
 func TestModelMarkTriagedDismissesCurrentEntry(t *testing.T) {
 	var dismissed []string
 	m := NewModelWithDismiss([]Entry{
