@@ -1471,6 +1471,45 @@ func entryNumberLabelPaddedWithPending(entry Entry, digitWidth int, pending bool
 	return glyph + fmt.Sprintf(" #%-*d", digitWidth, entry.Number)
 }
 
+// plainEntryNumberLabelPadded is the no-ANSI counterpart used inside spans
+// that need a single uninterrupted background fill.
+func plainEntryNumberLabelPadded(entry Entry, digitWidth int, pending bool) string {
+	glyph := "○"
+	if entry.Kind == sharedtypes.ItemKindPR {
+		glyph = "⇡"
+	}
+	if pending {
+		glyph = "…"
+	}
+	return glyph + fmt.Sprintf(" #%-*d", digitWidth, entry.Number)
+}
+
+// plainText is text the caller has affirmed contains no ANSI escape
+// sequences. Construction is unexported so the type itself documents the
+// contract: pass me only raw strings, not the output of lipgloss styling.
+// The point is to make it impossible to accidentally route a pre-styled
+// string into renderHighlightRow, where any inner reset (\x1b[0m) would
+// cut the background fill mid-row.
+type plainText string
+
+// renderHighlightRow paints a full-bleed inbox row: bold text on a
+// saturated blue background that runs unbroken from one box border to
+// the other. Blue is dark enough that the terminal's default foreground
+// reads clearly without us having to pin it (which would clash with
+// users' themes). fullBleedWidth must be the row's total width
+// including the 1-cell inner pads renderBoxLinesWithFooter would
+// otherwise add (i.e. contentWidth + 2). The text is truncated to fit,
+// then padded with one leading and one trailing space so the highlight
+// visibly clears the borders.
+func renderHighlightRow(plain plainText, fullBleedWidth int) string {
+	body := " " + truncateToWidth(string(plain), fullBleedWidth-2) + " "
+	return lipgloss.NewStyle().
+		Bold(true).
+		Background(lipgloss.Color(ansiBlue)).
+		Width(fullBleedWidth).
+		Render(body)
+}
+
 func fixJobInProgress(entry Entry) bool {
 	if strings.TrimSpace(entry.FixJobID) == "" {
 		return false
@@ -1879,9 +1918,15 @@ func (m Model) renderQueueRail(width, boxHeight int) string {
 		contentWidth = 1
 	}
 
+	// fullBleedWidth spans the box's borders inward, including the inner
+	// pad spaces renderBox would otherwise add - used so the cursor's
+	// background highlight reaches both borders.
+	fullBleedWidth := contentWidth + 2
+
 	type railLine struct {
-		text   string
-		anchor bool // group headers are anchors that ideally stay visible
+		text      string
+		anchor    bool // group headers are anchors that ideally stay visible
+		fullBleed bool // line spans the inner pad spaces (cursor highlight)
 	}
 
 	digitWidth := maxNumberDigits(m.entries)
@@ -1898,17 +1943,20 @@ func (m Model) renderQueueRail(width, boxHeight int) string {
 		}
 		_, isPending := m.pendingActions[entry.RecommendationID]
 		isPending = isPending || fixJobInProgress(entry)
-		label := entryNumberLabelPaddedWithPending(entry, digitWidth, isPending)
-		marker := "  "
-		text := fmt.Sprintf("%s%s  %s", marker, label, entry.Title)
+		fullBleed := false
+		var text string
 		if i == m.cursor {
-			text = fmt.Sprintf("▸ %s  %s", label, entry.Title)
-			text = lipgloss.NewStyle().Bold(true).Render(truncateToWidth(text, contentWidth))
+			plainLabel := plainEntryNumberLabelPadded(entry, digitWidth, isPending)
+			plain := fmt.Sprintf("%s  %s", plainLabel, entry.Title)
+			text = renderHighlightRow(plainText(plain), fullBleedWidth)
+			fullBleed = true
 			cursorIdx = len(allLines)
 		} else {
+			label := entryNumberLabelPaddedWithPending(entry, digitWidth, isPending)
+			text = fmt.Sprintf("%s  %s", label, entry.Title)
 			text = truncateToWidth(text, contentWidth)
 		}
-		allLines = append(allLines, railLine{text: text})
+		allLines = append(allLines, railLine{text: text, fullBleed: fullBleed})
 	}
 
 	visible := allLines
@@ -1937,16 +1985,12 @@ func (m Model) renderQueueRail(width, boxHeight int) string {
 		scrollHint = formatScrollHint(start, len(allLines)-end)
 	}
 
-	bodyLines := make([]string, 0, len(visible))
+	bodyLines := make([]boxBodyLine, 0, len(visible))
 	for _, line := range visible {
-		bodyLines = append(bodyLines, line.text)
+		bodyLines = append(bodyLines, boxBodyLine{text: line.text, fullBleed: line.fullBleed})
 	}
-	body := strings.Join(bodyLines, "\n")
 	title := fmt.Sprintf("Inbox · %d of %d", m.cursor+1, len(m.entries))
-	if scrollHint != "" {
-		return renderBoxWithFooter(width, title, body, scrollHint)
-	}
-	return renderBox(width, title, body)
+	return renderBoxLinesWithFooter(width, title, bodyLines, scrollHint)
 }
 
 // renderDetailsBox renders the details pane within boxHeight total lines
@@ -2117,6 +2161,53 @@ func splitFixPromptSection(text string, marker string) string {
 
 func renderBox(width int, title string, body string) string {
 	return renderBoxWithFooter(width, title, body, "")
+}
+
+// boxBodyLine is one rendered body line with a flag controlling whether the
+// inner left/right pad spaces should be omitted - useful for selection
+// highlights that need to span all the way to both borders.
+type boxBodyLine struct {
+	text      string
+	fullBleed bool
+}
+
+// renderBoxLinesWithFooter is the per-line variant of renderBoxWithFooter:
+// fullBleed lines are expected to already span (contentWidth + 2) cells and
+// are placed flush against the borders without the inner pad space.
+func renderBoxLinesWithFooter(width int, title string, lines []boxBodyLine, footer string) string {
+	if width < 6 {
+		width = 6
+	}
+	border := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBrightBlack))
+	styledTitle := titleStyle().Render(title)
+
+	titleW := lipgloss.Width(styledTitle)
+	fillW := width - 5 - titleW
+	if fillW < 1 {
+		fillW = 1
+	}
+	top := border.Render("╭─ ") + styledTitle + " " + border.Render(strings.Repeat("─", fillW)+"╮")
+
+	contentWidth := width - 4
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	rendered := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if ln.fullBleed {
+			rendered = append(rendered, border.Render("│")+ln.text+border.Render("│"))
+			continue
+		}
+		visW := lipgloss.Width(ln.text)
+		pad := contentWidth - visW
+		if pad < 0 {
+			pad = 0
+		}
+		rendered = append(rendered, border.Render("│")+" "+ln.text+strings.Repeat(" ", pad)+" "+border.Render("│"))
+	}
+
+	return top + "\n" + strings.Join(rendered, "\n") + "\n" + renderBottomBorder(width, footer)
 }
 
 // renderBoxWithFooter renders content inside a rounded-border box with the
