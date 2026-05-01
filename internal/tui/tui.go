@@ -844,6 +844,7 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 	case "rerun":
 		if idx >= 0 && len(msg.updatedEntries) > 0 {
 			m.entries[idx] = msg.updatedEntries[0]
+			m.replaceAllEntry(msg.updatedEntries[0])
 			if idx == m.cursor {
 				m.cardScroll = 0
 			}
@@ -2490,8 +2491,12 @@ func (m *Model) removeEntries(indices []int) {
 	origCursor := m.cursor
 	currentID := m.currentRecommendationID()
 	remove := make(map[int]struct{}, len(indices))
+	removeIDs := make(map[string]struct{}, len(indices))
 	for _, index := range indices {
 		remove[index] = struct{}{}
+		if index >= 0 && index < len(m.entries) && m.entries[index].RecommendationID != "" {
+			removeIDs[m.entries[index].RecommendationID] = struct{}{}
+		}
 	}
 	kept := m.entries[:0]
 	for index, entry := range m.entries {
@@ -2501,6 +2506,7 @@ func (m *Model) removeEntries(indices []int) {
 		kept = append(kept, entry)
 	}
 	m.entries = kept
+	m.removeAllEntriesByID(removeIDs)
 
 	// Try to keep the cursor on the same recommendation it pointed at
 	// before the removal - critical when an earlier entry (one before
@@ -2538,6 +2544,32 @@ func (m *Model) removeEntries(indices []int) {
 	}
 	if currentID != m.currentRecommendationID() {
 		m.cardScroll = 0
+	}
+}
+
+func (m *Model) removeAllEntriesByID(ids map[string]struct{}) {
+	if len(ids) == 0 || len(m.allEntries) == 0 {
+		return
+	}
+	kept := m.allEntries[:0]
+	for _, entry := range m.allEntries {
+		if _, ok := ids[entry.RecommendationID]; ok {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	m.allEntries = kept
+}
+
+func (m *Model) replaceAllEntry(updated Entry) {
+	if updated.RecommendationID == "" {
+		return
+	}
+	for i := range m.allEntries {
+		if m.allEntries[i].RecommendationID == updated.RecommendationID {
+			m.allEntries[i] = updated
+			return
+		}
 	}
 }
 

@@ -410,6 +410,8 @@ const (
 	RepoVisibilityPublic RepoVisibility = "public"
 )
 
+const authoredSearchLimit = 1000
+
 // SearchAuthoredOpenPRs returns open PRs where the authenticated user is
 // the author across every repo on GitHub, including repos ezoss does
 // not maintain. Used to drive the contributor sweep. The returned Items
@@ -422,7 +424,7 @@ func (c *Client) SearchAuthoredOpenPRs(ctx context.Context) ([]Item, error) {
 		"search", "prs",
 		"--author", "@me",
 		"--state", "open",
-		"--limit", "100",
+		"--limit", strconv.Itoa(authoredSearchLimit),
 		"--json", "number,title,body,author,state,isDraft,labels,updatedAt,url,repository,headRepository,headRepositoryOwner,headRefName",
 	)
 	if err != nil {
@@ -431,6 +433,9 @@ func (c *Client) SearchAuthoredOpenPRs(ctx context.Context) ([]Item, error) {
 	var raw []listItem
 	if err := json.Unmarshal(stdout, &raw); err != nil {
 		return nil, fmt.Errorf("decode gh search prs: %w", err)
+	}
+	if len(raw) >= authoredSearchLimit {
+		return nil, fmt.Errorf("gh search prs --author=@me: truncated at %d results", authoredSearchLimit)
 	}
 	items := make([]Item, 0, len(raw))
 	for _, entry := range raw {
@@ -460,7 +465,7 @@ func (c *Client) SearchAuthoredOpenIssues(ctx context.Context) ([]Item, error) {
 		"search", "issues",
 		"--author", "@me",
 		"--state", "open",
-		"--limit", "100",
+		"--limit", strconv.Itoa(authoredSearchLimit),
 		"--json", "number,title,body,author,state,labels,updatedAt,url,repository",
 	)
 	if err != nil {
@@ -469,6 +474,9 @@ func (c *Client) SearchAuthoredOpenIssues(ctx context.Context) ([]Item, error) {
 	var raw []listItem
 	if err := json.Unmarshal(stdout, &raw); err != nil {
 		return nil, fmt.Errorf("decode gh search issues: %w", err)
+	}
+	if len(raw) >= authoredSearchLimit {
+		return nil, fmt.Errorf("gh search issues --author=@me: truncated at %d results", authoredSearchLimit)
 	}
 	items := make([]Item, 0, len(raw))
 	for _, entry := range raw {

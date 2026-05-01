@@ -584,6 +584,25 @@ func TestModelMarkTriagedDismissesCurrentEntry(t *testing.T) {
 	}
 }
 
+func TestActionFinishedRemovesEntryFromAllEntries(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Role: sharedtypes.RoleContributor},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.roleFilter = RoleFilterContributor
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.applyActionFinished(actionFinishedMsg{verb: "approve", recommendationID: "rec-1"})
+	m.cycleRoleFilter()
+
+	for _, entry := range m.entries {
+		if entry.RecommendationID == "rec-1" {
+			t.Fatalf("removed recommendation reappeared after cycling role filter: %#v", m.entries)
+		}
+	}
+}
+
 func TestModelSKeyDoesNotMarkTriaged(t *testing.T) {
 	called := false
 	m := NewModelWithDismiss([]Entry{{

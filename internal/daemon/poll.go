@@ -367,12 +367,15 @@ func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []strin
 	}
 
 	var errs []error
+	authoredSearchesComplete := true
 	prs, err := searcher.SearchAuthoredOpenPRs(ctx)
 	if err != nil {
+		authoredSearchesComplete = false
 		errs = append(errs, fmt.Errorf("contrib sweep: list authored prs: %w", err))
 	}
 	issues, err := searcher.SearchAuthoredOpenIssues(ctx)
 	if err != nil {
+		authoredSearchesComplete = false
 		errs = append(errs, fmt.Errorf("contrib sweep: list authored issues: %w", err))
 	}
 
@@ -472,8 +475,10 @@ func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []strin
 		}
 	}
 
-	if err := pruneContribRepos(poller, repoSet, seenItemIDs); err != nil {
-		errs = append(errs, err)
+	if authoredSearchesComplete {
+		if err := pruneContribRepos(poller, repoSet, seenItemIDs); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	repos := make([]string, 0, len(repoSet))

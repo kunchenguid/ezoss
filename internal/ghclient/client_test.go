@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -973,6 +974,35 @@ func TestSearchAuthoredOpenPRsExtractsHeadInfo(t *testing.T) {
 	}
 }
 
+func TestSearchAuthoredOpenPRsTreatsLimitSizedResultsAsTruncated(t *testing.T) {
+	t.Parallel()
+
+	const limit = 1000
+	var b strings.Builder
+	b.WriteString("[")
+	for i := 1; i <= limit; i++ {
+		if i > 1 {
+			b.WriteString(",")
+		}
+		n := strconv.Itoa(i)
+		b.WriteString(`{"number":` + n + `,"title":"ready","author":{"login":"kun"},"state":"OPEN","isDraft":false,"labels":[],"updatedAt":"2026-04-29T12:00:00Z","url":"https://github.com/upstream/widgets/pull/` + n + `","repository":{"nameWithOwner":"upstream/widgets"},"headRefName":"fix"}`)
+	}
+	b.WriteString("]")
+	runner := &stubRunner{responses: []stubResponse{{stdout: b.String()}}}
+
+	client := New(runner)
+	_, err := client.SearchAuthoredOpenPRs(context.Background())
+	if err == nil {
+		t.Fatal("SearchAuthoredOpenPRs error = nil, want truncated result error")
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("SearchAuthoredOpenPRs error = %q, want truncated", err.Error())
+	}
+	if !hasArgValue(runner.calls[0].args, "--limit", strconv.Itoa(limit)) {
+		t.Fatalf("expected --limit %d, got %#v", limit, runner.calls[0].args)
+	}
+}
+
 func TestSearchAuthoredOpenIssuesReturnsAuthoredIssues(t *testing.T) {
 	t.Parallel()
 
@@ -1042,6 +1072,15 @@ func mustParseTime(t *testing.T, value string) time.Time {
 func containsArg(args []string, want string) bool {
 	for _, arg := range args {
 		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArgValue(args []string, flag string, value string) bool {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == flag && args[i+1] == value {
 			return true
 		}
 	}
