@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kunchenguid/ezoss/internal/paths"
@@ -31,6 +32,8 @@ type Worktree struct {
 	Branch       string
 	BaseRef      string
 }
+
+var runIDCounter atomic.Uint64
 
 func PrepareWorktree(ctx context.Context, opts WorktreeOptions) (Worktree, error) {
 	root := strings.TrimSpace(opts.Root)
@@ -121,7 +124,7 @@ func branchName(prefix string, number int, run string) string {
 
 func runID() string {
 	now := time.Now().UTC()
-	return now.Format("20060102-150405") + "-" + strconv.FormatInt(now.UnixNano(), 36)
+	return now.Format("20060102-150405") + "-" + strconv.FormatInt(now.UnixNano(), 36) + "-" + strconv.FormatUint(runIDCounter.Add(1), 36)
 }
 
 func runGitCommand(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
