@@ -1448,6 +1448,49 @@ func TestCopyTextWithSystemClipboardRejectsEmptyPrompt(t *testing.T) {
 	}
 }
 
+func TestOpenURLWithSystemBrowserRejectsEmptyURL(t *testing.T) {
+	err := openURLWithSystemBrowser(context.Background(), "  \n\t")
+	if err == nil {
+		t.Fatal("expected empty url error")
+	}
+	if !strings.Contains(err.Error(), "url is empty") {
+		t.Fatalf("error = %q, want empty url", err.Error())
+	}
+}
+
+func TestOpenURLCommandsIncludesURLForCurrentPlatform(t *testing.T) {
+	commands := openURLCommands("https://github.com/acme/widgets/issues/42")
+	if len(commands) == 0 {
+		t.Fatal("expected browser-open command for test platform")
+	}
+	last := commands[0][len(commands[0])-1]
+	if last != "https://github.com/acme/widgets/issues/42" {
+		t.Fatalf("command = %#v, want URL as final argument", commands[0])
+	}
+}
+
+func TestInboxModelActionsOpenURLUsesEntryURL(t *testing.T) {
+	originalOpenURLInBrowser := openURLInBrowser
+	t.Cleanup(func() {
+		openURLInBrowser = originalOpenURLInBrowser
+	})
+
+	var opened string
+	openURLInBrowser = func(_ context.Context, url string) error {
+		opened = url
+		return nil
+	}
+
+	actions := inboxModelActions(nil)
+	err := actions.OpenURL(tui.Entry{URL: "https://github.com/acme/widgets/issues/42"})
+	if err != nil {
+		t.Fatalf("OpenURL() error = %v", err)
+	}
+	if opened != "https://github.com/acme/widgets/issues/42" {
+		t.Fatalf("opened = %q, want entry URL", opened)
+	}
+}
+
 func TestLoadInboxEntriesKeepsNewestRecommendationsFirst(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths
