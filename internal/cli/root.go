@@ -349,11 +349,13 @@ func newFixCmd() *cobra.Command {
 					return err
 				}
 			}
-			worktree, err := prepareFixWorktree(cmd.Context(), fixflow.WorktreeOptions{
-				Root:   p.Root(),
-				RepoID: repoID,
-				Number: number,
-			})
+			var worktree fixflow.Worktree
+			var contributor bool
+			if prepareOnly {
+				worktree, err = prepareFixWorktree(cmd.Context(), fixflow.WorktreeOptions{Root: p.Root(), RepoID: repoID, Number: number})
+			} else {
+				worktree, contributor, err = prepareFixWorktreeForEntry(cmd.Context(), p.Root(), p.DBPath(), entry)
+			}
 			if err != nil {
 				return fmt.Errorf("prepare fix worktree: %w", err)
 			}
@@ -378,10 +380,11 @@ func newFixCmd() *cobra.Command {
 				return nil
 			}
 			result, err := runFixEntryWithPrepared(cmd.Context(), entry, w, fixRunPrepared{
-				Root:     p.Root(),
-				Config:   cfg,
-				Worktree: worktree,
-				PRCreate: resolution,
+				Root:        p.Root(),
+				Config:      cfg,
+				Worktree:    worktree,
+				PRCreate:    resolution,
+				Contributor: contributor,
 			})
 			if err != nil {
 				return err
@@ -417,10 +420,11 @@ func parseFixTarget(value string) (string, int, error) {
 }
 
 type fixRunPrepared struct {
-	Root     string
-	Config   *config.GlobalConfig
-	Worktree fixflow.Worktree
-	PRCreate prcreator.Resolution
+	Root        string
+	Config      *config.GlobalConfig
+	Worktree    fixflow.Worktree
+	PRCreate    prcreator.Resolution
+	Contributor bool
 }
 
 type fixRunResult struct {
@@ -454,11 +458,7 @@ func runFixEntry(ctx context.Context, entry tui.Entry, out io.Writer) (*fixRunRe
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	worktree, err := prepareFixWorktree(ctx, fixflow.WorktreeOptions{
-		Root:   p.Root(),
-		RepoID: entry.RepoID,
-		Number: entry.Number,
-	})
+	worktree, contributor, err := prepareFixWorktreeForEntry(ctx, p.Root(), p.DBPath(), entry)
 	if err != nil {
 		return nil, fmt.Errorf("prepare fix worktree: %w", err)
 	}
@@ -467,11 +467,42 @@ func runFixEntry(ctx context.Context, entry tui.Entry, out io.Writer) (*fixRunRe
 		return nil, err
 	}
 	return runFixEntryWithPrepared(ctx, entry, out, fixRunPrepared{
-		Root:     p.Root(),
-		Config:   cfg,
-		Worktree: worktree,
-		PRCreate: resolution,
+		Root:        p.Root(),
+		Config:      cfg,
+		Worktree:    worktree,
+		PRCreate:    resolution,
+		Contributor: contributor,
 	})
+}
+
+func prepareFixWorktreeForEntry(ctx context.Context, root string, dbPath string, entry tui.Entry) (fixflow.Worktree, bool, error) {
+	if entry.Role == sharedtypes.RoleContributor {
+		item, err := loadFixItem(dbPath, entry)
+		if err != nil {
+			return fixflow.Worktree{}, false, err
+		}
+		if item == nil {
+			return fixflow.Worktree{}, false, fmt.Errorf("item %s#%d not found", entry.RepoID, entry.Number)
+		}
+		if strings.TrimSpace(item.HeadRef) == "" || strings.TrimSpace(item.HeadCloneURL) == "" {
+			return fixflow.Worktree{}, false, fmt.Errorf("contrib fix requires head ref and clone URL on item %s", item.ID)
+		}
+		worktree, err := prepareContribWorktree(ctx, fixflow.ContribWorktreeOptions{
+			Root: root, HeadRepo: item.HeadRepo, HeadRef: item.HeadRef, CloneURL: item.HeadCloneURL, Number: item.Number,
+		})
+		return worktree, true, err
+	}
+	worktree, err := prepareFixWorktree(ctx, fixflow.WorktreeOptions{Root: root, RepoID: entry.RepoID, Number: entry.Number})
+	return worktree, false, err
+}
+
+func loadFixItem(dbPath string, entry tui.Entry) (*db.Item, error) {
+	database, err := openDB(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open db: %w", err)
+	}
+	defer database.Close()
+	return inboxItem(database, entry)
 }
 
 func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer, prepared fixRunPrepared) (*fixRunResult, error) {
@@ -521,6 +552,21 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 	}
 	if err := ensureFixBranchHasCommit(ctx, worktree.WorktreePath, worktree.BaseRef); err != nil {
 		return nil, err
+	}
+	if prepared.Contributor {
+		pushMode := config.ContribPushNoMistakes
+		if prepared.Config != nil && prepared.Config.Fixes.ContribPush != "" {
+			pushMode = prepared.Config.Fixes.ContribPush
+		}
+		if pushMode == config.ContribPushDisabled {
+			return nil, fmt.Errorf("contrib push disabled: refusing to run contributor fix for %s#%d", entry.RepoID, entry.Number)
+		}
+		if pushMode == config.ContribPushAuto {
+			if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "push", "origin", worktree.Branch); err != nil {
+				return nil, fmt.Errorf("push contrib branch %s: %w", worktree.Branch, err)
+			}
+		}
+		return &fixRunResult{WorktreePath: worktree.WorktreePath, Branch: worktree.Branch}, nil
 	}
 
 	created, _, err := createFixPRWithFallback(ctx, prepared.PRCreate, prcreator.CreateOptions{
@@ -1570,8 +1616,10 @@ func persistApprovedEntry(database *db.DB, entry tui.Entry, finalLabels []string
 // the labels and retry. Comment posting goes with the state change since
 // they're combined into single calls for close and request_changes.
 func executeApproval(ctx context.Context, executor approvalExecutor, entry tui.Entry, addLabels []string, removeLabels []string, mergeMethod string) error {
-	if err := executor.EditLabels(ctx, entry.RepoID, entry.Kind, entry.Number, addLabels, removeLabels); err != nil {
-		return fmt.Errorf("mark %s#%d triaged: %w", entry.RepoID, entry.Number, err)
+	if len(addLabels) > 0 || len(removeLabels) > 0 {
+		if err := executor.EditLabels(ctx, entry.RepoID, entry.Kind, entry.Number, addLabels, removeLabels); err != nil {
+			return fmt.Errorf("mark %s#%d triaged: %w", entry.RepoID, entry.Number, err)
+		}
 	}
 
 	hasComment := strings.TrimSpace(entry.DraftComment) != ""
@@ -1613,6 +1661,9 @@ func executeApproval(ctx context.Context, executor approvalExecutor, entry tui.E
 }
 
 func approvalLabelEdits(entry tui.Entry, item *db.Item, sync config.SyncLabels) ([]string, []string) {
+	if item != nil && item.Role == sharedtypes.RoleContributor {
+		return nil, nil
+	}
 	labels := append([]string(nil), entry.ProposedLabels...)
 	return managedLabelEdits(labels, itemWithApprovedWaitingOn(item, entry), sync)
 }
@@ -1627,6 +1678,9 @@ func itemWithApprovedWaitingOn(item *db.Item, entry tui.Entry) *db.Item {
 }
 
 func dismissLabelEdits(item *db.Item, sync config.SyncLabels) ([]string, []string) {
+	if item != nil && item.Role == sharedtypes.RoleContributor {
+		return nil, nil
+	}
 	return managedLabelEdits(nil, item, sync)
 }
 
@@ -1749,8 +1803,10 @@ func dismissInboxEntries(ctx context.Context, entries []tui.Entry) error {
 			return err
 		}
 		finalLabels, removeLabels := dismissLabelEdits(item, cfg.SyncLabels)
-		if err := editor.EditLabels(ctx, entry.RepoID, entry.Kind, entry.Number, finalLabels, removeLabels); err != nil {
-			return fmt.Errorf("mark %s#%d triaged: %w", entry.RepoID, entry.Number, err)
+		if len(finalLabels) > 0 || len(removeLabels) > 0 {
+			if err := editor.EditLabels(ctx, entry.RepoID, entry.Kind, entry.Number, finalLabels, removeLabels); err != nil {
+				return fmt.Errorf("mark %s#%d triaged: %w", entry.RepoID, entry.Number, err)
+			}
 		}
 		actedAt := time.Now()
 		optionID, err := resolveOptionID(database, entry)

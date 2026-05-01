@@ -491,7 +491,12 @@ func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []strin
 // removes any contrib-source repo that no longer holds any contributor
 // items. Maintainer (config) repos are left alone.
 func pruneContribRepos(poller Poller, sweptRepos map[string]struct{}, sweptItems map[string]struct{}) error {
-	for repoID := range sweptRepos {
+	repos, err := poller.DB.ListReposBySource(db.RepoSourceContrib)
+	if err != nil {
+		return err
+	}
+	for _, repo := range repos {
+		repoID := repo.ID
 		items, err := poller.DB.ListContributorItemsForRepo(repoID)
 		if err != nil {
 			return err
@@ -500,16 +505,9 @@ func pruneContribRepos(poller Poller, sweptRepos map[string]struct{}, sweptItems
 			if _, ok := sweptItems[it.ID]; ok {
 				continue
 			}
-			if it.State != sharedtypes.ItemStateOpen {
-				if err := poller.DB.DeleteItem(it.ID); err != nil {
-					return err
-				}
-				continue
+			if err := poller.DB.DeleteItem(it.ID); err != nil {
+				return err
 			}
-			// Item is open but no longer in the search results - the
-			// user is no longer the author (rare; e.g. transferred), or
-			// gh search dropped it. Leave it alone for now; a future
-			// sweep will see it again or the user will close it.
 		}
 		remaining, err := poller.DB.ListContributorItemsForRepo(repoID)
 		if err != nil {

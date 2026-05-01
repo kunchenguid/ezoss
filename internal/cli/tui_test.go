@@ -3351,6 +3351,125 @@ func TestApproveInboxEntriesAbortsCloseWhenLabelEditFails(t *testing.T) {
 	}
 }
 
+func TestApproveInboxEntriesContributorSkipsLabelEdits(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewApprovalExecutor := newApprovalExecutor
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newApprovalExecutor = originalNewApprovalExecutor
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	executor := &stubApprovalExecutor{}
+	newApprovalExecutor = func() approvalExecutor {
+		return executor
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#12", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor,
+		Number: 12, Title: "question", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "upstream/widgets#12",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			DraftComment: "Thanks, that helps.", StateChange: sharedtypes.StateChangeNone,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: rec.ID,
+		RepoID:           "upstream/widgets",
+		Number:           12,
+		Kind:             sharedtypes.ItemKindPR,
+		Role:             sharedtypes.RoleContributor,
+		DraftComment:     "Thanks, that helps.",
+		StateChange:      sharedtypes.StateChangeNone,
+	}}); err != nil {
+		t.Fatalf("approveInboxEntries() error = %v", err)
+	}
+	if len(executor.labels) != 0 {
+		t.Fatalf("label edits = %#v, want none for contributor approval", executor.labels)
+	}
+	if len(executor.comments) != 1 {
+		t.Fatalf("comments = %d, want 1", len(executor.comments))
+	}
+}
+
+func TestDismissInboxEntriesContributorSkipsLabelEdits(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewLabelEditor := newLabelEditor
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newLabelEditor = originalNewLabelEditor
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	editor := &stubLabelEditor{}
+	newLabelEditor = func() labelEditor { return editor }
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#13", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindIssue, Role: sharedtypes.RoleContributor,
+		Number: 13, Title: "question", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID:  "upstream/widgets#13",
+		Agent:   sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	if err := dismissInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: rec.ID,
+		RepoID:           "upstream/widgets",
+		Number:           13,
+		Kind:             sharedtypes.ItemKindIssue,
+		Role:             sharedtypes.RoleContributor,
+	}}); err != nil {
+		t.Fatalf("dismissInboxEntries() error = %v", err)
+	}
+	if len(editor.entries) != 0 {
+		t.Fatalf("label edits = %#v, want none for contributor dismissal", editor.entries)
+	}
+}
+
 func TestApproveInboxEntriesExecutesNoneRecommendationAndMarksTriaged(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths

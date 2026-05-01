@@ -68,6 +68,39 @@ func (d *DB) GetRepo(id string) (*Repo, error) {
 	return &repo, nil
 }
 
+func (d *DB) ListReposBySource(source RepoSource) ([]Repo, error) {
+	rows, err := d.sql.Query(
+		`SELECT id, default_branch, source, last_poll_at, last_triaged_refresh_at, created_at FROM repos WHERE source = ? ORDER BY id ASC`,
+		source,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list repos by source: %w", err)
+	}
+	defer rows.Close()
+
+	var repos []Repo
+	for rows.Next() {
+		var repo Repo
+		var lastPollAt sql.NullInt64
+		var lastTriagedRefreshAt sql.NullInt64
+		var source sql.NullString
+		if err := rows.Scan(&repo.ID, &repo.DefaultBranch, &source, &lastPollAt, &lastTriagedRefreshAt, &repo.CreatedAt); err != nil {
+			return nil, fmt.Errorf("list repos by source: %w", err)
+		}
+		repo.Source = RepoSource(source.String)
+		if repo.Source == "" {
+			repo.Source = RepoSourceConfig
+		}
+		repo.LastPollAt = unixToTimePtr(lastPollAt)
+		repo.LastTriagedRefreshAt = unixToTimePtr(lastTriagedRefreshAt)
+		repos = append(repos, repo)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list repos by source: %w", err)
+	}
+	return repos, nil
+}
+
 // DeleteRepoIfContrib removes a repo only when it has source='contrib'.
 // Used by the contributor sweep to auto-prune repos that no longer have
 // any open contributor items. Returns true when a row was removed.
