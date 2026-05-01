@@ -920,6 +920,90 @@ func TestCommentReturnsRunnerError(t *testing.T) {
 	}
 }
 
+func TestSearchAuthoredOpenPRsExtractsHeadInfo(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{
+		responses: []stubResponse{{
+			stdout: `[
+				{"number": 99, "title": "fix race in cache", "author": {"login": "kun"}, "state": "OPEN", "isDraft": false, "labels": [], "updatedAt": "2026-04-29T12:00:00Z", "url": "https://github.com/upstream/widgets/pull/99",
+				 "repository": {"nameWithOwner": "upstream/widgets", "name": "widgets", "url": "https://github.com/upstream/widgets", "owner": {"login": "upstream"}},
+				 "headRepository": {"nameWithOwner": "kun/widgets", "name": "widgets", "url": "https://github.com/kun/widgets", "owner": {"login": "kun"}},
+				 "headRepositoryOwner": {"login": "kun"},
+				 "headRefName": "fix-cache-race"},
+				{"number": 100, "title": "WIP: drafty", "author": {"login": "kun"}, "state": "OPEN", "isDraft": false, "labels": [], "updatedAt": "2026-04-29T13:00:00Z", "url": "https://github.com/upstream/widgets/pull/100",
+				 "repository": {"nameWithOwner": "upstream/widgets"},
+				 "headRefName": "drafty"},
+				{"number": 101, "title": "draft, hold", "author": {"login": "kun"}, "state": "OPEN", "isDraft": true, "labels": [], "updatedAt": "2026-04-29T14:00:00Z", "url": "https://github.com/upstream/widgets/pull/101",
+				 "repository": {"nameWithOwner": "upstream/widgets"},
+				 "headRefName": "hold"}
+			]`,
+		}},
+	}
+
+	client := New(runner)
+	items, err := client.SearchAuthoredOpenPRs(context.Background())
+	if err != nil {
+		t.Fatalf("SearchAuthoredOpenPRs error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("want 1 item after WIP/draft filter, got %d: %#v", len(items), items)
+	}
+	got := items[0]
+	if got.Repo != "upstream/widgets" {
+		t.Fatalf("Repo = %q, want upstream/widgets", got.Repo)
+	}
+	if got.Number != 99 {
+		t.Fatalf("Number = %d, want 99", got.Number)
+	}
+	if got.HeadRepo != "kun/widgets" {
+		t.Fatalf("HeadRepo = %q, want kun/widgets", got.HeadRepo)
+	}
+	if got.HeadRef != "fix-cache-race" {
+		t.Fatalf("HeadRef = %q, want fix-cache-race", got.HeadRef)
+	}
+	if got.HeadCloneURL != "https://github.com/kun/widgets.git" {
+		t.Fatalf("HeadCloneURL = %q, want https://github.com/kun/widgets.git", got.HeadCloneURL)
+	}
+	if !containsArg(runner.calls[0].args, "search") || !containsArg(runner.calls[0].args, "prs") {
+		t.Fatalf("expected gh search prs invocation, got %#v", runner.calls[0].args)
+	}
+	if !containsArg(runner.calls[0].args, "@me") {
+		t.Fatalf("expected --author @me, got %#v", runner.calls[0].args)
+	}
+}
+
+func TestSearchAuthoredOpenIssuesReturnsAuthoredIssues(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{
+		responses: []stubResponse{{
+			stdout: `[
+				{"number": 23, "title": "Track contributions", "author": {"login": "kun"}, "state": "OPEN", "labels": [], "updatedAt": "2026-04-29T15:00:00Z", "url": "https://github.com/kunchenguid/ezoss/issues/23",
+				 "repository": {"nameWithOwner": "kunchenguid/ezoss"}}
+			]`,
+		}},
+	}
+
+	client := New(runner)
+	items, err := client.SearchAuthoredOpenIssues(context.Background())
+	if err != nil {
+		t.Fatalf("SearchAuthoredOpenIssues error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("want 1 item, got %d", len(items))
+	}
+	if items[0].Repo != "kunchenguid/ezoss" || items[0].Number != 23 {
+		t.Fatalf("unexpected item %#v", items[0])
+	}
+	if items[0].Kind != sharedtypes.ItemKindIssue {
+		t.Fatalf("Kind = %q, want issue", items[0].Kind)
+	}
+	if !containsArg(runner.calls[0].args, "search") || !containsArg(runner.calls[0].args, "issues") {
+		t.Fatalf("expected gh search issues invocation, got %#v", runner.calls[0].args)
+	}
+}
+
 type stubRunner struct {
 	responses []stubResponse
 	calls     []stubCall

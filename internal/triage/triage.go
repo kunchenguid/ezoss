@@ -86,17 +86,49 @@ func Schema() json.RawMessage {
 	return append(json.RawMessage(nil), schema...)
 }
 
+// Role is re-exported here so callers don't have to import the
+// sharedtypes package just to pick a prompt variant.
+type Role = sharedtypes.Role
+
+const (
+	RoleMaintainer  = sharedtypes.RoleMaintainer
+	RoleContributor = sharedtypes.RoleContributor
+)
+
+// Prompt returns the maintainer-mode prompt. Kept for backwards
+// compatibility with callers that don't yet thread role through.
 func Prompt(itemURL string, agentsInstructions string) string {
 	return PromptWithRerunInstructions(itemURL, agentsInstructions, "")
 }
 
+// PromptWithRerunInstructions returns the maintainer-mode prompt with
+// optional rerun instructions appended. Kept as the existing entry
+// point so existing callers keep compiling.
 func PromptWithRerunInstructions(itemURL string, agentsInstructions string, rerunInstructions string) string {
+	return PromptForRole(RoleMaintainer, itemURL, agentsInstructions, rerunInstructions)
+}
+
+// PromptForRole returns the right prompt variant for the given role.
+// The schema and parser are unchanged; only the in-bounds set of
+// state_change values and the example combinations differ. Maintainer
+// prompts are unchanged from before; contributor prompts narrow the
+// in-bounds set to none/close/fix_required because we do not have
+// merge or request_changes authority on repos we don't maintain.
+func PromptForRole(role Role, itemURL string, agentsInstructions string, rerunInstructions string) string {
+	if role == RoleContributor {
+		return contributorPrompt(itemURL, agentsInstructions, rerunInstructions)
+	}
+	return maintainerPrompt(itemURL, agentsInstructions, rerunInstructions)
+}
+
+func maintainerPrompt(itemURL string, agentsInstructions string, rerunInstructions string) string {
 	var b strings.Builder
 	b.WriteString("Triage this GitHub issue or pull request and return structured JSON matching the provided schema.\n\n")
 	b.WriteString("Item URL:\n")
 	b.WriteString(itemURL)
 	b.WriteString("\n\n")
 	b.WriteString("Inspect the managed repository checkout provided in the execution context, plus any issue comments, pull request diff, linked issues, or CI context you need before deciding. Do not create ad hoc clones unless the provided checkout is unavailable.\n\n")
+	b.WriteString("You are acting as the MAINTAINER of this repo. You can close, merge, request changes, comment, and hand work to a coding agent.\n\n")
 	b.WriteString("Return one or more options. Each option is a self-contained proposed resolution with these fields:\n")
 	b.WriteString("- draft_comment: the comment to post on the item, or empty string if no comment.\n")
 	b.WriteString("- fix_prompt: a prompt the maintainer can copy into a coding agent when the item is a legitimate actionable issue or PR, or empty string if no coding-agent handoff is useful. Include the original issue/PR URL and enough context from your investigation for the coding agent to work on it. Prefer readable multi-line Markdown with short sections over a single long paragraph.\n")
@@ -118,6 +150,46 @@ func PromptWithRerunInstructions(itemURL string, agentsInstructions string, reru
 	b.WriteString("- mark triaged with no further action: draft_comment empty, state_change 'none'.\n\n")
 	b.WriteString("For legitimate actionable issues, prefer state_change 'fix_required' and set fix_prompt to the handoff for a coding agent. The prompt should include the original URL, summary, reproduction or evidence, suspected files/components if found, acceptance criteria, and verification steps. Format it as multi-line Markdown so it is readable in a terminal and directly runnable by ezoss fix.\n\n")
 	b.WriteString("If the item is a pull request, first check whether it is linked to an issue where the approach was already discussed and agreed upon. If there is no prior agreement, set state_change 'none' and use draft_comment to ask whether the approach is wanted - do not request_changes or merge until the approach is confirmed. If there is prior agreement, proceed with code review and choose request_changes or merge based on the review.\n")
+	appendInstructions(&b, agentsInstructions, rerunInstructions)
+	return b.String()
+}
+
+func contributorPrompt(itemURL string, agentsInstructions string, rerunInstructions string) string {
+	var b strings.Builder
+	b.WriteString("Triage this GitHub issue or pull request and return structured JSON matching the provided schema.\n\n")
+	b.WriteString("Item URL:\n")
+	b.WriteString(itemURL)
+	b.WriteString("\n\n")
+	b.WriteString("You are acting as a CONTRIBUTOR on a repo you do not maintain. The item is something you authored: an issue you filed or a pull request you opened against an upstream repo. The maintainer is someone else; you have no authority to merge, request changes, or apply labels there.\n\n")
+	b.WriteString("Inspect the issue/PR thread, the PR diff if applicable, and any linked discussion. If a managed checkout of the upstream repo is provided, use it for context, but do not assume write access to it.\n\n")
+	b.WriteString("Allowed state_change values for contributor mode (the schema enum is unchanged, but only this subset is in-bounds for you here):\n")
+	b.WriteString("- 'none': leave the item open. Use this for replies, pings, and acknowledgments.\n")
+	b.WriteString("- 'close': close my own issue or abandon my own PR.\n")
+	b.WriteString("- 'fix_required': hand the item to a coding agent. For a contributor PR this means push more commits to the EXISTING PR branch (do not propose creating a new PR). For an authored issue this is rarely useful; prefer 'none'.\n\n")
+	b.WriteString("Do NOT use 'merge' or 'request_changes' - those are maintainer actions on a repo you don't own.\n\n")
+	b.WriteString("Each option fields:\n")
+	b.WriteString("- draft_comment: a reply you would post on the thread, or empty string if no comment. Common contributor uses: reply to a reviewer, ping a silent reviewer, ask a clarifying question, withdraw the proposal.\n")
+	b.WriteString("- fix_prompt: when state_change is 'fix_required', a prompt the contributor can copy into a coding agent to push more commits to the existing PR branch. Include the upstream PR URL, the head branch (the one to push to), the reviewer's feedback, suspected files, and verification steps. Examples: 'address review feedback in <files>', 'rebase against base, resolve conflicts'. Empty string if no coding-agent handoff is useful.\n")
+	b.WriteString("- state_change: 'none', 'close', or 'fix_required' as described above.\n")
+	b.WriteString("- waiting_on: who the item is waiting on after this action. After replying or pushing fixes, this is usually the maintainer.\n")
+	b.WriteString("- confidence: how sure you are this is the right next step.\n\n")
+	b.WriteString("How many options to return:\n")
+	b.WriteString("- Prefer 2-3 options when there are multiple reasonable next steps (e.g. address feedback now vs. ping for clarification, push a rebase vs. close-and-replace).\n")
+	b.WriteString("- Return one option when the next step is unambiguous (e.g. reviewer asked a direct question - reply, nothing else).\n")
+	b.WriteString("- Order options with your top pick first.\n\n")
+	b.WriteString("Common combinations within an option:\n")
+	b.WriteString("- reply to a reviewer: draft_comment set, state_change 'none'.\n")
+	b.WriteString("- ping a silent reviewer: draft_comment set (a short polite nudge), state_change 'none'.\n")
+	b.WriteString("- push more commits to the PR: state_change 'fix_required', fix_prompt set with the work to do.\n")
+	b.WriteString("- rebase against base: state_change 'fix_required', fix_prompt 'rebase against base, resolve conflicts'.\n")
+	b.WriteString("- abandon my own PR: state_change 'close', draft_comment optional.\n")
+	b.WriteString("- close my own issue (resolved or no longer relevant): state_change 'close'.\n\n")
+	b.WriteString("Nothing in this output is posted to GitHub automatically; the maintainer (you) reviews each option in the inbox before any action is taken.\n")
+	appendInstructions(&b, agentsInstructions, rerunInstructions)
+	return b.String()
+}
+
+func appendInstructions(b *strings.Builder, agentsInstructions, rerunInstructions string) {
 	if strings.TrimSpace(agentsInstructions) != "" {
 		b.WriteString("\nUser instructions from ~/.ezoss/AGENTS.md:\n")
 		b.WriteString(strings.TrimSpace(agentsInstructions))
@@ -129,7 +201,6 @@ func PromptWithRerunInstructions(itemURL string, agentsInstructions string, reru
 		b.WriteString("\n\n")
 		b.WriteString("Use these instructions as additional context for this rerun. Do not treat them as GitHub-visible text. If they conflict with repository evidence or project policy, explain the conflict in the recommendation.\n")
 	}
-	return b.String()
 }
 
 func Parse(data []byte) (*Recommendation, error) {

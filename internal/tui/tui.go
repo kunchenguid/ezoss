@@ -71,6 +71,7 @@ type Entry struct {
 	RepoID            string
 	Number            int
 	Kind              sharedtypes.ItemKind
+	Role              sharedtypes.Role
 	Author            string
 	Unconfigured      bool
 	Title             string
@@ -192,8 +193,19 @@ type ModelActions struct {
 	OpenURL       func(Entry) error
 }
 
+// RoleFilter narrows the inbox to one role. Cycled with the "F" key.
+type RoleFilter int
+
+const (
+	RoleFilterAll RoleFilter = iota
+	RoleFilterMaintainer
+	RoleFilterContributor
+)
+
 type Model struct {
 	entries    []Entry
+	allEntries []Entry
+	roleFilter RoleFilter
 	cursor     int
 	cardScroll int
 	width      int
@@ -334,7 +346,9 @@ type spinnerTickMsg struct{}
 const refreshInterval = 5 * time.Second
 
 func NewModel(entries []Entry) Model {
-	return Model{entries: append([]Entry(nil), entries...), width: 100}
+	cloned := append([]Entry(nil), entries...)
+	all := append([]Entry(nil), entries...)
+	return Model{entries: cloned, allEntries: all, width: 100}
 }
 
 func NewModelWithActions(entries []Entry, actions ModelActions) Model {
@@ -483,6 +497,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd := m.fixCurrent(); cmd != nil {
 				return m, withSpinner(cmd, m.kickSpinnerIfPending())
 			}
+		case "F":
+			m.cycleRoleFilter()
 		case "r":
 			m.openRerunInput()
 		case "m":
@@ -1373,6 +1389,7 @@ func (m Model) renderHelp() string {
 		"m                  mark triaged without approving",
 		"o                  open the current item's GitHub page in a browser",
 		"r                  rerun the agent on the current item with instructions",
+		"F                  cycle role filter: all / maintainer / contributor",
 		"?                  toggle this help",
 		"q                  quit",
 	}, "\n")
@@ -1896,6 +1913,9 @@ func (m Model) renderCard(width, boxHeight int) string {
 // option - the queue position is communicated by the rail's cursor.
 func cardTitle(entry Entry) string {
 	parts := []string{entry.RepoID, entryNumberLabel(entry)}
+	if badge := roleBadge(entry.Role); badge != "" {
+		parts = append(parts, badge)
+	}
 	if len(entry.Options) > 1 {
 		parts = append(parts, fmt.Sprintf("option %d/%d", entry.ActiveOption+1, len(entry.Options)))
 	}
@@ -1903,6 +1923,73 @@ func cardTitle(entry Entry) string {
 		parts = append(parts, "unconfigured")
 	}
 	return strings.Join(parts, " · ")
+}
+
+// applyRoleFilter narrows the inbox to entries matching the filter.
+// RoleFilterAll returns the input unchanged. The result preserves order.
+func applyRoleFilter(entries []Entry, filter RoleFilter) []Entry {
+	if filter == RoleFilterAll {
+		return entries
+	}
+	want := sharedtypes.RoleMaintainer
+	if filter == RoleFilterContributor {
+		want = sharedtypes.RoleContributor
+	}
+	out := make([]Entry, 0, len(entries))
+	for _, entry := range entries {
+		role := entry.Role
+		if role == "" {
+			role = sharedtypes.RoleMaintainer
+		}
+		if role == want {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// cycleRoleFilter advances the inbox role filter through
+// All -> Maintainer -> Contributor -> All. The cursor is reset to the
+// top of the filtered list so the user lands on something visible.
+func (m *Model) cycleRoleFilter() {
+	switch m.roleFilter {
+	case RoleFilterAll:
+		m.roleFilter = RoleFilterMaintainer
+	case RoleFilterMaintainer:
+		m.roleFilter = RoleFilterContributor
+	default:
+		m.roleFilter = RoleFilterAll
+	}
+	if len(m.allEntries) == 0 {
+		m.allEntries = append(m.allEntries[:0], m.entries...)
+	}
+	filtered := applyRoleFilter(m.allEntries, m.roleFilter)
+	m.entries = append(m.entries[:0], filtered...)
+	m.cursor = 0
+	m.cardScroll = 0
+	m.pushLog(logEntry{state: logStateInfo, note: "filter: " + roleFilterLabel(m.roleFilter)})
+}
+
+func roleFilterLabel(f RoleFilter) string {
+	switch f {
+	case RoleFilterMaintainer:
+		return "maintainer"
+	case RoleFilterContributor:
+		return "contributor"
+	default:
+		return "all"
+	}
+}
+
+// roleBadge returns a short marker for the entry's role. Maintainer is
+// the default and produces no badge to keep the chrome quiet for the
+// common case; contributor items get a small "contrib" tag so the user
+// can tell at a glance which are theirs to push and which they own.
+func roleBadge(role sharedtypes.Role) string {
+	if role == sharedtypes.RoleContributor {
+		return "contrib"
+	}
+	return ""
 }
 
 // renderQueueRail renders the queue grouped by repo, with the cursor's
@@ -2505,6 +2592,8 @@ func (m *Model) applyReload(entries []Entry) {
 		}
 	}
 
+	m.allEntries = append(m.allEntries[:0], entries...)
+	entries = applyRoleFilter(entries, m.roleFilter)
 	m.entries = append(m.entries[:0], entries...)
 	newCursor := 0
 	foundCursor := false

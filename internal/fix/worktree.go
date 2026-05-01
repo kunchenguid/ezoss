@@ -107,6 +107,97 @@ func PrepareWorktree(ctx context.Context, opts WorktreeOptions) (Worktree, error
 	return Worktree{BasePath: checkoutPath, WorktreePath: worktreePath, Branch: branch, BaseRef: baseRef}, nil
 }
 
+// ContribWorktreeOptions describes what the contributor fix runner
+// needs to push to an existing PR's head branch on the fork (or
+// upstream, when the user has push access there).
+type ContribWorktreeOptions struct {
+	Root     string
+	HeadRepo string // owner/name where the PR branch lives
+	HeadRef  string // branch name on HeadRepo
+	CloneURL string // git URL to clone (typically <head>.git)
+	Number   int    // upstream PR number, used for path naming
+	RunGit   GitRunner
+}
+
+// PrepareContribWorktree clones HeadRepo (the PR head, often a fork),
+// checks out HeadRef into an isolated worktree, and returns the
+// worktree path. Unlike PrepareWorktree it does NOT create a new branch
+// - the contributor already has a PR open against an existing branch
+// and we want to push more commits to it. BaseRef is set to HeadRef so
+// downstream "do we have new commits" checks compare against the
+// pre-fix tip of the same branch.
+func PrepareContribWorktree(ctx context.Context, opts ContribWorktreeOptions) (Worktree, error) {
+	root := strings.TrimSpace(opts.Root)
+	if root == "" {
+		p, err := paths.New()
+		if err != nil {
+			return Worktree{}, err
+		}
+		root = p.Root()
+	}
+	if strings.TrimSpace(opts.HeadRepo) == "" || !strings.Contains(opts.HeadRepo, "/") {
+		return Worktree{}, fmt.Errorf("invalid head repo %q", opts.HeadRepo)
+	}
+	if strings.TrimSpace(opts.HeadRef) == "" {
+		return Worktree{}, fmt.Errorf("head ref required")
+	}
+	if strings.TrimSpace(opts.CloneURL) == "" {
+		return Worktree{}, fmt.Errorf("clone url required")
+	}
+	runGit := opts.RunGit
+	if runGit == nil {
+		runGit = runGitCommand
+	}
+
+	safeRepo := SafeRepoName(opts.HeadRepo)
+	checkoutPath := filepath.Join(root, "investigations", safeRepo)
+	if err := os.MkdirAll(filepath.Dir(checkoutPath), 0o755); err != nil {
+		return Worktree{}, fmt.Errorf("create investigations dir: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(checkoutPath, ".git")); err != nil {
+		if !os.IsNotExist(err) {
+			return Worktree{}, fmt.Errorf("inspect contrib checkout: %w", err)
+		}
+		if err := os.RemoveAll(checkoutPath); err != nil {
+			return Worktree{}, fmt.Errorf("remove invalid contrib checkout: %w", err)
+		}
+		if _, err := runGit(ctx, filepath.Dir(checkoutPath), nil, "clone", opts.CloneURL, checkoutPath); err != nil {
+			return Worktree{}, err
+		}
+	}
+
+	if _, err := runGit(ctx, checkoutPath, nil, "fetch", "--prune", "origin"); err != nil {
+		return Worktree{}, err
+	}
+
+	run := runID()
+	number := opts.Number
+	if number <= 0 {
+		number = 0
+	}
+	worktreePath := filepath.Join(root, "fixes", safeRepo, strconv.Itoa(number)+"-"+run)
+	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+		return Worktree{}, fmt.Errorf("create contrib fix worktree parent: %w", err)
+	}
+	// Check out the existing head branch into a dedicated worktree so
+	// concurrent fix jobs do not stomp each other's working trees.
+	if _, err := runGit(ctx, checkoutPath, nil, "worktree", "add", worktreePath, "origin/"+opts.HeadRef); err != nil {
+		return Worktree{}, err
+	}
+	// Track the local branch back to origin/<HeadRef> so subsequent
+	// pushes target the right ref.
+	if _, err := runGit(ctx, worktreePath, nil, "checkout", "-B", opts.HeadRef, "origin/"+opts.HeadRef); err != nil {
+		return Worktree{}, err
+	}
+
+	return Worktree{
+		BasePath:     checkoutPath,
+		WorktreePath: worktreePath,
+		Branch:       opts.HeadRef,
+		BaseRef:      "origin/" + opts.HeadRef,
+	}, nil
+}
+
 func SafeRepoName(repoID string) string {
 	return strings.NewReplacer("/", "__", "\\", "__", ":", "_").Replace(repoID)
 }

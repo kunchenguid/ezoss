@@ -570,6 +570,198 @@ func fixJobForTest() db.FixJob {
 	return db.FixJob{ID: "fix-1", ItemID: "item-1", RecommendationID: "rec-1", OptionID: "opt-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, Title: "panic in parser", FixPrompt: "Fix it.", PRCreate: string(prcreator.ModeGH)}
 }
 
+func TestRunFixContributorNoMistakesLeavesWorktreeInPlace(t *testing.T) {
+	root := t.TempDir()
+	originalLoadGlobalConfig := loadGlobalConfig
+	originalPrepareContribWorktree := prepareContribWorktree
+	originalNewAgent := newAgent
+	originalLookPath := lookPath
+	originalRunFixGitCommand := runFixGitCommand
+	originalCreateFixPR := createFixPR
+	t.Cleanup(func() {
+		loadGlobalConfig = originalLoadGlobalConfig
+		prepareContribWorktree = originalPrepareContribWorktree
+		newAgent = originalNewAgent
+		lookPath = originalLookPath
+		runFixGitCommand = originalRunFixGitCommand
+		createFixPR = originalCreateFixPR
+	})
+
+	loadGlobalConfig = func(string) (*config.GlobalConfig, error) {
+		return &config.GlobalConfig{Agent: config.AgentCodex}, nil
+	}
+	prepareContribWorktree = func(_ context.Context, opts fixflow.ContribWorktreeOptions) (fixflow.Worktree, error) {
+		if opts.HeadRepo != "kun/widgets" || opts.HeadRef != "fix-race" || opts.CloneURL != "https://github.com/kun/widgets.git" {
+			t.Fatalf("ContribWorktreeOptions = %+v", opts)
+		}
+		return fixflow.Worktree{
+			BasePath:     filepath.Join(root, "investigations", "kun__widgets"),
+			WorktreePath: filepath.Join(root, "fixes", "kun__widgets", "321-run"),
+			Branch:       "fix-race",
+			BaseRef:      "origin/fix-race",
+		}, nil
+	}
+	lookPath = func(name string) (string, error) {
+		if name == "codex" {
+			return "/bin/codex", nil
+		}
+		return "", os.ErrNotExist
+	}
+	newAgent = func(name sharedtypes.AgentName, _ string) (triageAgent, error) {
+		return stubFixAgent{name: string(name), result: &agent.Result{Text: "ok"}}, nil
+	}
+	pushed := false
+	runFixGitCommand = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+		if reflect.DeepEqual(args, []string{"status", "--porcelain"}) {
+			return []byte("M file.go\n"), nil
+		}
+		if len(args) > 0 && args[0] == "rev-list" {
+			return []byte("1\n"), nil
+		}
+		if len(args) > 0 && args[0] == "push" {
+			pushed = true
+		}
+		return nil, nil
+	}
+	createFixPR = func(context.Context, prcreator.Mode, prcreator.CreateOptions, prcreator.CommandRunner) (prcreator.Created, error) {
+		t.Fatal("createFixPR must not be called for contributor PRs - the PR already exists")
+		return prcreator.Created{}, nil
+	}
+
+	database := openContribTestDB(t, contribItem{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Number: 321,
+		HeadRepo: "kun/widgets", HeadRef: "fix-race", HeadCloneURL: "https://github.com/kun/widgets.git",
+	})
+
+	job := db.FixJob{ID: "fix-1", ItemID: "upstream/widgets#321", RecommendationID: "rec-1", OptionID: "opt-1", RepoID: "upstream/widgets", ItemNumber: 321, ItemKind: sharedtypes.ItemKindPR, Title: "fix race", FixPrompt: "rebase", PRCreate: "auto"}
+
+	runner := cliFixRunner{root: root, cfg: &config.GlobalConfig{Agent: config.AgentCodex, Fixes: config.FixesConfig{ContribPush: config.ContribPushNoMistakes}}, db: database}
+	res, err := runner.RunFix(context.Background(), job, nil)
+	if err != nil {
+		t.Fatalf("RunFix error: %v", err)
+	}
+	if pushed {
+		t.Fatal("no-mistakes mode should not push")
+	}
+	if res.PRURL != "" {
+		t.Fatalf("PRURL = %q, want empty (no PR creation in contrib mode)", res.PRURL)
+	}
+	if res.Branch != "fix-race" {
+		t.Fatalf("Branch = %q, want fix-race", res.Branch)
+	}
+}
+
+func TestRunFixContributorAutoPushesToHeadBranch(t *testing.T) {
+	root := t.TempDir()
+	originalLoadGlobalConfig := loadGlobalConfig
+	originalPrepareContribWorktree := prepareContribWorktree
+	originalNewAgent := newAgent
+	originalLookPath := lookPath
+	originalRunFixGitCommand := runFixGitCommand
+	t.Cleanup(func() {
+		loadGlobalConfig = originalLoadGlobalConfig
+		prepareContribWorktree = originalPrepareContribWorktree
+		newAgent = originalNewAgent
+		lookPath = originalLookPath
+		runFixGitCommand = originalRunFixGitCommand
+	})
+
+	loadGlobalConfig = func(string) (*config.GlobalConfig, error) {
+		return &config.GlobalConfig{Agent: config.AgentCodex}, nil
+	}
+	prepareContribWorktree = func(context.Context, fixflow.ContribWorktreeOptions) (fixflow.Worktree, error) {
+		return fixflow.Worktree{WorktreePath: filepath.Join(root, "fixes", "kun__widgets", "321-run"), Branch: "fix-race", BaseRef: "origin/fix-race"}, nil
+	}
+	lookPath = func(string) (string, error) { return "/bin/codex", nil }
+	newAgent = func(sharedtypes.AgentName, string) (triageAgent, error) {
+		return stubFixAgent{name: "codex", result: &agent.Result{Text: "ok"}}, nil
+	}
+	var pushArgs []string
+	runFixGitCommand = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+		if reflect.DeepEqual(args, []string{"status", "--porcelain"}) {
+			return []byte("M file.go\n"), nil
+		}
+		if len(args) > 0 && args[0] == "rev-list" {
+			return []byte("1\n"), nil
+		}
+		if len(args) > 0 && args[0] == "push" {
+			pushArgs = append([]string(nil), args...)
+		}
+		return nil, nil
+	}
+
+	database := openContribTestDB(t, contribItem{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Number: 321,
+		HeadRepo: "kun/widgets", HeadRef: "fix-race", HeadCloneURL: "https://github.com/kun/widgets.git",
+	})
+
+	job := db.FixJob{ID: "fix-1", ItemID: "upstream/widgets#321", RecommendationID: "rec-1", OptionID: "opt-1", RepoID: "upstream/widgets", ItemNumber: 321, ItemKind: sharedtypes.ItemKindPR, FixPrompt: "rebase", PRCreate: "auto"}
+	runner := cliFixRunner{root: root, cfg: &config.GlobalConfig{Agent: config.AgentCodex, Fixes: config.FixesConfig{ContribPush: config.ContribPushAuto}}, db: database}
+
+	if _, err := runner.RunFix(context.Background(), job, nil); err != nil {
+		t.Fatalf("RunFix error: %v", err)
+	}
+	if len(pushArgs) == 0 {
+		t.Fatal("expected git push to be invoked in auto mode")
+	}
+	if pushArgs[0] != "push" || pushArgs[1] != "origin" || pushArgs[2] != "fix-race" {
+		t.Fatalf("push args = %#v, want push origin fix-race", pushArgs)
+	}
+}
+
+func TestRunFixContributorDisabledRefuses(t *testing.T) {
+	root := t.TempDir()
+	database := openContribTestDB(t, contribItem{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Number: 321,
+		HeadRepo: "kun/widgets", HeadRef: "fix-race", HeadCloneURL: "https://github.com/kun/widgets.git",
+	})
+	runner := cliFixRunner{root: root, cfg: &config.GlobalConfig{Fixes: config.FixesConfig{ContribPush: config.ContribPushDisabled}}, db: database}
+	job := db.FixJob{ID: "fix-1", ItemID: "upstream/widgets#321", RepoID: "upstream/widgets", ItemNumber: 321, ItemKind: sharedtypes.ItemKindPR, FixPrompt: "rebase", PRCreate: "auto"}
+	if _, err := runner.RunFix(context.Background(), job, nil); err == nil || !strings.Contains(err.Error(), "contrib push disabled") {
+		t.Fatalf("RunFix error = %v, want contrib push disabled", err)
+	}
+}
+
+type contribItem struct {
+	ID, RepoID                      string
+	Number                          int
+	HeadRepo, HeadRef, HeadCloneURL string
+}
+
+func openContribTestDB(t *testing.T, item contribItem) *db.DB {
+	t.Helper()
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.sqlite"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.UpsertRepo(db.Repo{ID: item.RepoID, Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("upsert repo: %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: item.ID, RepoID: item.RepoID, Kind: sharedtypes.ItemKindPR, Number: item.Number,
+		Role:         sharedtypes.RoleContributor,
+		State:        sharedtypes.ItemStateOpen,
+		HeadRepo:     item.HeadRepo,
+		HeadRef:      item.HeadRef,
+		HeadCloneURL: item.HeadCloneURL,
+	}); err != nil {
+		t.Fatalf("upsert item: %v", err)
+	}
+	return database
+}
+
+type stubFixAgent struct {
+	name   string
+	result *agent.Result
+}
+
+func (s stubFixAgent) Name() string { return s.name }
+func (s stubFixAgent) Run(context.Context, agent.RunOpts) (*agent.Result, error) {
+	return s.result, nil
+}
+func (s stubFixAgent) Close() error { return nil }
+
 func TestCreateFixPRWithFallbackDoesNotFallbackAfterNoMistakesPush(t *testing.T) {
 	originalResolvePRCreator := resolvePRCreator
 	originalCreateFixPR := createFixPR

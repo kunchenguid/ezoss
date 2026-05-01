@@ -39,8 +39,36 @@ const (
 	PRCreateDisabled   PRCreateMode = "disabled"
 )
 
+// ContribPushMode controls how ezoss pushes commits produced by a fix
+// job for a contributor PR. Maintainer fix jobs are gated by FixesConfig.PRCreate;
+// this is the parallel knob for "I'm a contributor on this repo, I just
+// want to push to the existing PR branch".
+//
+//   - auto:        push automatically.
+//   - no-mistakes: leave the worktree intact, do not push, and surface
+//     instructions so the maintainer can review and push by hand.
+//   - disabled:    fail the job before pushing (kill switch).
+type ContribPushMode string
+
+const (
+	ContribPushAuto       ContribPushMode = "auto"
+	ContribPushNoMistakes ContribPushMode = "no-mistakes"
+	ContribPushDisabled   ContribPushMode = "disabled"
+)
+
 type FixesConfig struct {
-	PRCreate PRCreateMode `yaml:"pr_create"`
+	PRCreate    PRCreateMode    `yaml:"pr_create"`
+	ContribPush ContribPushMode `yaml:"contrib_push"`
+}
+
+// ContribConfig controls the contributor-mode item source. When Enabled
+// is true the daemon runs `gh search prs/issues --author=@me` each cycle
+// and surfaces those items in the inbox alongside maintainer items.
+// IgnoreRepos suppresses repos by "owner/name" - useful for noisy
+// upstreams the user does not want in their inbox.
+type ContribConfig struct {
+	Enabled     bool     `yaml:"enabled"`
+	IgnoreRepos []string `yaml:"ignore_repos"`
 }
 
 type syncLabelsRaw struct {
@@ -58,6 +86,7 @@ type GlobalConfig struct {
 	Repos           []string
 	SyncLabels      SyncLabels
 	Fixes           FixesConfig
+	Contrib         ContribConfig
 }
 
 type globalConfigRaw struct {
@@ -69,6 +98,17 @@ type globalConfigRaw struct {
 	Repos           []string       `yaml:"repos"`
 	SyncLabels      *syncLabelsRaw `yaml:"sync_labels"`
 	Fixes           *FixesConfig   `yaml:"fixes"`
+	Contrib         *contribRaw    `yaml:"contrib"`
+}
+
+// contribRaw mirrors ContribConfig but uses a pointer for Enabled so we
+// can distinguish "absent" from "explicitly false". This matters now
+// that contrib defaults to enabled: a user setting `contrib: {ignore_repos: [...]}`
+// without naming Enabled must keep the default true rather than have
+// the absent bool zero-value silently disable the feature.
+type contribRaw struct {
+	Enabled     *bool    `yaml:"enabled"`
+	IgnoreRepos []string `yaml:"ignore_repos"`
 }
 
 type globalConfigFile struct {
@@ -79,6 +119,7 @@ type globalConfigFile struct {
 	MergeMethod     string         `yaml:"merge_method"`
 	Repos           []string       `yaml:"repos"`
 	Fixes           FixesConfig    `yaml:"fixes"`
+	Contrib         ContribConfig  `yaml:"contrib"`
 	SyncLabels      syncLabelsFile `yaml:"sync_labels"`
 }
 
@@ -100,6 +141,7 @@ type Config struct {
 	Repos           []string
 	SyncLabels      SyncLabels
 	Fixes           FixesConfig
+	Contrib         ContribConfig
 }
 
 const defaultMergeMethod = "merge"
@@ -145,6 +187,19 @@ func normalizePRCreateMode(value PRCreateMode) (PRCreateMode, error) {
 	}
 }
 
+func normalizeContribPushMode(value ContribPushMode) (ContribPushMode, error) {
+	mode := ContribPushMode(strings.ToLower(strings.TrimSpace(string(value))))
+	if mode == "" {
+		return ContribPushNoMistakes, nil
+	}
+	switch mode {
+	case ContribPushAuto, ContribPushNoMistakes, ContribPushDisabled:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid fixes.contrib_push %q: must be auto, no-mistakes, or disabled", value)
+	}
+}
+
 const defaultConfigYAML = `# ezoss global configuration
 
 # Agent to use for triage
@@ -164,9 +219,21 @@ ignore_older_than: 365d
 merge_method: merge
 
 # How ezoss should create fix PRs.
-# Options: auto, no-mistakes, gh, disabled
+# pr_create: how maintainer fix PRs are created (auto, no-mistakes, gh, disabled).
+# contrib_push: how contributor fix jobs push to the existing PR branch
+# (auto, no-mistakes, disabled). Default no-mistakes leaves the worktree
+# in place so the maintainer reviews and pushes manually.
 fixes:
   pr_create: auto
+  contrib_push: no-mistakes
+
+# Track issues you authored and PRs you opened in repos you don't maintain.
+# Each cycle the daemon runs gh search prs/issues --author=@me and
+# surfaces those items in the inbox alongside maintainer items.
+# Set enabled: false to opt out and only triage repos listed under repos:.
+contrib:
+  enabled: true
+  ignore_repos: []
 
 # Repositories to monitor
 repos: []
@@ -190,7 +257,8 @@ func defaultGlobalConfig() *GlobalConfig {
 		IgnoreOlderThan: 365 * 24 * time.Hour,
 		MergeMethod:     defaultMergeMethod,
 		SyncLabels:      defaultSyncLabels(),
-		Fixes:           FixesConfig{PRCreate: PRCreateAuto},
+		Fixes:           FixesConfig{PRCreate: PRCreateAuto, ContribPush: ContribPushNoMistakes},
+		Contrib:         ContribConfig{Enabled: true},
 	}
 }
 
@@ -259,6 +327,26 @@ func SaveGlobal(path string, cfg *GlobalConfig) error {
 		return err
 	}
 	file.Fixes.PRCreate = prCreate
+	contribPush, err := normalizeContribPushMode(file.Fixes.ContribPush)
+	if err != nil {
+		return err
+	}
+	file.Fixes.ContribPush = contribPush
+	// Treat a zero-value ContribConfig (the bool default + nil slice)
+	// as "the caller didn't configure contrib, give them the default".
+	// Without this, callers passing a bare &GlobalConfig{} would silently
+	// disable contributor mode in the persisted file.
+	if !cfg.Contrib.Enabled && len(cfg.Contrib.IgnoreRepos) == 0 {
+		file.Contrib = ContribConfig{
+			Enabled:     defaultCfg.Contrib.Enabled,
+			IgnoreRepos: nil,
+		}
+	} else {
+		file.Contrib = ContribConfig{
+			Enabled:     cfg.Contrib.Enabled,
+			IgnoreRepos: append([]string(nil), cfg.Contrib.IgnoreRepos...),
+		}
+	}
 
 	data, err := yaml.Marshal(&file)
 	if err != nil {
@@ -326,6 +414,17 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 			return nil, err
 		}
 		cfg.Fixes.PRCreate = prCreate
+		contribPush, err := normalizeContribPushMode(raw.Fixes.ContribPush)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Fixes.ContribPush = contribPush
+	}
+	if raw.Contrib != nil {
+		if raw.Contrib.Enabled != nil {
+			cfg.Contrib.Enabled = *raw.Contrib.Enabled
+		}
+		cfg.Contrib.IgnoreRepos = append([]string(nil), raw.Contrib.IgnoreRepos...)
 	}
 	if raw.Repos != nil {
 		cfg.Repos = append([]string(nil), raw.Repos...)
@@ -377,6 +476,10 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		Repos:           append([]string(nil), global.Repos...),
 		SyncLabels:      global.SyncLabels,
 		Fixes:           global.Fixes,
+		Contrib: ContribConfig{
+			Enabled:     global.Contrib.Enabled,
+			IgnoreRepos: append([]string(nil), global.Contrib.IgnoreRepos...),
+		},
 	}
 	if repo.Agent != "" {
 		cfg.Agent = repo.Agent

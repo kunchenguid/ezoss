@@ -360,6 +360,41 @@ func TestPromptRequiresAcknowledgementOption(t *testing.T) {
 	}
 }
 
+func TestPromptForRoleContributorOmitsMaintainerActions(t *testing.T) {
+	t.Parallel()
+
+	prompt := PromptForRole(RoleContributor, "https://github.com/upstream/widgets/pull/99", "", "")
+
+	for _, want := range []string{
+		"acting as a CONTRIBUTOR",
+		"Do NOT use 'merge' or 'request_changes'",
+		"existing PR branch",
+		"Allowed state_change values for contributor mode",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("contributor prompt missing %q", want)
+		}
+	}
+	for _, dontWant := range []string{
+		"You are acting as the MAINTAINER",
+	} {
+		if strings.Contains(prompt, dontWant) {
+			t.Fatalf("contributor prompt should not contain %q", dontWant)
+		}
+	}
+}
+
+func TestPromptForRoleMaintainerMatchesLegacyPrompt(t *testing.T) {
+	t.Parallel()
+
+	url := "https://github.com/acme/widgets/issues/42"
+	legacy := PromptWithRerunInstructions(url, "", "")
+	role := PromptForRole(RoleMaintainer, url, "", "")
+	if legacy != role {
+		t.Fatalf("PromptForRole(maintainer) drift vs PromptWithRerunInstructions:\nlegacy:\n%s\n\nrole:\n%s", legacy, role)
+	}
+}
+
 func TestPromptIncludesPRApprovalBeforeReviewGuidance(t *testing.T) {
 	t.Parallel()
 

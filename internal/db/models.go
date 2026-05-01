@@ -6,29 +6,44 @@ import (
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
 )
 
+type RepoSource string
+
+const (
+	RepoSourceConfig  RepoSource = "config"
+	RepoSourceContrib RepoSource = "contrib"
+)
+
 type Repo struct {
 	ID                   string
 	DefaultBranch        string
+	Source               RepoSource
 	LastPollAt           *time.Time
 	LastTriagedRefreshAt *time.Time
 	CreatedAt            int64
 }
 
 type Item struct {
-	ID          string
-	RepoID      string
-	Kind        sharedtypes.ItemKind
-	Number      int
-	Title       string
-	Author      string
-	State       sharedtypes.ItemState
-	IsDraft     bool
-	GHTriaged   bool
-	WaitingOn   sharedtypes.WaitingOn
-	LastEventAt *time.Time
-	StaleSince  *time.Time
-	CreatedAt   int64
-	UpdatedAt   int64
+	ID                 string
+	RepoID             string
+	Kind               sharedtypes.ItemKind
+	Role               sharedtypes.Role
+	Number             int
+	Title              string
+	Author             string
+	State              sharedtypes.ItemState
+	IsDraft            bool
+	GHTriaged          bool
+	WaitingOn          sharedtypes.WaitingOn
+	LastEventAt        *time.Time
+	StaleSince         *time.Time
+	LastSeenUpdatedAt  *time.Time
+	LastSeenCommentID  int64
+	LastSelfActivityAt *time.Time
+	HeadRepo           string
+	HeadRef            string
+	HeadCloneURL       string
+	CreatedAt          int64
+	UpdatedAt          int64
 }
 
 // Recommendation is one agent run on an item. The proposed actions live

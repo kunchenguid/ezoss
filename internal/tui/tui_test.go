@@ -2232,3 +2232,52 @@ func TestWaitForNotificationReturnsReloadMsg(t *testing.T) {
 type errReloadFailed struct{}
 
 func (errReloadFailed) Error() string { return "reload failed" }
+
+func TestRoleFilterCyclingNarrowsInbox(t *testing.T) {
+	entries := []Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Role: sharedtypes.RoleMaintainer, Title: "maintainer item", AgeLabel: "1m"},
+		{RecommendationID: "rec-2", RepoID: "upstream/widgets", Number: 99, Role: sharedtypes.RoleContributor, Title: "contributor PR", AgeLabel: "2m"},
+	}
+	m := NewModel(entries)
+	if got := len(m.entries); got != 2 {
+		t.Fatalf("initial entries = %d, want 2", got)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	mm := updated.(Model)
+	if mm.roleFilter != RoleFilterMaintainer {
+		t.Fatalf("after first F roleFilter = %v, want maintainer", mm.roleFilter)
+	}
+	if len(mm.entries) != 1 || mm.entries[0].Role != sharedtypes.RoleMaintainer {
+		t.Fatalf("maintainer filter did not narrow: %#v", mm.entries)
+	}
+
+	updated, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	mm = updated.(Model)
+	if mm.roleFilter != RoleFilterContributor {
+		t.Fatalf("after second F roleFilter = %v, want contributor", mm.roleFilter)
+	}
+	if len(mm.entries) != 1 || mm.entries[0].Role != sharedtypes.RoleContributor {
+		t.Fatalf("contributor filter did not narrow: %#v", mm.entries)
+	}
+
+	updated, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	mm = updated.(Model)
+	if mm.roleFilter != RoleFilterAll {
+		t.Fatalf("after third F roleFilter = %v, want all", mm.roleFilter)
+	}
+	if len(mm.entries) != 2 {
+		t.Fatalf("all filter did not restore: %#v", mm.entries)
+	}
+}
+
+func TestCardTitleShowsContribBadgeForContributorEntry(t *testing.T) {
+	contrib := Entry{RepoID: "upstream/widgets", Number: 99, Role: sharedtypes.RoleContributor, Kind: sharedtypes.ItemKindPR}
+	if got := cardTitle(contrib); !strings.Contains(got, "contrib") {
+		t.Fatalf("cardTitle() = %q, want to contain contrib", got)
+	}
+	maint := Entry{RepoID: "acme/widgets", Number: 1, Role: sharedtypes.RoleMaintainer, Kind: sharedtypes.ItemKindIssue}
+	if got := cardTitle(maint); strings.Contains(got, "contrib") {
+		t.Fatalf("cardTitle() = %q, must not include contrib for maintainer", got)
+	}
+}

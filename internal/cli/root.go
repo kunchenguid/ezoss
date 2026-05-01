@@ -102,6 +102,7 @@ var newApprovalExecutor = func() approvalExecutor {
 }
 var loadGlobalConfig = config.LoadGlobal
 var prepareFixWorktree = fixflow.PrepareWorktree
+var prepareContribWorktree = fixflow.PrepareContribWorktree
 var resolvePRCreator = prcreator.Resolve
 var createFixPR = prcreator.Create
 var runFixGitCommand = runGitCommand
@@ -194,6 +195,9 @@ type itemFetcher interface {
 type daemonTriageLister interface {
 	ListNeedingTriage(ctx context.Context, repo string) ([]ghclient.Item, error)
 	ListTriaged(ctx context.Context, repo string, sinceUpdated time.Time) ([]ghclient.Item, error)
+	SearchAuthoredOpenPRs(ctx context.Context) ([]ghclient.Item, error)
+	SearchAuthoredOpenIssues(ctx context.Context) ([]ghclient.Item, error)
+	ListOwnedRepos(ctx context.Context, visibility ghclient.RepoVisibility) ([]string, error)
 }
 
 type triageAgent interface {
@@ -607,9 +611,14 @@ func fixPRBody(entry tui.Entry) string {
 type cliFixRunner struct {
 	root string
 	cfg  *config.GlobalConfig
+	db   *db.DB
 }
 
 func (r cliFixRunner) RunFix(ctx context.Context, job db.FixJob, progress func(db.FixJobUpdate) error) (*daemon.FixResult, error) {
+	role, headRepo, headRef, headCloneURL := r.lookupContribInfo(job)
+	if role == sharedtypes.RoleContributor {
+		return r.runContribFix(ctx, job, progress, headRepo, headRef, headCloneURL)
+	}
 	entry := tui.Entry{RecommendationID: job.RecommendationID, OptionID: job.OptionID, RepoID: job.RepoID, Number: job.ItemNumber, Kind: job.ItemKind, Title: job.Title, FixPrompt: job.FixPrompt}
 	if progress != nil {
 		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhasePreparingWorktree, Message: "preparing worktree"})
@@ -689,6 +698,108 @@ func shouldFallbackFromNoMistakes(resolution prcreator.Resolution, err error) bo
 		return false
 	}
 	return !prcreator.IsNoMistakesDetectionError(err)
+}
+
+// lookupContribInfo reads the item from the local DB to learn whether
+// the fix job is for a contributor PR (i.e. a PR ezoss did not open and
+// where we can only push to the existing head branch). Returns role
+// maintainer if the DB is unavailable or the item is missing - the
+// runner then takes the legacy path that creates a new branch + PR
+// against the upstream repo.
+func (r cliFixRunner) lookupContribInfo(job db.FixJob) (sharedtypes.Role, string, string, string) {
+	if r.db == nil {
+		return sharedtypes.RoleMaintainer, "", "", ""
+	}
+	item, err := r.db.GetItem(job.ItemID)
+	if err != nil || item == nil {
+		return sharedtypes.RoleMaintainer, "", "", ""
+	}
+	role := item.Role
+	if role == "" {
+		role = sharedtypes.RoleMaintainer
+	}
+	return role, item.HeadRepo, item.HeadRef, item.HeadCloneURL
+}
+
+// runContribFix pushes commits produced by the agent to the existing
+// PR branch on the head repo (typically a fork). It does not create a
+// new PR - that already exists. The push is gated by
+// fixes.contrib_push: auto pushes immediately, no-mistakes leaves the
+// worktree intact and returns instructions, disabled fails before
+// running the agent.
+func (r cliFixRunner) runContribFix(ctx context.Context, job db.FixJob, progress func(db.FixJobUpdate) error, headRepo, headRef, headCloneURL string) (*daemon.FixResult, error) {
+	pushMode := config.ContribPushNoMistakes
+	if r.cfg != nil && r.cfg.Fixes.ContribPush != "" {
+		pushMode = r.cfg.Fixes.ContribPush
+	}
+	if pushMode == config.ContribPushDisabled {
+		return nil, fmt.Errorf("contrib push disabled: refusing to run contributor fix job for %s#%d (set fixes.contrib_push to auto or no-mistakes to enable)", job.RepoID, job.ItemNumber)
+	}
+	if strings.TrimSpace(headRef) == "" || strings.TrimSpace(headCloneURL) == "" {
+		return nil, fmt.Errorf("contrib fix requires head ref and clone URL on item %s (PR head metadata missing - rerun the contributor sweep)", job.ItemID)
+	}
+	if progress != nil {
+		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhasePreparingWorktree, Message: "preparing contributor worktree"})
+	}
+	worktree, err := prepareContribWorktree(ctx, fixflow.ContribWorktreeOptions{
+		Root: r.root, HeadRepo: headRepo, HeadRef: headRef, CloneURL: headCloneURL, Number: job.ItemNumber,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prepare contrib worktree: %w", err)
+	}
+	cfg, err := loadFixRunConfig(r.cfg, worktree.WorktreePath)
+	if err != nil {
+		return nil, err
+	}
+	agentName := cfg.Agent
+	if agentName == "" {
+		agentName = config.AgentAuto
+	}
+	resolvedAgent, bin, err := agent.Resolve(agentName, lookPath)
+	if err != nil {
+		return nil, err
+	}
+	if progress != nil {
+		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhaseRunningAgent, Agent: resolvedAgent, Branch: worktree.Branch, WorktreePath: worktree.WorktreePath, Message: "running agent (contributor)"})
+	}
+	agentRunner, err := newAgent(resolvedAgent, bin)
+	if err != nil {
+		return nil, err
+	}
+	defer agentRunner.Close()
+	result, err := agentRunner.Run(ctx, agent.RunOpts{Prompt: promptWithFixWorktree(job.FixPrompt, worktree.WorktreePath), CWD: worktree.WorktreePath})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("agent returned no result")
+	}
+	if progress != nil {
+		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhaseCommitting, Message: "committing changes"})
+	}
+	if _, err := commitFixWorktreeChanges(ctx, worktree.WorktreePath, fmt.Sprintf("fix: %s#%d", job.RepoID, job.ItemNumber)); err != nil {
+		return nil, err
+	}
+	if err := ensureFixBranchHasCommit(ctx, worktree.WorktreePath, worktree.BaseRef); err != nil {
+		return nil, err
+	}
+	if pushMode == config.ContribPushNoMistakes {
+		return &daemon.FixResult{
+			Branch:       worktree.Branch,
+			WorktreePath: worktree.WorktreePath,
+			WaitingForPR: false,
+		}, nil
+	}
+	if progress != nil {
+		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhasePushing, Message: "pushing branch to PR head"})
+	}
+	if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "push", "origin", worktree.Branch); err != nil {
+		return nil, fmt.Errorf("push contrib branch %s: %w", worktree.Branch, err)
+	}
+	return &daemon.FixResult{
+		Branch:       worktree.Branch,
+		WorktreePath: worktree.WorktreePath,
+	}, nil
 }
 
 func (r cliFixRunner) DetectPR(ctx context.Context, job db.FixJob) (string, error) {
@@ -784,7 +895,16 @@ func newDaemonRunCmd() *cobra.Command {
 			}
 
 			syncState := daemon.NewSyncState(cfg.PollInterval)
-			poller := daemon.Poller{DB: database, GitHub: newDaemonTriageLister(), StaleThreshold: cfg.StaleThreshold, IgnoreOlderThan: cfg.IgnoreOlderThan, Hooks: syncState.Hooks(), Logger: daemonLogger}
+			poller := daemon.Poller{
+				DB:                 database,
+				GitHub:             newDaemonTriageLister(),
+				StaleThreshold:     cfg.StaleThreshold,
+				IgnoreOlderThan:    cfg.IgnoreOlderThan,
+				Hooks:              syncState.Hooks(),
+				Logger:             daemonLogger,
+				ContribEnabled:     cfg.Contrib.Enabled,
+				ContribIgnoreRepos: append([]string(nil), cfg.Contrib.IgnoreRepos...),
+			}
 			if useMock {
 				poller = daemon.Poller{
 					DB:                 database,
@@ -795,6 +915,8 @@ func newDaemonRunCmd() *cobra.Command {
 					IgnoreOlderThan:    cfg.IgnoreOlderThan,
 					Hooks:              syncState.Hooks(),
 					Logger:             daemonLogger,
+					ContribEnabled:     cfg.Contrib.Enabled,
+					ContribIgnoreRepos: append([]string(nil), cfg.Contrib.IgnoreRepos...),
 				}
 			} else {
 				triageCfg, err := loadDaemonTriageConfig(p.Root(), cfg)
@@ -806,7 +928,7 @@ func newDaemonRunCmd() *cobra.Command {
 					return fmt.Errorf("create triage runner: %w", err)
 				}
 				poller.Triage = runner
-				poller.Fix = cliFixRunner{root: p.Root(), cfg: cfg}
+				poller.Fix = cliFixRunner{root: p.Root(), cfg: cfg, db: database}
 				poller.AgentsInstructions = readAgentsInstructions(p.Root())
 			}
 
@@ -1095,13 +1217,22 @@ func loadInboxEntries() ([]tui.Entry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("recommendation token totals for %s: %w", rec.ItemID, err)
 		}
+		role := item.Role
+		if role == "" {
+			role = sharedtypes.RoleMaintainer
+		}
+		// A contributor item lives in a repo we don't maintain - it
+		// shouldn't be flagged as unconfigured even if it isn't in
+		// cfg.Repos.
+		unconfigured := !isConfigured && role != sharedtypes.RoleContributor
 		entry := tui.Entry{
 			RecommendationID:  rec.ID,
 			RepoID:            item.RepoID,
 			Number:            item.Number,
 			Kind:              item.Kind,
+			Role:              role,
 			Author:            item.Author,
-			Unconfigured:      !isConfigured,
+			Unconfigured:      unconfigured,
 			Title:             item.Title,
 			URL:               githubItemURL(item.RepoID, item.Kind, item.Number),
 			TokensIn:          totals.TokensIn,
@@ -2403,6 +2534,9 @@ type statusData struct {
 	daemonPID         int
 	pending           int
 	configuredPending int
+	contribPending    int
+	contribEnabled    bool
+	contribRepos      int
 	unconfigured      int
 	repos             []string
 	sync              *ipc.SyncStatusResult // nil when daemon is stopped or IPC failed
@@ -2426,9 +2560,10 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 	}
 
 	data := statusData{
-		daemonState: daemonStatus.State,
-		daemonPID:   daemonStatus.PID,
-		repos:       append([]string(nil), cfg.Repos...),
+		daemonState:    daemonStatus.State,
+		daemonPID:      daemonStatus.PID,
+		repos:          append([]string(nil), cfg.Repos...),
+		contribEnabled: cfg.Contrib.Enabled,
 	}
 
 	configured := make(map[string]struct{}, len(cfg.Repos))
@@ -2451,6 +2586,7 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 		if err != nil {
 			return statusData{}, fmt.Errorf("list pending recommendations: %w", err)
 		}
+		contribReposSeen := make(map[string]struct{})
 		for _, rec := range recommendations {
 			item, err := database.GetItem(rec.ItemID)
 			if err != nil {
@@ -2459,12 +2595,22 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 			if item == nil {
 				return statusData{}, fmt.Errorf("get item %s: not found", rec.ItemID)
 			}
+			role := item.Role
+			if role == "" {
+				role = sharedtypes.RoleMaintainer
+			}
+			if role == sharedtypes.RoleContributor {
+				data.contribPending++
+				contribReposSeen[item.RepoID] = struct{}{}
+				continue
+			}
 			if _, ok := configured[item.RepoID]; !ok {
 				data.unconfigured++
 				continue
 			}
 			data.configuredPending++
 		}
+		data.contribRepos = len(contribReposSeen)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return statusData{}, fmt.Errorf("stat db: %w", err)
 	}
@@ -2497,17 +2643,45 @@ func fetchDaemonSyncStatus(socketPath string) (*ipc.SyncStatusResult, error) {
 	return &result, nil
 }
 
+func repoNounFor(n int) string {
+	if n == 1 {
+		return "repo"
+	}
+	return "repos"
+}
+
+func recommendationNounFor(n int) string {
+	if n == 1 {
+		return "recommendation"
+	}
+	return "recommendations"
+}
+
 // renderShortStatus is the legacy `pending=N repos=N daemon=...` one-liner,
-// preserved for scripts.
+// preserved for scripts. Always emits the per-source breakdown when any
+// of the non-maintainer buckets are non-zero so scripts don't have to
+// special-case the simple all-maintainer setup.
 func renderShortStatus(d statusData) string {
-	line := fmt.Sprintf("pending=%d repos=%d daemon=%s", d.pending, len(d.repos), d.daemonState)
-	if d.configuredPending > 0 && d.unconfigured > 0 {
-		line = fmt.Sprintf("pending=%d configured=%d repos=%d daemon=%s", d.pending, d.configuredPending, len(d.repos), d.daemonState)
+	parts := []string{fmt.Sprintf("pending=%d", d.pending)}
+	hasBreakdown := d.contribPending > 0 || d.unconfigured > 0
+	if hasBreakdown {
+		parts = append(parts, fmt.Sprintf("maintainer=%d", d.configuredPending))
+		if d.contribPending > 0 {
+			parts = append(parts, fmt.Sprintf("contrib=%d", d.contribPending))
+		}
+		if d.unconfigured > 0 {
+			parts = append(parts, fmt.Sprintf("unconfigured=%d", d.unconfigured))
+		}
 	}
-	if d.unconfigured > 0 {
-		line += fmt.Sprintf(" unconfigured=%d", d.unconfigured)
+	parts = append(parts, fmt.Sprintf("repos=%d", len(d.repos)))
+	if d.contribRepos > 0 {
+		parts = append(parts, fmt.Sprintf("contrib_repos=%d", d.contribRepos))
 	}
-	return line
+	parts = append(parts, fmt.Sprintf("daemon=%s", d.daemonState))
+	if !d.contribEnabled {
+		parts = append(parts, "contrib_mode=off")
+	}
+	return strings.Join(parts, " ")
 }
 
 // renderRichStatus is the default human-readable output. It folds in the
@@ -2521,20 +2695,30 @@ func renderRichStatus(d statusData, now time.Time) string {
 		fmt.Fprintln(&b, "daemon: stopped")
 	}
 
-	repoCount := len(d.repos)
-	pendingNoun := "recommendations"
-	if d.pending == 1 {
-		pendingNoun = "recommendation"
+	// One row per item source: maintainer (configured repos), contributor
+	// (auto-discovered via gh search --author=@me), and unconfigured
+	// (legacy stragglers from a repo the user removed from config).
+	// Each row is self-contained so the user doesn't need to do
+	// arithmetic across rows to figure out where things live.
+	const labelWidth = 13
+	maintainerRepos := len(d.repos)
+	fmt.Fprintf(&b, "%-*s %d %s  •  %d pending %s\n",
+		labelWidth, "maintainer:", maintainerRepos, repoNounFor(maintainerRepos),
+		d.configuredPending, recommendationNounFor(d.configuredPending))
+
+	if d.contribEnabled {
+		fmt.Fprintf(&b, "%-*s %d %s  •  %d pending %s\n",
+			labelWidth, "contributor:", d.contribRepos, repoNounFor(d.contribRepos),
+			d.contribPending, recommendationNounFor(d.contribPending))
+	} else {
+		fmt.Fprintf(&b, "%-*s disabled (set contrib.enabled: true to track issues/PRs you authored in repos you don't maintain)\n",
+			labelWidth, "contributor:")
 	}
-	summary := fmt.Sprintf("repos: %d configured  •  %d pending %s", repoCount, d.pending, pendingNoun)
+
 	if d.unconfigured > 0 {
-		fromNoun := "repos"
-		if d.unconfigured == 1 {
-			fromNoun = "repo"
-		}
-		summary += fmt.Sprintf(" (%d from unconfigured %s)", d.unconfigured, fromNoun)
+		fmt.Fprintf(&b, "%-*s %d pending %s (in repos no longer in your config)\n",
+			labelWidth, "unconfigured:", d.unconfigured, recommendationNounFor(d.unconfigured))
 	}
-	fmt.Fprintln(&b, summary)
 
 	switch {
 	case d.daemonState != daemon.StateRunning:

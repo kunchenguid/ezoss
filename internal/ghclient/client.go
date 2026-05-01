@@ -54,20 +54,44 @@ type Item struct {
 	Labels    []string
 	URL       string
 	UpdatedAt time.Time
+
+	// HeadRepo / HeadRef / HeadCloneURL describe the PR's source branch.
+	// Populated only by SearchAuthoredOpenPRs (and similar contributor
+	// queries) since they only matter when ezoss is acting as a
+	// contributor and needs to push to the existing PR branch on a fork.
+	HeadRepo     string
+	HeadRef      string
+	HeadCloneURL string
 }
 
 type commandRunner struct{}
 
 type listItem struct {
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	Author    *ghAuthor `json:"author"`
-	State     string    `json:"state"`
-	IsDraft   bool      `json:"isDraft"`
-	Labels    []ghLabel `json:"labels"`
-	URL       string    `json:"url"`
-	UpdatedAt string    `json:"updatedAt"`
+	Number         int           `json:"number"`
+	Title          string        `json:"title"`
+	Body           string        `json:"body"`
+	Author         *ghAuthor     `json:"author"`
+	State          string        `json:"state"`
+	IsDraft        bool          `json:"isDraft"`
+	Labels         []ghLabel     `json:"labels"`
+	URL            string        `json:"url"`
+	UpdatedAt      string        `json:"updatedAt"`
+	Repository     *ghRepository `json:"repository"`
+	HeadRepository *ghRepository `json:"headRepository"`
+	HeadRefName    string        `json:"headRefName"`
+	HeadOwner      *ghLogin      `json:"headRepositoryOwner"`
+}
+
+type ghRepository struct {
+	Name          string   `json:"name"`
+	NameWithOwner string   `json:"nameWithOwner"`
+	URL           string   `json:"url"`
+	Owner         *ghLogin `json:"owner"`
+}
+
+type ghLogin struct {
+	Login string `json:"login"`
+	ID    string `json:"id"`
 }
 
 type ghAuthor struct {
@@ -385,6 +409,118 @@ const (
 	RepoVisibilityAll    RepoVisibility = ""
 	RepoVisibilityPublic RepoVisibility = "public"
 )
+
+// SearchAuthoredOpenPRs returns open PRs where the authenticated user is
+// the author across every repo on GitHub, including repos ezoss does
+// not maintain. Used to drive the contributor sweep. The returned Items
+// have Repo set to "owner/name" (the upstream repo the PR targets) and
+// HeadRepo / HeadRef / HeadCloneURL populated from the PR's head branch
+// so the contributor fix runner can push to the right place. Drafts and
+// WIP-titled PRs are filtered out, mirroring ListNeedingTriage.
+func (c *Client) SearchAuthoredOpenPRs(ctx context.Context) ([]Item, error) {
+	stdout, err := c.runner.Run(ctx,
+		"search", "prs",
+		"--author", "@me",
+		"--state", "open",
+		"--limit", "100",
+		"--json", "number,title,body,author,state,isDraft,labels,updatedAt,url,repository,headRepository,headRepositoryOwner,headRefName",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh search prs --author=@me: %w", classifyError(err))
+	}
+	var raw []listItem
+	if err := json.Unmarshal(stdout, &raw); err != nil {
+		return nil, fmt.Errorf("decode gh search prs: %w", err)
+	}
+	items := make([]Item, 0, len(raw))
+	for _, entry := range raw {
+		repo := repoFromEntry(entry)
+		if repo == "" {
+			continue
+		}
+		item, err := toItem(repo, sharedtypes.ItemKindPR, entry)
+		if err != nil {
+			return nil, fmt.Errorf("parse search prs entry #%d: %w", entry.Number, err)
+		}
+		if item.IsDraft || isWIPTitle(item.Title) {
+			continue
+		}
+		populateHeadRefs(&item, entry)
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+// SearchAuthoredOpenIssues returns open issues authored by the
+// authenticated user across every repo on GitHub. Like
+// SearchAuthoredOpenPRs, it powers the contributor sweep so issues filed
+// in repos ezoss does not maintain still surface in the inbox.
+func (c *Client) SearchAuthoredOpenIssues(ctx context.Context) ([]Item, error) {
+	stdout, err := c.runner.Run(ctx,
+		"search", "issues",
+		"--author", "@me",
+		"--state", "open",
+		"--limit", "100",
+		"--json", "number,title,body,author,state,labels,updatedAt,url,repository",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh search issues --author=@me: %w", classifyError(err))
+	}
+	var raw []listItem
+	if err := json.Unmarshal(stdout, &raw); err != nil {
+		return nil, fmt.Errorf("decode gh search issues: %w", err)
+	}
+	items := make([]Item, 0, len(raw))
+	for _, entry := range raw {
+		repo := repoFromEntry(entry)
+		if repo == "" {
+			continue
+		}
+		item, err := toItem(repo, sharedtypes.ItemKindIssue, entry)
+		if err != nil {
+			return nil, fmt.Errorf("parse search issues entry #%d: %w", entry.Number, err)
+		}
+		if isWIPTitle(item.Title) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func repoFromEntry(entry listItem) string {
+	if entry.Repository == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(entry.Repository.NameWithOwner); name != "" {
+		return name
+	}
+	if entry.Repository.Owner != nil && entry.Repository.Name != "" {
+		return entry.Repository.Owner.Login + "/" + entry.Repository.Name
+	}
+	return ""
+}
+
+func populateHeadRefs(item *Item, entry listItem) {
+	item.HeadRef = strings.TrimSpace(entry.HeadRefName)
+	if entry.HeadRepository != nil {
+		if name := strings.TrimSpace(entry.HeadRepository.NameWithOwner); name != "" {
+			item.HeadRepo = name
+		} else if entry.HeadOwner != nil && entry.HeadRepository.Name != "" {
+			item.HeadRepo = entry.HeadOwner.Login + "/" + entry.HeadRepository.Name
+		}
+		if url := strings.TrimSpace(entry.HeadRepository.URL); url != "" {
+			item.HeadCloneURL = url + ".git"
+		}
+	}
+	if item.HeadRepo == "" && entry.HeadOwner != nil && strings.TrimSpace(entry.HeadOwner.Login) != "" && strings.TrimSpace(entry.HeadRefName) != "" {
+		// Some payloads carry headRepositoryOwner without headRepository
+		// (e.g. when the head fork has been deleted). Synthesize an
+		// owner-qualified head repo only when we have enough info; the
+		// runner will surface a clear error if push fails.
+		item.HeadRepo = entry.HeadOwner.Login
+	}
+}
 
 // ListOwnedRepos returns repos owned by the authenticated user as
 // "owner/name" strings. Pass RepoVisibilityPublic to filter to public

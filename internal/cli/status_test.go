@@ -199,8 +199,8 @@ func TestStatusCommandPrintsUnconfiguredPendingRecommendationCount(t *testing.T)
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if got := buf.String(); got != "pending=1 repos=0 daemon=stopped unconfigured=1\n" {
-		t.Fatalf("output = %q, want %q", got, "pending=1 repos=0 daemon=stopped unconfigured=1\n")
+	if got, want := buf.String(), "pending=1 maintainer=0 unconfigured=1 repos=0 daemon=stopped\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 
@@ -293,8 +293,8 @@ func TestStatusCommandPrintsConfiguredAndUnconfiguredPendingRecommendationCounts
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if got := buf.String(); got != "pending=2 configured=1 repos=1 daemon=stopped unconfigured=1\n" {
-		t.Fatalf("output = %q, want %q", got, "pending=2 configured=1 repos=1 daemon=stopped unconfigured=1\n")
+	if got, want := buf.String(), "pending=2 maintainer=1 unconfigured=1 repos=1 daemon=stopped\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 
@@ -702,8 +702,9 @@ func TestRenderRichStatusDaemonStoppedShowsHint(t *testing.T) {
 	got := renderRichStatus(d, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	for _, want := range []string{
 		"daemon: stopped",
-		"repos: 1 configured",
-		"0 pending recommendations",
+		"maintainer:",
+		"1 repo",
+		"0 pending",
 		"sync:   not running",
 		"ezoss daemon start",
 	} {
@@ -713,17 +714,94 @@ func TestRenderRichStatusDaemonStoppedShowsHint(t *testing.T) {
 	}
 }
 
-func TestRenderRichStatusUnconfiguredCountInSummary(t *testing.T) {
+func TestRenderShortStatusContribCountAndModeOff(t *testing.T) {
+	// Enabled, with contrib pending: line carries contrib=N but no
+	// contrib_mode marker (default-on, nothing to call out).
+	on := renderShortStatus(statusData{
+		daemonState:    daemon.StateRunning,
+		repos:          []string{"acme/widgets"},
+		pending:        2,
+		contribPending: 1,
+		contribEnabled: true,
+	})
+	if !strings.Contains(on, "contrib=1") {
+		t.Fatalf("contrib enabled output missing contrib=1: %q", on)
+	}
+	if strings.Contains(on, "contrib_mode") {
+		t.Fatalf("contrib enabled output should not advertise contrib_mode: %q", on)
+	}
+	// Disabled: marker appears so scripts can detect opt-out.
+	off := renderShortStatus(statusData{
+		daemonState:    daemon.StateRunning,
+		repos:          []string{"acme/widgets"},
+		contribEnabled: false,
+	})
+	if !strings.Contains(off, "contrib_mode=off") {
+		t.Fatalf("contrib disabled output missing contrib_mode=off: %q", off)
+	}
+}
+
+func TestRenderRichStatusPerSourceRows(t *testing.T) {
+	enabled := renderRichStatus(statusData{
+		daemonState:       daemon.StateRunning,
+		daemonPID:         42,
+		repos:             []string{"acme/widgets"},
+		pending:           3,
+		configuredPending: 1,
+		contribPending:    2,
+		contribRepos:      1,
+		contribEnabled:    true,
+	}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	// Each source gets its own self-contained row. The user shouldn't
+	// have to subtract across rows to find the maintainer count.
+	for _, want := range []string{
+		"maintainer:",
+		"1 repo  •  1 pending recommendation",
+		"contributor:",
+		"1 repo  •  2 pending recommendations",
+	} {
+		if !strings.Contains(enabled, want) {
+			t.Fatalf("enabled rich status missing %q:\n%s", want, enabled)
+		}
+	}
+	if strings.Contains(enabled, "contrib: enabled") {
+		t.Fatalf("standalone 'contrib: enabled' line should be gone:\n%s", enabled)
+	}
+
+	disabled := renderRichStatus(statusData{
+		daemonState:    daemon.StateRunning,
+		daemonPID:      42,
+		repos:          []string{"acme/widgets"},
+		contribEnabled: false,
+	}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	if !strings.Contains(disabled, "contributor:  disabled") {
+		t.Fatalf("disabled rich status missing 'contributor:  disabled':\n%s", disabled)
+	}
+}
+
+func TestRenderRichStatusUnconfiguredOnItsOwnRow(t *testing.T) {
 	d := statusData{
 		daemonState:       daemon.StateStopped,
 		repos:             []string{"acme/widgets"},
 		pending:           3,
 		configuredPending: 2,
 		unconfigured:      1,
+		contribEnabled:    true,
 	}
 	got := renderRichStatus(d, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	if !strings.Contains(got, "3 pending recommendations (1 from unconfigured repo)") {
-		t.Fatalf("render = %q, missing unconfigured suffix", got)
+	if !strings.Contains(got, "unconfigured: 1 pending recommendation ") {
+		t.Fatalf("render missing unconfigured row:\n%s", got)
+	}
+	if strings.Contains(got, "from unconfigured repo") {
+		t.Fatalf("legacy '(N from unconfigured repo)' suffix should be gone:\n%s", got)
+	}
+	// Unconfigured row must not appear when count is zero (default
+	// case); the default config without removed repos shouldn't
+	// surface noise.
+	dz := d
+	dz.unconfigured = 0
+	if strings.Contains(renderRichStatus(dz, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)), "unconfigured:") {
+		t.Fatal("unconfigured row should not appear when count is 0")
 	}
 }
 

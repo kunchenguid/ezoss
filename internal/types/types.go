@@ -31,6 +31,37 @@ const (
 	ItemKindPR    ItemKind = "pr"
 )
 
+// Role records whether ezoss is acting as the maintainer of the repo
+// (handles writes such as labels, comments, merges) or as a contributor
+// in a repo it does not own (read-only on the repo, push only to the PR
+// head branch). Items default to maintainer for backwards compatibility.
+type Role string
+
+const (
+	RoleMaintainer  Role = "maintainer"
+	RoleContributor Role = "contributor"
+)
+
+func (r *Role) Scan(src any) error {
+	return scanStringEnum("Role", src, (*string)(r))
+}
+
+func (r Role) Value() (driver.Value, error) {
+	if r == "" {
+		return string(RoleMaintainer), nil
+	}
+	return string(r), nil
+}
+
+func (r Role) IsValid() bool {
+	switch r {
+	case RoleMaintainer, RoleContributor:
+		return true
+	default:
+		return false
+	}
+}
+
 func (k *ItemKind) Scan(src any) error {
 	return scanStringEnum("ItemKind", src, (*string)(k))
 }
