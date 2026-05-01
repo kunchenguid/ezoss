@@ -109,6 +109,7 @@ var newDraftEditor = func() draftEditor {
 	return envDraftEditor{}
 }
 var copyTextToClipboard = copyTextWithSystemClipboard
+var openURLInBrowser = openURLWithSystemBrowser
 var runTUI = openInboxTUI
 var runTUIWithActions = tui.RunWithActions
 var ipcSubscribe = ipc.Subscribe
@@ -1211,6 +1212,9 @@ func inboxModelActions(notify <-chan struct{}) tui.ModelActions {
 			_, err := startDaemonFixJob(context.Background(), entry)
 			return err
 		},
+		OpenURL: func(entry tui.Entry) error {
+			return openURLInBrowser(context.Background(), entry.URL)
+		},
 		Reload: loadInboxEntries,
 	}
 }
@@ -1976,6 +1980,40 @@ func clipboardCommands() [][]string {
 		return [][]string{{"clip"}}
 	case "linux":
 		return [][]string{{"wl-copy"}, {"xclip", "-selection", "clipboard"}, {"xsel", "--clipboard", "--input"}}
+	default:
+		return nil
+	}
+}
+
+func openURLWithSystemBrowser(ctx context.Context, url string) error {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return errors.New("url is empty")
+	}
+	commands := openURLCommands(url)
+	if len(commands) == 0 {
+		return errors.New("no browser-open command configured for this platform")
+	}
+	var lastErr error
+	for _, command := range commands {
+		cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+		if err := cmd.Run(); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("open url: %w", lastErr)
+}
+
+func openURLCommands(url string) [][]string {
+	switch runtime.GOOS {
+	case "darwin":
+		return [][]string{{"open", url}}
+	case "windows":
+		return [][]string{{"rundll32", "url.dll,FileProtocolHandler", url}}
+	case "linux":
+		return [][]string{{"xdg-open", url}}
 	default:
 		return nil
 	}

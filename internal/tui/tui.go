@@ -189,6 +189,7 @@ type ModelActions struct {
 	Rerun         func([]Entry, string) ([]Entry, error)
 	CopyPrompt    func(Entry) error
 	Fix           func(Entry) error
+	OpenURL       func(Entry) error
 }
 
 type Model struct {
@@ -206,6 +207,7 @@ type Model struct {
 	rerun      func([]Entry, string) ([]Entry, error)
 	copyPrompt func(Entry) error
 	fix        func(Entry) error
+	openURL    func(Entry) error
 	showHelp   bool
 	quitting   bool
 	rerunInput *rerunInputState
@@ -317,6 +319,13 @@ type copyPromptFinishedMsg struct {
 	err    error
 }
 
+type openURLFinishedMsg struct {
+	repoID string
+	number int
+	url    string
+	err    error
+}
+
 // spinnerTickMsg drives spinner animation while at least one action is
 // pending. The handler advances the frame and reschedules itself; once
 // pendingActions is empty, ticks stop.
@@ -342,6 +351,7 @@ func NewModelWithActions(entries []Entry, actions ModelActions) Model {
 	m.rerun = actions.Rerun
 	m.copyPrompt = actions.CopyPrompt
 	m.fix = actions.Fix
+	m.openURL = actions.OpenURL
 	return m
 }
 
@@ -410,6 +420,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("copied prompt for %s #%d", msg.repoID, msg.number)})
 		return m, nil
+	case openURLFinishedMsg:
+		if msg.err != nil {
+			m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("open url failed: %v", msg.err)})
+			return m, nil
+		}
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("opened %s #%d", msg.repoID, msg.number)})
+		return m, nil
 	case spinnerTickMsg:
 		m.spinnerFrame++
 		if len(m.pendingActions) > 0 {
@@ -456,6 +473,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "c":
 			if cmd := m.copyPromptCurrent(); cmd != nil {
+				return m, cmd
+			}
+		case "o":
+			if cmd := m.openURLCurrent(); cmd != nil {
 				return m, cmd
 			}
 		case "f":
@@ -651,6 +672,30 @@ func (m *Model) copyPromptCurrent() tea.Cmd {
 			repoID: entry.RepoID,
 			number: entry.Number,
 			err:    copyPrompt(entry),
+		}
+	}
+}
+
+func (m *Model) openURLCurrent() tea.Cmd {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	entry := m.entries[m.cursor]
+	if strings.TrimSpace(entry.URL) == "" {
+		m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("no URL for %s #%d", entry.RepoID, entry.Number)})
+		return nil
+	}
+	if m.openURL == nil {
+		m.pushLog(logEntry{state: logStateInfo, note: "open url unavailable"})
+		return nil
+	}
+	openURL := m.openURL
+	return func() tea.Msg {
+		return openURLFinishedMsg{
+			repoID: entry.RepoID,
+			number: entry.Number,
+			url:    entry.URL,
+			err:    openURL(entry),
 		}
 	}
 }
@@ -1222,7 +1267,7 @@ func formatLogElapsed(d time.Duration) string {
 // spinner+verb so it's obvious that pressing another action key right now is
 // a no-op until the action completes.
 func renderDecideBar(maxWidth int, optionCount int) string {
-	hints := []string{"a approve", "f fix", "e edit", "m mark triaged", "r rerun", "c copy"}
+	hints := []string{"a approve", "f fix", "e edit", "m mark triaged", "r rerun", "c copy", "o open"}
 	if optionCount > 1 {
 		hints = append(hints, "tab switch option")
 	}
@@ -1326,6 +1371,7 @@ func (m Model) renderHelp() string {
 		"f                  queue a coding-agent fix job for active option",
 		"e                  edit active option's draft, action, or labels",
 		"m                  mark triaged without approving",
+		"o                  open the current item's GitHub page in a browser",
 		"r                  rerun the agent on the current item with instructions",
 		"?                  toggle this help",
 		"q                  quit",

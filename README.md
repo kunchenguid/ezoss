@@ -61,7 +61,7 @@ $ ezoss list
 kunchenguid/ezoss#42	issue	comment	low	panic in sync loop
 
 $ ezoss
-# opens the mock inbox TUI for approve, copy prompt, edit, mark triaged, and rerun
+# opens the mock inbox TUI for approve, copy prompt, edit, mark triaged, open, and rerun
 ```
 
 ## Install
@@ -98,6 +98,8 @@ Every GitHub release also includes platform archives plus `checksums.txt` if you
 Live triage requires `gh auth login`, `git`, one supported agent backend, and a writable state directory under `~/.ezoss`.
 
 Copying fix prompts from the inbox also needs a platform clipboard command: `pbcopy` on macOS, `clip` on Windows, or `wl-copy`, `xclip`, or `xsel` on Linux.
+
+Opening items from the inbox needs a platform browser command: `open` on macOS, `rundll32` on Windows, or `xdg-open` on Linux.
 
 Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistakes`.
 
@@ -157,6 +159,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | `f`     | Fix          | Queue a daemon-backed coding-agent fix job when a fix prompt exists        |
 | `e`     | Edit         | Open the draft in your editor before approval                             |
 | `m`     | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation                |
+| `o`     | Open         | Open the current item's GitHub page in your browser                       |
 | `r`     | Rerun        | Re-triage the item and replace the active recommendation                  |
 | `j`/`k` | Navigate     | Move between inbox items; use arrow keys to scroll overflowing text        |
 

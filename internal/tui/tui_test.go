@@ -139,7 +139,7 @@ func TestModelViewShowsSwitchOptionHintWhenMultipleOptions(t *testing.T) {
 		},
 	}})
 	m.entries[0].SyncActive()
-	m.width = 100
+	m.width = 120
 
 	view := stripANSI(m.View())
 	if !strings.Contains(view, "tab switch option") {
@@ -712,6 +712,73 @@ func TestModelFixRunsCurrentEntryPrompt(t *testing.T) {
 	}
 	if !strings.Contains(stripANSI(next.View()), "queued fix acme/widgets #42") {
 		t.Fatalf("View() missing fix status in:\n%s", next.View())
+	}
+}
+
+func TestModelOpenURLOpensCurrentEntryURL(t *testing.T) {
+	var opened []string
+	m := NewModelWithActions([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "panic in parser",
+		URL:              "https://github.com/acme/widgets/issues/42",
+	}}, ModelActions{
+		OpenURL: func(entry Entry) error {
+			opened = append(opened, entry.URL)
+			return nil
+		},
+	})
+	m.width = 100
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd == nil {
+		t.Fatal("expected open url command")
+	}
+	if len(opened) != 0 {
+		t.Fatalf("open url ran synchronously, opened = %#v", opened)
+	}
+	updated, _ = updated.(Model).Update(cmd())
+	next := updated.(Model)
+	if len(opened) != 1 || opened[0] != "https://github.com/acme/widgets/issues/42" {
+		t.Fatalf("opened = %#v", opened)
+	}
+	if len(next.entries) != 1 {
+		t.Fatalf("opening url should keep entry in inbox, got %d entries", len(next.entries))
+	}
+	if !strings.Contains(stripANSI(next.View()), "opened acme/widgets #42") {
+		t.Fatalf("View() missing open status in:\n%s", next.View())
+	}
+}
+
+func TestModelOpenURLLogsWhenNoURL(t *testing.T) {
+	var opened int
+	m := NewModelWithActions([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "panic in parser",
+		URL:              "",
+	}}, ModelActions{
+		OpenURL: func(entry Entry) error {
+			opened++
+			return nil
+		},
+	})
+	m.width = 100
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if cmd != nil {
+		t.Fatalf("expected no command when entry has no URL, got %v", cmd)
+	}
+	if opened != 0 {
+		t.Fatalf("open url should not have been called, got %d", opened)
+	}
+	next := updated.(Model)
+	if !strings.Contains(stripANSI(next.View()), "no URL for acme/widgets #42") {
+		t.Fatalf("View() missing missing-url status in:\n%s", next.View())
 	}
 }
 
