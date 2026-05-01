@@ -1052,6 +1052,49 @@ func TestModelQueueRailShowsPendingGlyphForInProgressFixJob(t *testing.T) {
 	}
 }
 
+func TestModelQueueRailCursorHighlightUsesUninterruptedBackground(t *testing.T) {
+	m := NewModel([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "selected-title",
+	}, {
+		RecommendationID: "rec-2",
+		RepoID:           "acme/widgets",
+		Number:           43,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "other-title",
+	}})
+	m.width = 120
+	m.height = 30
+	m.cursor = 0
+
+	line := ""
+	for _, candidate := range strings.Split(m.renderQueueRail(44, 12), "\n") {
+		if strings.Contains(candidate, "selected-title") {
+			line = candidate
+			break
+		}
+	}
+	if line == "" {
+		t.Fatal("selected row not found")
+	}
+	if w := lipgloss.Width(line); w != 44 {
+		t.Fatalf("highlighted row width = %d, want 44:\n%s", w, line)
+	}
+
+	titleIdx := strings.Index(line, "selected-title")
+	beforeTitle := line[:titleIdx]
+	backgroundIdx := strings.LastIndex(beforeTitle, "44m")
+	if backgroundIdx < 0 {
+		t.Fatalf("selected row should start a blue background before the title:\n%q", line)
+	}
+	if resetIdx := strings.LastIndex(beforeTitle, "\x1b[0m"); resetIdx > backgroundIdx {
+		t.Fatalf("selected row background should not be reset before the title:\n%q", line)
+	}
+}
+
 // TestModelLogPanelWrapsLongFailureMessage pins the regression where a
 // long error message (e.g. a wrapped gh CLI/GraphQL error) overflowed
 // past the activity panel's right border, hiding the rest of the message.
