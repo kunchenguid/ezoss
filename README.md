@@ -41,7 +41,7 @@ You stay in control. The agent drafts. The maintainer decides.
 </p>
 
 - **Private by default** - agent rationale, draft comments, fix prompts, and token usage stay in local SQLite until you approve an action.
-- **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.
+- **GitHub-native maintainer state** - maintainer triage visibility is mirrored back to GitHub with `ezoss/*` labels, while contributor items stay local.
 - **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/fix-PR/copy-prompt/edit/rerun flows already work end to end.
 - **PRs can pause before review** - PRs without prior agreement can be routed into a maintainer approval step before code review.
 
@@ -215,6 +215,7 @@ If daemon detection misses the PR, the inbox keeps the job in `waiting_for_pr` a
 
 `fixes.contrib_push` controls contributor PR fixes and supports `auto`, `no-mistakes`, or `disabled`.
 Contributor fixes update the existing PR head branch instead of creating a new PR.
+Contributor fix jobs apply to authored PRs, not authored issues.
 `auto` pushes commits back to that branch.
 `no-mistakes` is the default and leaves the worktree for manual review and push.
 `disabled` refuses contributor fix jobs before pushing.
@@ -242,7 +243,7 @@ sync_labels:
   stale: true
 ```
 
-`ezoss/triaged` is always managed automatically because it is the public source-of-truth signal for whether an item has already been handled.
+For maintainer items, `ezoss/triaged` is always managed automatically because it is the public source-of-truth signal for whether an item has already been handled.
 
 Precedence is simple:
 
