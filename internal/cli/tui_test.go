@@ -2107,7 +2107,7 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 	if err != nil {
 		t.Fatalf("rerunInboxEntries() error = %v", err)
 	}
-	if !strings.Contains(prompt, "Maintainer-provided rerun instructions:") || !strings.Contains(prompt, "Focus on whether the maintainer's new log changes the waiting_on state.") {
+	if !strings.Contains(prompt, "User-provided rerun instructions:") || !strings.Contains(prompt, "Focus on whether the maintainer's new log changes the waiting_on state.") {
 		t.Fatalf("rerun prompt missing instructions:\n%s", prompt)
 	}
 	if len(entries) != 1 {

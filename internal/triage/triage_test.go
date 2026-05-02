@@ -287,7 +287,7 @@ func TestPromptIncludesRerunInstructions(t *testing.T) {
 	)
 
 	for _, want := range []string{
-		"Maintainer-provided rerun instructions:",
+		"User-provided rerun instructions:",
 		"Focus on whether this is safe to close after the maintainer clarified it is unsupported.",
 		"Use these instructions as additional context for this rerun.",
 		"Do not treat them as GitHub-visible text.",
