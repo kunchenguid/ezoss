@@ -252,7 +252,7 @@ func NewRootCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:           "ezoss",
-		Short:         "Maintainer-side issue and PR triage orchestrator",
+		Short:         "Maintainer-side issue and PR triage orchestrator with contributor mode",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -410,7 +410,7 @@ func newFixCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&prCreate, "pr-create", "", "PR creation mode override (auto, no-mistakes, gh, disabled)")
+	cmd.Flags().StringVar(&prCreate, "pr-create", "", "Maintainer PR creation mode override (auto, no-mistakes, gh, disabled)")
 	cmd.Flags().BoolVar(&prepareOnly, "prepare-only", false, "Only prepare the isolated worktree without running the coding agent")
 	return cmd
 }

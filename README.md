@@ -109,8 +109,8 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 ┌────────────────────┐
 │ GitHub issue / PR  │
 └─────────┬──────────┘
-          │ poll for items without
-          │ ezoss/triaged
+          │ maintainer label poll
+          │ + contributor search
           ▼
 ┌────────────────────┐
 │ daemon poller      │
@@ -141,13 +141,14 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 └────────────────────┘
 ```
 
-- **GitHub is the visible truth** - `ezoss/triaged` is the public signal that an item has already been handled.
+- **GitHub is the maintainer truth** - for configured repos, `ezoss/triaged` is the public signal that an item has already been handled.
+  Contributor items are found with `gh search prs/issues --author=@me`, do not edit upstream labels, and are tracked with local sweep metadata.
 - **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
   Rerun instructions are stored there too.
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
 - **Contributor mode is automatic** - by default, the daemon searches for open issues and PRs authored by you in repos you do not maintain, marks them with a `contrib` badge in the inbox, and uses contributor-safe actions instead of maintainer actions.
 - **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and either create maintainer draft PRs according to `fixes.pr_create` or prepare contributor PR branch updates according to `fixes.contrib_push`.
-- **Polling is deliberate** - v1 avoids webhook complexity and just re-triages when the GitHub label disappears.
+- **Polling is deliberate** - v1 avoids webhook complexity; maintainer items re-triage when the GitHub label disappears, and contributor items re-triage from local self-activity tracking.
 - **Approval is explicit** - comments, labels, closes, merges, and fix PRs only happen after you approve an inbox action, queue a fix job, or run `ezoss fix`.
 - **PR review is gated when needed** - unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.
 
@@ -160,7 +161,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | `f`     | Fix          | Queue a daemon-backed coding-agent fix job when a fix prompt exists        |
 | `F`     | Filter       | Cycle role filter through all, maintainer, and contributor items           |
 | `e`     | Edit         | Open the draft in your editor before approval                             |
-| `m`     | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation                |
+| `m`     | Mark triaged | Stamp `ezoss/triaged` for maintainer items, or mark contributor items handled locally |
 | `o`     | Open         | Open the current item's GitHub page in your browser                       |
 | `r`     | Rerun        | Re-triage the item and replace the active recommendation                  |
 | `j`/`k` | Navigate     | Move between inbox items; use arrow keys to scroll overflowing text        |
@@ -189,7 +190,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | `daemon start`           | `--mock`            | Use canned GitHub items and recommendations                            |
 | `status`                 | `--short`           | Print a one-line key=value summary                                     |
 | `triage <repo>#<number>` | `--mock`            | Triage against canned fixtures instead of live GitHub + agent backends |
-| `fix <repo>#<number>`    | `--pr-create`       | Override fix PR creation: `auto`, `no-mistakes`, `gh`, or `disabled`   |
+| `fix <repo>#<number>`    | `--pr-create`       | Override maintainer fix PR creation: `auto`, `no-mistakes`, `gh`, or `disabled` |
 | `fix <repo>#<number>`    | `--prepare-only`    | Prepare the isolated worktree without running the coding agent         |
 | `init`                   | `--repo`            | Repository to monitor, repeatable                                      |
 | `init`                   | `--agent`           | Agent backend: `auto`, `claude`, `codex`, `rovodev`, `opencode`        |
