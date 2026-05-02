@@ -1617,6 +1617,14 @@ func persistApprovedEntry(database *db.DB, entry tui.Entry, finalLabels []string
 // the labels and retry. Comment posting goes with the state change since
 // they're combined into single calls for close and request_changes.
 func executeApproval(ctx context.Context, executor approvalExecutor, entry tui.Entry, addLabels []string, removeLabels []string, mergeMethod string) error {
+	if entry.Role == sharedtypes.RoleContributor {
+		switch entry.StateChange {
+		case sharedtypes.StateChangeNone, sharedtypes.StateChangeClose, sharedtypes.StateChangeFixRequired, "":
+		default:
+			return fmt.Errorf("approve %s#%d: contributor entries do not support state_change %q", entry.RepoID, entry.Number, entry.StateChange)
+		}
+	}
+
 	if len(addLabels) > 0 || len(removeLabels) > 0 {
 		if err := executor.EditLabels(ctx, entry.RepoID, entry.Kind, entry.Number, addLabels, removeLabels); err != nil {
 			return fmt.Errorf("mark %s#%d triaged: %w", entry.RepoID, entry.Number, err)

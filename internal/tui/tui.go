@@ -661,6 +661,7 @@ func (m *Model) editCurrent() tea.Cmd {
 	}
 	updated.CommitEdits()
 	m.entries[m.cursor] = updated
+	m.replaceAllEntry(updated)
 	m.cardScroll = 0
 	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
 	return nil
@@ -838,6 +839,10 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 	}
 	switch msg.verb {
 	case "approve", "mark":
+		if idx < 0 {
+			m.removeAllEntriesByID(map[string]struct{}{msg.recommendationID: {}})
+			return
+		}
 		if idx >= 0 {
 			m.removeEntries([]int{idx})
 		}
@@ -893,7 +898,7 @@ func (m *Model) applyEditFinished(msg editFinishedMsg) {
 			break
 		}
 	}
-	if idx < 0 {
+	if idx < 0 && !m.hasAllEntry(msg.recommendationID) {
 		m.pushLog(logEntry{state: logStateInfo, note: "edit aborted: entry no longer in queue"})
 		return
 	}
@@ -903,8 +908,11 @@ func (m *Model) applyEditFinished(msg editFinishedMsg) {
 		return
 	}
 	updated.CommitEdits()
-	m.entries[idx] = updated
-	if idx == m.cursor {
+	if idx >= 0 {
+		m.entries[idx] = updated
+	}
+	m.replaceAllEntry(updated)
+	if idx >= 0 && idx == m.cursor {
 		m.cardScroll = 0
 	}
 	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
@@ -2571,6 +2579,18 @@ func (m *Model) replaceAllEntry(updated Entry) {
 			return
 		}
 	}
+}
+
+func (m *Model) hasAllEntry(recommendationID string) bool {
+	if recommendationID == "" {
+		return false
+	}
+	for i := range m.allEntries {
+		if m.allEntries[i].RecommendationID == recommendationID {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) currentRecommendationID() string {

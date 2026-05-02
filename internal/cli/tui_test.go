@@ -3450,6 +3450,29 @@ func TestApproveInboxEntriesContributorSkipsLabelEdits(t *testing.T) {
 	}
 }
 
+func TestExecuteApprovalRejectsContributorMaintainerActions(t *testing.T) {
+	executor := &stubApprovalExecutor{}
+	for _, stateChange := range []sharedtypes.StateChange{
+		sharedtypes.StateChangeRequestChanges,
+		sharedtypes.StateChangeMerge,
+	} {
+		err := executeApproval(context.Background(), executor, tui.Entry{
+			RepoID:       "upstream/widgets",
+			Number:       12,
+			Kind:         sharedtypes.ItemKindPR,
+			Role:         sharedtypes.RoleContributor,
+			DraftComment: "please update this",
+			StateChange:  stateChange,
+		}, nil, nil, "squash")
+		if err == nil {
+			t.Fatalf("executeApproval(%q) error = nil, want rejection", stateChange)
+		}
+	}
+	if len(executor.reviews) != 0 || len(executor.merges) != 0 || len(executor.comments) != 0 {
+		t.Fatalf("executor calls reviews:%#v merges:%#v comments:%#v, want none", executor.reviews, executor.merges, executor.comments)
+	}
+}
+
 func TestDismissInboxEntriesContributorSkipsLabelEdits(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths
