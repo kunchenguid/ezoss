@@ -460,6 +460,15 @@ func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []strin
 			record.StaleSince = existing.StaleSince
 			record.LastSelfActivityAt = existing.LastSelfActivityAt
 			record.LastSeenCommentID = existing.LastSeenCommentID
+			if record.HeadRepo == "" {
+				record.HeadRepo = existing.HeadRepo
+			}
+			if record.HeadRef == "" {
+				record.HeadRef = existing.HeadRef
+			}
+			if record.HeadCloneURL == "" {
+				record.HeadCloneURL = existing.HeadCloneURL
+			}
 			// Only bump LastEventAt when GitHub reports a newer
 			// updated_at than we already saw. This is the watermark
 			// that drives ListItemsNeedingTriage.
