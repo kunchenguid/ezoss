@@ -25,7 +25,7 @@ type Recommendation struct {
 // the agent has no reliable view of which labels exist in the target repo, and any
 // proposed but missing label used to break the atomic gh edit --add-label
 // call. Lifecycle labels in the ezoss/* namespace are managed
-// automatically downstream.
+// automatically downstream for maintainer items.
 type RecommendationOption struct {
 	StateChange  sharedtypes.StateChange `json:"state_change"`
 	Rationale    string                  `json:"rationale"`
@@ -64,7 +64,7 @@ var schema = json.RawMessage(`{
 					},
 					"fix_prompt": {
 						"type": "string",
-						"description": "Prompt the maintainer can copy into a coding agent when the item is a legitimate actionable issue or PR. Include the original GitHub URL and enough investigation context for an agent to start fixing. Prefer readable multi-line Markdown with short sections. Empty string means no coding-agent handoff is recommended."
+						"description": "Prompt the user can hand to a coding agent when the item is legitimate and actionable. For contributor mode, fix handoffs apply to authored PRs, not authored issues. Include the original GitHub URL and enough investigation context for an agent to start fixing. Prefer readable multi-line Markdown with short sections. Empty string means no coding-agent handoff is recommended."
 					},
 					"confidence": {
 						"type": "string",

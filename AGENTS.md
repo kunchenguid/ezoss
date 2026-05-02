@@ -70,12 +70,12 @@ Fix work comes from `fix.start` in the TUI path or from `ezoss fix <owner/repo#n
 `cliFixRunner` prepares an isolated worktree under `~/.ezoss/fixes`, resolves repo/global agent config, runs the selected agent with the option's `fix_prompt`, and commits produced changes.
 Maintainer fixes create a draft PR or leave the branch in the worktree according to `fixes.pr_create`; contributor PR fixes check out the existing head branch and either push to it or leave the worktree for manual review according to `fixes.contrib_push`.
 
-Maintainer-provided TUI rerun instructions are threaded through `Poller.RerunInstructions`, appended to the agent prompt as private context, and stored on the refreshed `recommendations` row. Guided reruns use `InsertRecommendationReplacingActiveBefore` so an older in-flight triage result cannot supersede a newer active recommendation.
+User-provided TUI rerun instructions are threaded through `Poller.RerunInstructions`, appended to the agent prompt as private context, and stored on the refreshed `recommendations` row. Guided reruns use `InsertRecommendationReplacingActiveBefore` so an older in-flight triage result cannot supersede a newer active recommendation.
 
 The agent's contract is the `Recommendation` JSON schema in `internal/triage/triage.go` - a list of self-contained `RecommendationOption` entries, each with `state_change` (`none|close|merge|request_changes|fix_required`), `rationale`, `waiting_on`, `draft_comment`, `fix_prompt`, `confidence`, optional `followups`.
 Use `fix_required` plus `fix_prompt` when the item should be handed to a coding agent before it can be closed.
 The agent is asked to return 2-3 options when there are multiple reasonable next steps.
-**User-namespaced labels are deliberately not part of the agent contract** (the agent has no reliable view of which labels exist in the repo); only the `ezoss/*` namespace is managed automatically.
+**User-namespaced labels are deliberately not part of the agent contract** (the agent has no reliable view of which labels exist in the repo); only the `ezoss/*` namespace is managed automatically for maintainer items.
 
 For PRs without prior issue-level agreement on the approach, the maintainer prompt instructs the agent to set `state_change: none` and ask in `draft_comment` rather than going straight to `request_changes` or `merge`.
 Contributor prompts restrict in-bounds actions to `none`, `close`, and `fix_required`; contributor fixes target the existing PR branch rather than opening a new PR.
@@ -95,7 +95,7 @@ Schema lives in `internal/db/schema.go`. Migrations are **additive only**, appli
 - `recommendations` (one per agent run on an item, including optional rerun instructions) with legacy single-row fields kept for backfill
 - `recommendation_options` (the agent's proposed alternatives, ordered by `position`)
 - `fix_jobs` (daemon-backed coding-agent runs for selected fix prompts, including branch, worktree path, PR URL, status, phase, and errors)
-- `approvals` (the maintainer's decision; `option_id` points at the chosen option)
+- `approvals` (the user's selected option; `option_id` points at the chosen option)
 
 `items` also stores contributor sweep metadata: `last_seen_updated_at`, `last_seen_comment_id`, `last_self_activity_at`, and PR head fields `head_repo`, `head_ref`, `head_clone_url`.
 These drive contributor re-triage, pruning, and pushes to existing contributor PR branches.

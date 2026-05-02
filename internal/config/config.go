@@ -46,7 +46,7 @@ const (
 //
 //   - auto:        push automatically.
 //   - no-mistakes: leave the worktree intact, do not push, and surface
-//     instructions so the maintainer can review and push by hand.
+//     instructions so the user can review and push by hand.
 //   - disabled:    fail the job before pushing (kill switch).
 type ContribPushMode string
 
