@@ -555,7 +555,7 @@ func populateHeadRefs(item *Item, entry listItem) {
 func (c *Client) ListOwnedRepos(ctx context.Context, visibility RepoVisibility) ([]string, error) {
 	args := []string{
 		"repo", "list",
-		"--limit", "200",
+		"--limit", "1000",
 		"--no-archived",
 		"--source",
 		"--json", "nameWithOwner",

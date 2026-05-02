@@ -1554,6 +1554,7 @@ func rerunInboxEntries(ctx context.Context, entries []tui.Entry, instructions st
 		if err != nil {
 			return nil, err
 		}
+		poller.PreserveExistingItemRole = entry.Role == sharedtypes.RoleContributor
 		poller.RerunInstructions = instructions
 		if err := daemon.PollOnce(ctx, poller, []string{entry.RepoID}); err != nil {
 			return nil, fmt.Errorf("rerun item %s#%d: %w", entry.RepoID, entry.Number, err)
@@ -1924,6 +1925,8 @@ func markInboxItemTriaged(database *db.DB, entry tui.Entry) error {
 		return nil
 	}
 	item.GHTriaged = true
+	now := time.Now().UTC()
+	item.LastSelfActivityAt = &now
 	// Reflect the state change we just executed on GitHub locally so the
 	// next poll doesn't see a stale state=open record (the triaged-refresh
 	// query is bounded by repo poll cadence, so local state would otherwise

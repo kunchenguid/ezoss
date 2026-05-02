@@ -805,6 +805,28 @@ func TestListOwnedReposReturnsNameWithOwnerStrings(t *testing.T) {
 	}
 }
 
+func TestListOwnedReposRaisesLimitForOwnershipFilter(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[]`}}}
+
+	client := New(runner)
+	if _, err := client.ListOwnedRepos(context.Background(), RepoVisibilityAll); err != nil {
+		t.Fatalf("ListOwnedRepos returned error: %v", err)
+	}
+
+	args := runner.calls[0].args
+	for i, arg := range args {
+		if arg == "--limit" && i+1 < len(args) {
+			if args[i+1] != "1000" {
+				t.Fatalf("--limit = %q, want 1000", args[i+1])
+			}
+			return
+		}
+	}
+	t.Fatalf("missing --limit flag: %v", args)
+}
+
 func TestListOwnedReposPassesVisibilityPublicFilter(t *testing.T) {
 	t.Parallel()
 

@@ -110,7 +110,8 @@ type Poller struct {
 	// ContribIgnoreRepos is the list of "owner/name" strings to drop
 	// from contributor sweep results before upsert. Useful for noisy
 	// upstreams the user does not want in their inbox.
-	ContribIgnoreRepos []string
+	ContribIgnoreRepos       []string
+	PreserveExistingItemRole bool
 }
 
 func (p Poller) log() *slog.Logger {
@@ -216,7 +217,11 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 		return fmt.Errorf("poll repo %s: list needing triage: %w", repoID, err)
 	}
 
-	if err := poller.DB.UpsertRepo(db.Repo{ID: repoID, LastPollAt: &polledAt}); err != nil {
+	repoSource := db.RepoSourceConfig
+	if poller.PreserveExistingItemRole {
+		repoSource = db.RepoSourceContrib
+	}
+	if err := poller.DB.UpsertRepo(db.Repo{ID: repoID, Source: repoSource, LastPollAt: &polledAt}); err != nil {
 		return fmt.Errorf("poll repo %s: upsert repo: %w", repoID, err)
 	}
 
@@ -244,12 +249,14 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 			return fmt.Errorf("poll repo %s: get item %d: %w", repoID, item.Number, err)
 		}
 		if existing != nil {
-			itemRecord.Role = existing.Role
+			if poller.PreserveExistingItemRole {
+				itemRecord.Role = existing.Role
+				itemRecord.HeadRepo = existing.HeadRepo
+				itemRecord.HeadRef = existing.HeadRef
+				itemRecord.HeadCloneURL = existing.HeadCloneURL
+			}
 			itemRecord.WaitingOn = existing.WaitingOn
 			itemRecord.StaleSince = existing.StaleSince
-			itemRecord.HeadRepo = existing.HeadRepo
-			itemRecord.HeadRef = existing.HeadRef
-			itemRecord.HeadCloneURL = existing.HeadCloneURL
 		}
 		if err := poller.DB.UpsertItem(itemRecord); err != nil {
 			return fmt.Errorf("poll repo %s: upsert item %d: %w", repoID, item.Number, err)
@@ -459,7 +466,11 @@ func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []strin
 			if existing.LastSeenUpdatedAt != nil {
 				prev = existing.LastSeenUpdatedAt.UTC()
 			}
-			if updated.After(prev) {
+			selfActivity := time.Time{}
+			if existing.LastSelfActivityAt != nil {
+				selfActivity = existing.LastSelfActivityAt.UTC()
+			}
+			if updated.After(prev) && (selfActivity.IsZero() || updated.After(selfActivity)) {
 				record.GHTriaged = false
 				record.LastEventAt = timePtr(updated)
 			} else {

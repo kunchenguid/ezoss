@@ -95,7 +95,7 @@ func TestPollOnceUpsertsRepoAndItems(t *testing.T) {
 	}
 }
 
-func TestSyncRepoDataPreservesContributorMetadata(t *testing.T) {
+func TestSyncRepoDataConvertsContributorItemToMaintainer(t *testing.T) {
 	t.Parallel()
 
 	database := openTestDB(t)
@@ -129,6 +129,59 @@ func TestSyncRepoDataPreservesContributorMetadata(t *testing.T) {
 	}}
 
 	if err := syncRepoData(context.Background(), Poller{DB: database, GitHub: client}, "upstream/widgets", time.Now()); err != nil {
+		t.Fatalf("syncRepoData() error = %v", err)
+	}
+
+	got, err := database.GetItem("upstream/widgets#12")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetItem() = nil")
+	}
+	if got.Role != sharedtypes.RoleMaintainer {
+		t.Fatalf("role = %q, want maintainer", got.Role)
+	}
+	if got.HeadRepo != "" || got.HeadRef != "" || got.HeadCloneURL != "" {
+		t.Fatalf("head metadata = %q/%q clone %q, want cleared", got.HeadRepo, got.HeadRef, got.HeadCloneURL)
+	}
+}
+
+func TestSyncRepoDataPreservesContributorMetadataForExplicitRerun(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:           "upstream/widgets#12",
+		RepoID:       "upstream/widgets",
+		Kind:         sharedtypes.ItemKindPR,
+		Number:       12,
+		Role:         sharedtypes.RoleContributor,
+		HeadRepo:     "kun/widgets",
+		HeadRef:      "fix-race",
+		HeadCloneURL: "https://github.com/kun/widgets.git",
+		State:        sharedtypes.ItemStateOpen,
+		WaitingOn:    sharedtypes.WaitingOnMaintainer,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	client := &stubTriageClient{itemsByRepo: map[string][]ghclient.Item{
+		"upstream/widgets": {{
+			Repo:      "upstream/widgets",
+			Kind:      sharedtypes.ItemKindPR,
+			Number:    12,
+			Title:     "Fix race",
+			Author:    "kun",
+			State:     sharedtypes.ItemStateOpen,
+			UpdatedAt: time.Unix(1713511200, 0).UTC(),
+		}},
+	}}
+
+	poller := Poller{DB: database, GitHub: client, PreserveExistingItemRole: true}
+	if err := syncRepoData(context.Background(), poller, "upstream/widgets", time.Now()); err != nil {
 		t.Fatalf("syncRepoData() error = %v", err)
 	}
 
@@ -1953,6 +2006,56 @@ func TestPollOnceContribSweepPreservesLocalTriagedUntilNewActivity(t *testing.T)
 	}
 	if item == nil || item.GHTriaged {
 		t.Fatalf("GHTriaged after new contributor activity = %#v, want false", item)
+	}
+}
+
+func TestPollOnceContribSweepPreservesLocalTriagedForSelfActivity(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Date(2026, time.April, 30, 12, 0, 0, 0, time.UTC)
+	selfActivity := now.Add(5 * time.Minute)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:                 "upstream/widgets#321",
+		RepoID:             "upstream/widgets",
+		Kind:               sharedtypes.ItemKindPR,
+		Role:               sharedtypes.RoleContributor,
+		Number:             321,
+		Title:              "fix race",
+		State:              sharedtypes.ItemStateOpen,
+		GHTriaged:          true,
+		LastSeenUpdatedAt:  timePtr(now),
+		LastEventAt:        timePtr(now),
+		LastSelfActivityAt: timePtr(selfActivity),
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{authoredPRs: []ghclient.Item{{
+		Repo:      "upstream/widgets",
+		Kind:      sharedtypes.ItemKindPR,
+		Number:    321,
+		Title:     "fix race",
+		State:     sharedtypes.ItemStateOpen,
+		UpdatedAt: selfActivity,
+	}}}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+
+	item, err := database.GetItem("upstream/widgets#321")
+	if err != nil {
+		t.Fatalf("GetItem error: %v", err)
+	}
+	if item == nil || !item.GHTriaged {
+		t.Fatalf("GHTriaged after self contributor activity = %#v, want true", item)
+	}
+	if item.LastSeenUpdatedAt == nil || !item.LastSeenUpdatedAt.Equal(selfActivity) {
+		t.Fatalf("LastSeenUpdatedAt = %v, want %v", item.LastSeenUpdatedAt, selfActivity)
 	}
 }
 
