@@ -425,7 +425,7 @@ func (c *Client) SearchAuthoredOpenPRs(ctx context.Context) ([]Item, error) {
 		"--author", "@me",
 		"--state", "open",
 		"--limit", strconv.Itoa(authoredSearchLimit),
-		"--json", "number,title,body,author,state,isDraft,labels,updatedAt,url,repository,headRepository,headRepositoryOwner,headRefName",
+		"--json", "number,title,body,author,state,isDraft,labels,updatedAt,url,repository",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh search prs --author=@me: %w", classifyError(err))
@@ -450,10 +450,29 @@ func (c *Client) SearchAuthoredOpenPRs(ctx context.Context) ([]Item, error) {
 		if item.IsDraft || isWIPTitle(item.Title) {
 			continue
 		}
-		populateHeadRefs(&item, entry)
+		if err := c.populatePRHeadRefs(ctx, &item); err != nil {
+			return nil, fmt.Errorf("load authored pr head refs %s#%d: %w", item.Repo, item.Number, err)
+		}
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+func (c *Client) populatePRHeadRefs(ctx context.Context, item *Item) error {
+	stdout, err := c.runner.Run(ctx,
+		"pr", "view", strconv.Itoa(item.Number),
+		"--repo", item.Repo,
+		"--json", "headRepository,headRepositoryOwner,headRefName",
+	)
+	if err != nil {
+		return fmt.Errorf("gh pr view: %w", classifyError(err))
+	}
+	var entry listItem
+	if err := json.Unmarshal(stdout, &entry); err != nil {
+		return fmt.Errorf("decode gh pr view: %w", err)
+	}
+	populateHeadRefs(item, entry)
+	return nil
 }
 
 // SearchAuthoredOpenIssues returns open issues authored by the

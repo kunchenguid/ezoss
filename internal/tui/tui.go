@@ -847,13 +847,17 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 			m.removeEntries([]int{idx})
 		}
 	case "rerun":
-		if idx >= 0 && len(msg.updatedEntries) > 0 {
-			m.entries[idx] = msg.updatedEntries[0]
-			m.replaceAllEntry(msg.updatedEntries[0])
+		if len(msg.updatedEntries) == 0 {
+			return
+		}
+		updated := msg.updatedEntries[0]
+		if idx >= 0 {
+			m.entries[idx] = updated
 			if idx == m.cursor {
 				m.cardScroll = 0
 			}
 		}
+		m.replaceAllEntry(updated)
 	}
 }
 
@@ -2593,6 +2597,32 @@ func (m *Model) hasAllEntry(recommendationID string) bool {
 	return false
 }
 
+func preserveEntryState(entry *Entry, prev Entry) {
+	if len(prev.Options) > 0 && len(entry.Options) > 0 {
+		byID := make(map[string]EntryOption, len(prev.Options))
+		for _, o := range prev.Options {
+			byID[o.ID] = o
+		}
+		for j := range entry.Options {
+			if p, ok := byID[entry.Options[j].ID]; ok && p.Edited() {
+				entry.Options[j].StateChange = p.StateChange
+				entry.Options[j].ProposedLabels = append([]string(nil), p.ProposedLabels...)
+				entry.Options[j].DraftComment = p.DraftComment
+			}
+		}
+		if prev.ActiveOption < len(entry.Options) {
+			entry.ActiveOption = prev.ActiveOption
+		}
+	}
+	entry.SyncActive()
+	entry.StateChange = prev.StateChange
+	entry.OriginalStateChange = prev.OriginalStateChange
+	entry.ProposedLabels = append([]string(nil), prev.ProposedLabels...)
+	entry.OriginalProposedLabels = append([]string(nil), prev.OriginalProposedLabels...)
+	entry.DraftComment = prev.DraftComment
+	entry.OriginalDraftComment = prev.OriginalDraftComment
+}
+
 func (m *Model) currentRecommendationID() string {
 	if m.cursor < 0 || m.cursor >= len(m.entries) {
 		return ""
@@ -2645,43 +2675,18 @@ func (m *Model) applyReload(entries []Entry) {
 	}
 
 	m.allEntries = append(m.allEntries[:0], entries...)
+	for i := range m.allEntries {
+		if prev, ok := editedByID[m.allEntries[i].RecommendationID]; ok {
+			preserveEntryState(&m.allEntries[i], prev)
+		}
+	}
 	entries = applyRoleFilter(entries, m.roleFilter)
 	m.entries = append(m.entries[:0], entries...)
 	newCursor := 0
 	foundCursor := false
 	for i := range m.entries {
 		if prev, ok := editedByID[m.entries[i].RecommendationID]; ok {
-			// Preserve in-progress edits and active-option selection.
-			// Match options by ID so additions or reorderings on the
-			// server side don't clobber user edits. When the prior
-			// entry had no Options (legacy callers), fall back to the
-			// mirror fields and apply them to the active option.
-			if len(prev.Options) > 0 && len(m.entries[i].Options) > 0 {
-				byID := make(map[string]EntryOption, len(prev.Options))
-				for _, o := range prev.Options {
-					byID[o.ID] = o
-				}
-				for j := range m.entries[i].Options {
-					if p, ok := byID[m.entries[i].Options[j].ID]; ok && p.Edited() {
-						m.entries[i].Options[j].StateChange = p.StateChange
-						m.entries[i].Options[j].ProposedLabels = append([]string(nil), p.ProposedLabels...)
-						m.entries[i].Options[j].DraftComment = p.DraftComment
-					}
-				}
-				if prev.ActiveOption < len(m.entries[i].Options) {
-					m.entries[i].ActiveOption = prev.ActiveOption
-				}
-			}
-			m.entries[i].SyncActive()
-			// Always restore the user's mirror fields when any edit was
-			// in progress - even fields that weren't directly edited
-			// should not be clobbered by a partial server refresh.
-			m.entries[i].StateChange = prev.StateChange
-			m.entries[i].OriginalStateChange = prev.OriginalStateChange
-			m.entries[i].ProposedLabels = append([]string(nil), prev.ProposedLabels...)
-			m.entries[i].OriginalProposedLabels = append([]string(nil), prev.OriginalProposedLabels...)
-			m.entries[i].DraftComment = prev.DraftComment
-			m.entries[i].OriginalDraftComment = prev.OriginalDraftComment
+			preserveEntryState(&m.entries[i], prev)
 		}
 		if !foundCursor && currentID != "" && m.entries[i].RecommendationID == currentID {
 			newCursor = i

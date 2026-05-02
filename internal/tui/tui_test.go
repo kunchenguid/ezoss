@@ -622,6 +622,30 @@ func TestActionFinishedRemovesHiddenEntryFromAllEntries(t *testing.T) {
 	}
 }
 
+func TestRerunFinishedUpdatesHiddenEntryInAllEntries(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "old", Role: sharedtypes.RoleContributor, DraftComment: "old draft"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.roleFilter = RoleFilterMaintainer
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.applyActionFinished(actionFinishedMsg{
+		verb:             "rerun",
+		recommendationID: "rec-1",
+		updatedEntries:   []Entry{{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "new", Role: sharedtypes.RoleContributor, DraftComment: "new draft"}},
+	})
+	m.cycleRoleFilter()
+
+	if len(m.entries) != 1 || m.entries[0].RecommendationID != "rec-1" {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[0].DraftComment != "new draft" {
+		t.Fatalf("draft after hidden rerun = %q, want new draft", m.entries[0].DraftComment)
+	}
+}
+
 func TestEditCurrentReplacesAllEntries(t *testing.T) {
 	m := NewModelWithActions([]Entry{
 		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Role: sharedtypes.RoleContributor, DraftComment: "draft"},
@@ -1503,6 +1527,9 @@ func TestModelReloadRefreshesEntriesAndPreservesEditedDrafts(t *testing.T) {
 	}
 	if next.entries[0].DraftComment != "edited draft" {
 		t.Fatalf("edited draft after reload = %q, want %q", next.entries[0].DraftComment, "edited draft")
+	}
+	if next.allEntries[0].DraftComment != "edited draft" {
+		t.Fatalf("allEntries draft after reload = %q, want %q", next.allEntries[0].DraftComment, "edited draft")
 	}
 	if next.entries[0].OriginalDraftComment != "old draft" {
 		t.Fatalf("original draft after reload = %q, want %q", next.entries[0].OriginalDraftComment, "old draft")

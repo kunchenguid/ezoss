@@ -447,6 +447,7 @@ func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []strin
 			HeadCloneURL:      item.HeadCloneURL,
 		}
 		if existing != nil {
+			record.GHTriaged = existing.GHTriaged
 			record.WaitingOn = existing.WaitingOn
 			record.StaleSince = existing.StaleSince
 			record.LastSelfActivityAt = existing.LastSelfActivityAt
@@ -459,6 +460,7 @@ func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []strin
 				prev = existing.LastSeenUpdatedAt.UTC()
 			}
 			if updated.After(prev) {
+				record.GHTriaged = false
 				record.LastEventAt = timePtr(updated)
 			} else {
 				record.LastEventAt = existing.LastEventAt

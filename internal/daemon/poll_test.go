@@ -1912,6 +1912,50 @@ func TestPollOnceContribSweepUpsertsAuthoredItems(t *testing.T) {
 	}
 }
 
+func TestPollOnceContribSweepPreservesLocalTriagedUntilNewActivity(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Date(2026, time.April, 30, 12, 0, 0, 0, time.UTC)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor,
+		Number: 321, Title: "fix race", State: sharedtypes.ItemStateOpen, GHTriaged: true, LastSeenUpdatedAt: timePtr(now), LastEventAt: timePtr(now),
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{authoredPRs: []ghclient.Item{{
+		Repo: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Number: 321, Title: "fix race", State: sharedtypes.ItemStateOpen, UpdatedAt: now,
+	}}}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+
+	item, err := database.GetItem("upstream/widgets#321")
+	if err != nil {
+		t.Fatalf("GetItem error: %v", err)
+	}
+	if item == nil || !item.GHTriaged {
+		t.Fatalf("GHTriaged after unchanged contributor sweep = %#v, want true", item)
+	}
+
+	client.authoredPRs[0].UpdatedAt = now.Add(time.Hour)
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce with new activity error: %v", err)
+	}
+	item, err = database.GetItem("upstream/widgets#321")
+	if err != nil {
+		t.Fatalf("GetItem after new activity error: %v", err)
+	}
+	if item == nil || item.GHTriaged {
+		t.Fatalf("GHTriaged after new contributor activity = %#v, want false", item)
+	}
+}
+
 func TestPollOnceContribSweepDisabledByDefault(t *testing.T) {
 	t.Parallel()
 

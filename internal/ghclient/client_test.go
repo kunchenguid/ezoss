@@ -928,17 +928,14 @@ func TestSearchAuthoredOpenPRsExtractsHeadInfo(t *testing.T) {
 		responses: []stubResponse{{
 			stdout: `[
 				{"number": 99, "title": "fix race in cache", "author": {"login": "kun"}, "state": "OPEN", "isDraft": false, "labels": [], "updatedAt": "2026-04-29T12:00:00Z", "url": "https://github.com/upstream/widgets/pull/99",
-				 "repository": {"nameWithOwner": "upstream/widgets", "name": "widgets", "url": "https://github.com/upstream/widgets", "owner": {"login": "upstream"}},
-				 "headRepository": {"nameWithOwner": "kun/widgets", "name": "widgets", "url": "https://github.com/kun/widgets", "owner": {"login": "kun"}},
-				 "headRepositoryOwner": {"login": "kun"},
-				 "headRefName": "fix-cache-race"},
+				 "repository": {"nameWithOwner": "upstream/widgets", "name": "widgets", "url": "https://github.com/upstream/widgets", "owner": {"login": "upstream"}}},
 				{"number": 100, "title": "WIP: drafty", "author": {"login": "kun"}, "state": "OPEN", "isDraft": false, "labels": [], "updatedAt": "2026-04-29T13:00:00Z", "url": "https://github.com/upstream/widgets/pull/100",
-				 "repository": {"nameWithOwner": "upstream/widgets"},
-				 "headRefName": "drafty"},
+				 "repository": {"nameWithOwner": "upstream/widgets"}},
 				{"number": 101, "title": "draft, hold", "author": {"login": "kun"}, "state": "OPEN", "isDraft": true, "labels": [], "updatedAt": "2026-04-29T14:00:00Z", "url": "https://github.com/upstream/widgets/pull/101",
-				 "repository": {"nameWithOwner": "upstream/widgets"},
-				 "headRefName": "hold"}
+				 "repository": {"nameWithOwner": "upstream/widgets"}}
 			]`,
+		}, {
+			stdout: `{"headRepository": {"nameWithOwner": "kun/widgets", "name": "widgets", "url": "https://github.com/kun/widgets", "owner": {"login": "kun"}}, "headRepositoryOwner": {"login": "kun"}, "headRefName": "fix-cache-race"}`,
 		}},
 	}
 
@@ -971,6 +968,15 @@ func TestSearchAuthoredOpenPRsExtractsHeadInfo(t *testing.T) {
 	}
 	if !containsArg(runner.calls[0].args, "@me") {
 		t.Fatalf("expected --author @me, got %#v", runner.calls[0].args)
+	}
+	jsonFields := argValue(runner.calls[0].args, "--json")
+	for _, unsupported := range []string{"headRepository", "headRepositoryOwner", "headRefName"} {
+		if strings.Contains(jsonFields, unsupported) {
+			t.Fatalf("search JSON fields include unsupported %q: %q", unsupported, jsonFields)
+		}
+	}
+	if !containsArg(runner.calls[1].args, "pr") || !containsArg(runner.calls[1].args, "view") || !containsArg(runner.calls[1].args, "99") || !hasArgValue(runner.calls[1].args, "--repo", "upstream/widgets") {
+		t.Fatalf("expected gh pr view for head metadata, got %#v", runner.calls[1].args)
 	}
 }
 
@@ -1079,12 +1085,16 @@ func containsArg(args []string, want string) bool {
 }
 
 func hasArgValue(args []string, flag string, value string) bool {
+	return argValue(args, flag) == value
+}
+
+func argValue(args []string, flag string) string {
 	for i := 0; i < len(args)-1; i++ {
-		if args[i] == flag && args[i+1] == value {
-			return true
+		if args[i] == flag {
+			return args[i+1]
 		}
 	}
-	return false
+	return ""
 }
 
 func flagValue(args []string, flag string) string {
