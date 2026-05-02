@@ -852,9 +852,9 @@ func (r cliFixRunner) runContribFix(ctx context.Context, job db.FixJob, progress
 	}
 	if pushMode == config.ContribPushNoMistakes {
 		return &daemon.FixResult{
-			Branch:       headRef,
-			WorktreePath: worktree.WorktreePath,
-			WaitingForPR: false,
+			Branch:                 headRef,
+			WorktreePath:           worktree.WorktreePath,
+			WaitingForManualReview: true,
 		}, nil
 	}
 	if progress != nil {
@@ -3001,9 +3001,11 @@ func renderPendingRecommendations(out io.Writer, rerunInTerminal bool) error {
 	}
 
 	type pendingRecommendationRow struct {
-		rec          db.Recommendation
-		item         *db.Item
-		isConfigured bool
+		rec            db.Recommendation
+		item           *db.Item
+		isConfigured   bool
+		isContributor  bool
+		isUnconfigured bool
 	}
 
 	rows := make([]pendingRecommendationRow, 0, len(recommendations))
@@ -3020,7 +3022,9 @@ func renderPendingRecommendations(out io.Writer, rerunInTerminal bool) error {
 		}
 
 		_, isConfigured := configured[item.RepoID]
-		if !isConfigured {
+		isContributor := item.Role == sharedtypes.RoleContributor
+		isUnconfigured := !isConfigured && !isContributor
+		if isUnconfigured {
 			orphanCount++
 			if _, seen := seenOrphans[item.RepoID]; !seen {
 				seenOrphans[item.RepoID] = struct{}{}
@@ -3028,7 +3032,7 @@ func renderPendingRecommendations(out io.Writer, rerunInTerminal bool) error {
 			}
 		}
 
-		rows = append(rows, pendingRecommendationRow{rec: rec, item: item, isConfigured: isConfigured})
+		rows = append(rows, pendingRecommendationRow{rec: rec, item: item, isConfigured: isConfigured, isContributor: isContributor, isUnconfigured: isUnconfigured})
 	}
 
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -3048,7 +3052,9 @@ func renderPendingRecommendations(out io.Writer, rerunInTerminal bool) error {
 
 	for _, row := range rows {
 		itemLabel := row.rec.ItemID
-		if !row.isConfigured {
+		if row.isContributor {
+			itemLabel += " (contributor)"
+		} else if row.isUnconfigured {
 			itemLabel += " (unconfigured)"
 		}
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",

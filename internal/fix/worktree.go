@@ -117,6 +117,7 @@ type ContribWorktreeOptions struct {
 	CloneURL string // git URL to clone (typically <head>.git)
 	Number   int    // upstream PR number, used for path naming
 	RunGit   GitRunner
+	RunGH    GHRunner
 }
 
 // PrepareContribWorktree clones HeadRepo (the PR head, often a fork),
@@ -148,6 +149,10 @@ func PrepareContribWorktree(ctx context.Context, opts ContribWorktreeOptions) (W
 	if runGit == nil {
 		runGit = runGitCommand
 	}
+	runGH := opts.RunGH
+	if runGH == nil {
+		runGH = runGHCommand
+	}
 
 	safeRepo := SafeRepoName(opts.HeadRepo)
 	checkoutPath := filepath.Join(root, "investigations", safeRepo)
@@ -161,7 +166,7 @@ func PrepareContribWorktree(ctx context.Context, opts ContribWorktreeOptions) (W
 		if err := os.RemoveAll(checkoutPath); err != nil {
 			return Worktree{}, fmt.Errorf("remove invalid contrib checkout: %w", err)
 		}
-		if _, err := runGit(ctx, filepath.Dir(checkoutPath), nil, "clone", opts.CloneURL, checkoutPath); err != nil {
+		if _, err := runGH(ctx, filepath.Dir(checkoutPath), "repo", "clone", opts.HeadRepo, checkoutPath); err != nil {
 			return Worktree{}, err
 		}
 	}

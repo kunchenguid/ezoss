@@ -76,6 +76,26 @@ func TestPollOnceMarksFixJobWaitingForPR(t *testing.T) {
 	}
 }
 
+func TestPollOnceMarksFixJobWaitingForManualReview(t *testing.T) {
+	database := openDaemonTestDB(t)
+	job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "no-mistakes"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	runner := &stubFixRunner{result: &FixResult{Branch: "fix-race", WorktreePath: "/tmp/w", WaitingForManualReview: true}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: emptyTriageLister{}, Fix: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != db.FixJobStatusRunning || got.Phase != db.FixJobPhaseWaitingForPR || got.Message != "waiting for manual review" {
+		t.Fatalf("job after PollOnce = %#v, want running manual review wait", got)
+	}
+}
+
 func TestPollOnceDetectsWaitingFixPR(t *testing.T) {
 	database := openDaemonTestDB(t)
 	job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "no-mistakes"})

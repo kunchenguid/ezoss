@@ -832,6 +832,9 @@ func TestRunFixContributorNoMistakesLeavesWorktreeInPlace(t *testing.T) {
 	if res.Branch != "fix-race" {
 		t.Fatalf("Branch = %q, want fix-race", res.Branch)
 	}
+	if !res.WaitingForManualReview {
+		t.Fatalf("WaitingForManualReview = false, want true")
+	}
 }
 
 func TestRunFixContributorAutoPushesToHeadBranch(t *testing.T) {

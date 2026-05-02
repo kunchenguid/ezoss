@@ -59,10 +59,11 @@ type fixRunner interface {
 }
 
 type FixResult struct {
-	Branch       string
-	WorktreePath string
-	PRURL        string
-	WaitingForPR bool
+	Branch                 string
+	WorktreePath           string
+	PRURL                  string
+	WaitingForPR           bool
+	WaitingForManualReview bool
 }
 
 type TriageRequest struct {
