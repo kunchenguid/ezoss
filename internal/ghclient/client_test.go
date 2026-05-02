@@ -775,7 +775,7 @@ func TestListOwnedReposReturnsNameWithOwnerStrings(t *testing.T) {
 	t.Parallel()
 
 	runner := &stubRunner{responses: []stubResponse{{
-		stdout: `[{"nameWithOwner":"kunchenguid/ezoss"},{"nameWithOwner":"kunchenguid/no-mistakes"}]`,
+		stdout: `["kunchenguid/ezoss","kunchenguid/no-mistakes"]`,
 	}}}
 
 	client := New(runner)
@@ -791,40 +791,54 @@ func TestListOwnedReposReturnsNameWithOwnerStrings(t *testing.T) {
 		t.Fatalf("expected 1 gh call, got %d", len(runner.calls))
 	}
 	args := runner.calls[0].args
-	if args[0] != "repo" || args[1] != "list" {
+	if args[0] != "api" || args[1] != "user/repos" {
 		t.Fatalf("unexpected command: %v", args)
 	}
-	if !containsArg(args, "--source") {
-		t.Fatalf("missing --source flag: %v", args)
+	if !containsArg(args, "--paginate") {
+		t.Fatalf("missing --paginate flag: %v", args)
 	}
-	if !containsArg(args, "--no-archived") {
-		t.Fatalf("missing --no-archived flag: %v", args)
+	if !containsArg(args, "affiliation=owner") {
+		t.Fatalf("missing owner affiliation filter: %v", args)
 	}
-	if containsArg(args, "--visibility") {
-		t.Fatalf("RepoVisibilityAll should not pass --visibility: %v", args)
+	if !containsArg(args, "visibility=all") {
+		t.Fatalf("RepoVisibilityAll should pass visibility=all: %v", args)
 	}
 }
 
-func TestListOwnedReposRaisesLimitForOwnershipFilter(t *testing.T) {
+func TestListOwnedReposUsesPaginatedAPIForOwnershipFilter(t *testing.T) {
 	t.Parallel()
 
-	runner := &stubRunner{responses: []stubResponse{{stdout: `[]`}}}
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		"kunchenguid/ezoss",
+		"kunchenguid/no-mistakes"
+	]`}}}
 
 	client := New(runner)
-	if _, err := client.ListOwnedRepos(context.Background(), RepoVisibilityAll); err != nil {
+	repos, err := client.ListOwnedRepos(context.Background(), RepoVisibilityAll)
+	if err != nil {
 		t.Fatalf("ListOwnedRepos returned error: %v", err)
+	}
+	want := []string{"kunchenguid/ezoss", "kunchenguid/no-mistakes"}
+	if !reflect.DeepEqual(repos, want) {
+		t.Fatalf("repos = %v, want %v", repos, want)
 	}
 
 	args := runner.calls[0].args
-	for i, arg := range args {
-		if arg == "--limit" && i+1 < len(args) {
-			if args[i+1] != "1000" {
-				t.Fatalf("--limit = %q, want 1000", args[i+1])
-			}
-			return
-		}
+	if len(args) < 2 || args[0] != "api" || args[1] != "user/repos" {
+		t.Fatalf("unexpected command: %v", args)
 	}
-	t.Fatalf("missing --limit flag: %v", args)
+	if !containsArg(args, "--paginate") {
+		t.Fatalf("missing --paginate flag: %v", args)
+	}
+	if !hasArgValue(args, "--method", "GET") {
+		t.Fatalf("paginated ownership query should force GET: %v", args)
+	}
+	if containsArg(args, "--limit") {
+		t.Fatalf("paginated ownership query should not pass --limit: %v", args)
+	}
+	if !containsArg(args, "-f") || !containsArg(args, "affiliation=owner") || !containsArg(args, "per_page=100") {
+		t.Fatalf("missing ownership pagination parameters: %v", args)
+	}
 }
 
 func TestListOwnedReposPassesVisibilityPublicFilter(t *testing.T) {
@@ -838,15 +852,8 @@ func TestListOwnedReposPassesVisibilityPublicFilter(t *testing.T) {
 	}
 
 	args := runner.calls[0].args
-	idx := -1
-	for i, arg := range args {
-		if arg == "--visibility" {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 || idx == len(args)-1 || args[idx+1] != "public" {
-		t.Fatalf("expected --visibility public, got args %v", args)
+	if !containsArg(args, "visibility=public") {
+		t.Fatalf("expected visibility=public, got args %v", args)
 	}
 }
 
@@ -854,7 +861,7 @@ func TestListOwnedReposSkipsBlankEntries(t *testing.T) {
 	t.Parallel()
 
 	runner := &stubRunner{responses: []stubResponse{{
-		stdout: `[{"nameWithOwner":"   "},{"nameWithOwner":"kunchenguid/ezoss"},{"nameWithOwner":""}]`,
+		stdout: `["   ","kunchenguid/ezoss",""]`,
 	}}}
 
 	client := New(runner)
@@ -923,8 +930,8 @@ func TestListOwnedReposPropagatesRunnerError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "gh repo list") {
-		t.Fatalf("expected gh repo list prefix, got %q", err.Error())
+	if !strings.Contains(err.Error(), "gh api user/repos") {
+		t.Fatalf("expected gh api user/repos prefix, got %q", err.Error())
 	}
 }
 
@@ -1028,6 +1035,36 @@ func TestSearchAuthoredOpenPRsTreatsLimitSizedResultsAsTruncated(t *testing.T) {
 	}
 	if !hasArgValue(runner.calls[0].args, "--limit", strconv.Itoa(limit)) {
 		t.Fatalf("expected --limit %d, got %#v", limit, runner.calls[0].args)
+	}
+}
+
+func TestSearchAuthoredOpenPRsKeepsPRWhenHeadMetadataFails(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{
+		responses: []stubResponse{{
+			stdout: `[
+				{"number": 99, "title": "fix race in cache", "author": {"login": "kun"}, "state": "OPEN", "isDraft": false, "labels": [], "updatedAt": "2026-04-29T12:00:00Z", "url": "https://github.com/upstream/widgets/pull/99",
+				 "repository": {"nameWithOwner": "upstream/widgets"}}
+			]`,
+		}, {
+			err: errors.New("GraphQL: Could not resolve to a Repository"),
+		}},
+	}
+
+	client := New(runner)
+	items, err := client.SearchAuthoredOpenPRs(context.Background())
+	if err != nil {
+		t.Fatalf("SearchAuthoredOpenPRs returned error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want one PR kept with empty head metadata", items)
+	}
+	if items[0].Repo != "upstream/widgets" || items[0].Number != 99 {
+		t.Fatalf("unexpected item: %#v", items[0])
+	}
+	if items[0].HeadRepo != "" || items[0].HeadRef != "" || items[0].HeadCloneURL != "" {
+		t.Fatalf("head metadata = %q/%q/%q, want empty", items[0].HeadRepo, items[0].HeadRef, items[0].HeadCloneURL)
 	}
 }
 

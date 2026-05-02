@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -450,9 +451,7 @@ func (c *Client) SearchAuthoredOpenPRs(ctx context.Context) ([]Item, error) {
 		if item.IsDraft || isWIPTitle(item.Title) {
 			continue
 		}
-		if err := c.populatePRHeadRefs(ctx, &item); err != nil {
-			return nil, fmt.Errorf("load authored pr head refs %s#%d: %w", item.Repo, item.Number, err)
-		}
+		_ = c.populatePRHeadRefs(ctx, &item)
 		items = append(items, item)
 	}
 	return items, nil
@@ -554,35 +553,41 @@ func populateHeadRefs(item *Item, entry listItem) {
 // repos only. Forks and archived repos are excluded.
 func (c *Client) ListOwnedRepos(ctx context.Context, visibility RepoVisibility) ([]string, error) {
 	args := []string{
-		"repo", "list",
-		"--limit", "1000",
-		"--no-archived",
-		"--source",
-		"--json", "nameWithOwner",
+		"api", "user/repos",
+		"--method", "GET",
+		"--paginate",
+		"-f", "affiliation=owner",
+		"-f", "per_page=100",
 	}
 	if visibility == RepoVisibilityPublic {
-		args = append(args, "--visibility", "public")
+		args = append(args, "-f", "visibility=public")
+	} else {
+		args = append(args, "-f", "visibility=all")
 	}
+	args = append(args, "--jq", "[.[] | select(.fork == false and .archived == false) | .full_name]")
 
 	stdout, err := c.runner.Run(ctx, args...)
 	if err != nil {
-		return nil, fmt.Errorf("gh repo list: %w", classifyError(err))
+		return nil, fmt.Errorf("gh api user/repos: %w", classifyError(err))
 	}
 
-	var raw []struct {
-		NameWithOwner string `json:"nameWithOwner"`
-	}
-	if err := json.Unmarshal(stdout, &raw); err != nil {
-		return nil, fmt.Errorf("decode gh repo list: %w", err)
-	}
-
-	repos := make([]string, 0, len(raw))
-	for _, entry := range raw {
-		name := strings.TrimSpace(entry.NameWithOwner)
-		if name == "" {
-			continue
+	repos := make([]string, 0)
+	decoder := json.NewDecoder(strings.NewReader(string(stdout)))
+	for {
+		var page []string
+		if err := decoder.Decode(&page); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("decode gh api user/repos page: %w", err)
 		}
-		repos = append(repos, name)
+		for _, name := range page {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			repos = append(repos, name)
+		}
 	}
 	return repos, nil
 }
