@@ -606,7 +606,7 @@ func contributorPushMode(cfg *config.GlobalConfig) config.ContribPushMode {
 }
 
 func promptWithFixWorktree(prompt string, checkout string) string {
-	return strings.TrimSpace(prompt) + "\n\nRepository checkout for fixing:\n" + checkout + "\n\nThis checkout is an isolated ezoss fix worktree. Implement the smallest correct fix and add or update regression tests when appropriate. Do not open the pull request yourself; ezoss will handle PR creation according to configuration after the fix run."
+	return strings.TrimSpace(prompt) + "\n\nRepository checkout for fixing:\n" + checkout + "\n\nThis checkout is an isolated ezoss fix worktree. Implement the smallest correct fix and add or update regression tests when appropriate. Do not open the pull request yourself; ezoss will handle maintainer PR creation or contributor PR branch updates according to configuration after the fix run."
 }
 
 func loadFixRunConfig(globalCfg *config.GlobalConfig, worktreePath string) (*config.Config, error) {
@@ -2865,6 +2865,8 @@ func renderSyncSection(d statusData, now time.Time) string {
 		header += fmt.Sprintf("first cycle in flight (%d / %d)", sync.CurrentIndex, sync.Total)
 	case len(sync.Repos) > 0 || len(d.repos) > 0:
 		header += "starting up"
+	case d.contribEnabled:
+		header += "idle (contributor mode enabled; no maintainer repos configured)"
 	default:
 		header += "idle (no repos configured)"
 	}

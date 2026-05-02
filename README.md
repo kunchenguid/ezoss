@@ -183,6 +183,10 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | `ezoss daemon stop`            | Stop the background poller                                                                    |
 | `ezoss daemon status`          | Show whether the daemon is running                                                            |
 
+`ezoss status --short` always prints `pending`, `repos`, and `daemon`.
+When pending recommendations include non-configured maintainer repos or contributor items, it also prints `maintainer`, `unconfigured`, and/or `contrib` counts.
+It prints `contrib_repos` when contributor recommendations span one or more repos, and `contrib_mode=off` when contributor mode is disabled.
+
 ### Flags
 
 | Command                  | Flag                | Description                                                            |
