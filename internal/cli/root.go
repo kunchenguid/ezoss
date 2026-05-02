@@ -3398,12 +3398,18 @@ func newManualTriagePoller(ctx context.Context, root string, database *db.DB, re
 		return daemon.Poller{}, fmt.Errorf("create triage runner: %w", err)
 	}
 
-	return daemon.Poller{
+	poller := daemon.Poller{
 		DB:                 database,
 		GitHub:             singleItemLister{item: item},
 		Triage:             runner,
 		AgentsInstructions: readAgentsInstructions(root),
-	}, nil
+	}
+	existing, err := database.GetItem(fmt.Sprintf("%s#%d", repoID, number))
+	if err != nil {
+		return daemon.Poller{}, fmt.Errorf("load existing item: %w", err)
+	}
+	poller.PreserveExistingItemRole = existing != nil && existing.Role == sharedtypes.RoleContributor
+	return poller, nil
 }
 
 func loadLiveTriageConfig(root string, repoID string) (*config.Config, error) {

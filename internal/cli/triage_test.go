@@ -354,6 +354,128 @@ func TestTriageCommandUsesConfiguredAgentWithoutMock(t *testing.T) {
 	}
 }
 
+func TestTriageCommandPreservesExistingContributorItemRole(t *testing.T) {
+	tempRoot := t.TempDir()
+	workingDir := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewGitHubClient := newGitHubClient
+	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("Chdir() error = %v", err)
+	}
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newGitHubClient = originalNewGitHubClient
+		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
+		if err := os.Chdir(oldWD); err != nil {
+			t.Fatalf("restore Chdir() error = %v", err)
+		}
+	})
+	stubAgentLookPath(t, map[string]string{
+		"codex": "/usr/local/bin/codex",
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, _ string, _ string) (string, error) {
+		return workingDir, nil
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
+		Agent: sharedtypes.AgentCodex,
+	}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:           "upstream/widgets#12",
+		RepoID:       "upstream/widgets",
+		Kind:         sharedtypes.ItemKindPR,
+		Number:       12,
+		Title:        "fix flaky widget test",
+		State:        sharedtypes.ItemStateOpen,
+		Role:         sharedtypes.RoleContributor,
+		HeadRepo:     "alice/widgets",
+		HeadRef:      "fix-flake",
+		HeadCloneURL: "https://github.com/alice/widgets.git",
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	newGitHubClient = func() itemFetcher {
+		return stubItemFetcher{item: ghclient.Item{
+			Repo:      "upstream/widgets",
+			Kind:      sharedtypes.ItemKindPR,
+			Number:    12,
+			Title:     "fix flaky widget test",
+			Author:    "alice",
+			State:     sharedtypes.ItemStateOpen,
+			URL:       "https://github.com/upstream/widgets/pull/12",
+			UpdatedAt: mustTime(t, "2026-04-19T10:00:00Z"),
+		}}
+	}
+	newAgent = func(sharedtypes.AgentName, string) (triageAgent, error) {
+		return stubTriageAgent{result: &agent.Result{
+			Output: mustJSON(t, triage.Recommendation{
+				Options: []triage.RecommendationOption{{
+					StateChange:  sharedtypes.StateChangeNone,
+					Rationale:    "Needs a contributor reply.",
+					WaitingOn:    sharedtypes.WaitingOnContributor,
+					DraftComment: "Please confirm the failing seed.",
+					Confidence:   sharedtypes.ConfidenceMedium,
+				}},
+			}),
+		}}, nil
+	}
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"triage", "upstream/widgets#12"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	database, err = db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}()
+	item, err := database.GetItem("upstream/widgets#12")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil {
+		t.Fatal("GetItem() = nil, want item")
+	}
+	if item.Role != sharedtypes.RoleContributor {
+		t.Fatalf("item.Role = %q, want contributor", item.Role)
+	}
+	if item.HeadRepo != "alice/widgets" || item.HeadRef != "fix-flake" || item.HeadCloneURL != "https://github.com/alice/widgets.git" {
+		t.Fatalf("item head metadata = (%q, %q, %q), want contributor head", item.HeadRepo, item.HeadRef, item.HeadCloneURL)
+	}
+}
+
 func TestTriageCommandPrefersRepoAgentOverrideWithoutMock(t *testing.T) {
 	tempRoot := t.TempDir()
 	workingDir := t.TempDir()
