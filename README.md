@@ -32,7 +32,7 @@
 
 If you maintain open source long enough, every new issue and PR starts with the same drag: what is this actually asking, is it legit, what should happen next, and do I need to context-switch into the repo right now?
 
-`ezoss` handles that first pass for you. It polls your repos, runs your coding agent against each untriaged issue or PR, stores a private recommendation locally, and lets you review or edit the draft before anything touches GitHub.
+`ezoss` handles that first pass for you. It polls your repos, also tracks issues and PRs you authored in repos you do not maintain, runs your coding agent against each untriaged item, stores a private recommendation locally, and lets you review or edit the draft before anything touches GitHub.
 
 You stay in control. The agent drafts. The maintainer decides.
 
@@ -145,7 +145,8 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 - **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
   Rerun instructions are stored there too.
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
-- **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and either create draft PRs or leave commits according to `fixes.pr_create`.
+- **Contributor mode is automatic** - by default, the daemon searches for open issues and PRs authored by you in repos you do not maintain, marks them with a `contrib` badge in the inbox, and uses contributor-safe actions instead of maintainer actions.
+- **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and either create maintainer draft PRs according to `fixes.pr_create` or prepare contributor PR branch updates according to `fixes.contrib_push`.
 - **Polling is deliberate** - v1 avoids webhook complexity and just re-triages when the GitHub label disappears.
 - **Approval is explicit** - comments, labels, closes, merges, and fix PRs only happen after you approve an inbox action, queue a fix job, or run `ezoss fix`.
 - **PR review is gated when needed** - unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.
@@ -157,6 +158,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | `a`     | Approve      | Execute the selected GitHub action and sync triage labels                 |
 | `c`     | Copy prompt  | Copy the active option's coding-agent fix prompt when one exists          |
 | `f`     | Fix          | Queue a daemon-backed coding-agent fix job when a fix prompt exists        |
+| `F`     | Filter       | Cycle role filter through all, maintainer, and contributor items           |
 | `e`     | Edit         | Open the draft in your editor before approval                             |
 | `m`     | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation                |
 | `o`     | Open         | Open the current item's GitHub page in your browser                       |
@@ -171,9 +173,9 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | `ezoss doctor`                 | Check local prerequisites including `gh`, agent availability, daemon state, and SQLite access |
 | `ezoss init`                   | Create or update `~/.ezoss/config.yaml`                                                       |
 | `ezoss status`                 | Open the realtime status TUI; in non-interactive output, print rich text status               |
-| `ezoss status --short`         | Print a one-line summary of pending recommendations and configured repos                      |
-| `ezoss list`                   | Print pending recommendations in a text format                                                |
-| `ezoss fix <repo>#<number>`    | Run the active fix prompt in an isolated worktree; PR creation follows config                 |
+| `ezoss status --short`         | Print a one-line summary of pending recommendations, configured repos, and contributor state  |
+| `ezoss list`                   | Print pending recommendations in a text format, including contributor markers                 |
+| `ezoss fix <repo>#<number>`    | Run the active fix prompt in an isolated worktree; maintainer PRs and contributor pushes follow config |
 | `ezoss triage <repo>#<number>` | Manually triage one issue or PR                                                               |
 | `ezoss update`                 | Download and install the latest released binary for the current platform                      |
 | `ezoss daemon start`           | Start the background poller                                                                   |
@@ -210,6 +212,16 @@ If daemon detection misses the PR, the inbox keeps the job in `waiting_for_pr` a
 `gh` pushes to origin and runs `gh pr create --draft`.
 `disabled` commits the fix branch in the worktree without opening a PR.
 
+`fixes.contrib_push` controls contributor PR fixes and supports `auto`, `no-mistakes`, or `disabled`.
+Contributor fixes update the existing PR head branch instead of creating a new PR.
+`auto` pushes commits back to that branch.
+`no-mistakes` is the default and leaves the worktree for manual review and push.
+`disabled` refuses contributor fix jobs before pushing.
+
+`contrib.enabled` controls contributor mode and defaults to `true`.
+When enabled, the daemon searches for open issues and PRs authored by you in repos you do not maintain.
+Use `contrib.ignore_repos` to suppress noisy upstream repos, or set `enabled: false` to only triage configured maintainer repos.
+
 ```yaml
 # ~/.ezoss/config.yaml
 agent: auto
@@ -218,6 +230,10 @@ stale_threshold: 30d
 merge_method: merge
 fixes:
   pr_create: auto
+  contrib_push: no-mistakes
+contrib:
+  enabled: true
+  ignore_repos: []
 repos:
   - kunchenguid/ezoss
 sync_labels:
