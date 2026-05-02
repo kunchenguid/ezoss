@@ -646,6 +646,113 @@ func TestRerunFinishedUpdatesHiddenEntryInAllEntries(t *testing.T) {
 	}
 }
 
+func TestRerunFinishedReplacesOldRecommendationIDInAllEntries(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-old", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "old", Role: sharedtypes.RoleContributor, DraftComment: "old draft"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.roleFilter = RoleFilterContributor
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.applyActionFinished(actionFinishedMsg{
+		verb:             "rerun",
+		recommendationID: "rec-old",
+		updatedEntries:   []Entry{{RecommendationID: "rec-new", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "new", Role: sharedtypes.RoleContributor, DraftComment: "new draft"}},
+	})
+	m.cycleRoleFilter()
+
+	idx := -1
+	for i := range m.entries {
+		if m.entries[i].RecommendationID == "rec-new" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("entries after cycling filter = %#v, want rec-new", m.entries)
+	}
+	if m.entries[idx].DraftComment != "new draft" {
+		t.Fatalf("draft after rerun = %q, want new draft", m.entries[idx].DraftComment)
+	}
+}
+
+func TestCycleOptionUpdatesAllEntries(t *testing.T) {
+	m := NewModel([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "one",
+		Role:             sharedtypes.RoleContributor,
+		Options: []EntryOption{
+			{ID: "opt-1", StateChange: sharedtypes.StateChangeNone, DraftComment: "first"},
+			{ID: "opt-2", StateChange: sharedtypes.StateChangeClose, DraftComment: "second"},
+		},
+	}})
+	m.width = 100
+	m.roleFilter = RoleFilterContributor
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.cycleOption(1)
+	m.cycleRoleFilter()
+
+	idx := -1
+	for i := range m.entries {
+		if m.entries[i].RecommendationID == "rec-1" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[idx].ActiveOption != 1 {
+		t.Fatalf("active option after cycling filter = %d, want 1", m.entries[idx].ActiveOption)
+	}
+	if m.entries[idx].DraftComment != "second" {
+		t.Fatalf("draft after cycling filter = %q, want second", m.entries[idx].DraftComment)
+	}
+}
+
+func TestJumpToOptionUpdatesAllEntries(t *testing.T) {
+	m := NewModel([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "one",
+		Role:             sharedtypes.RoleContributor,
+		Options: []EntryOption{
+			{ID: "opt-1", StateChange: sharedtypes.StateChangeNone, DraftComment: "first"},
+			{ID: "opt-2", StateChange: sharedtypes.StateChangeClose, DraftComment: "second"},
+		},
+	}})
+	m.width = 100
+	m.roleFilter = RoleFilterContributor
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.jumpToOption(1)
+	m.cycleRoleFilter()
+
+	idx := -1
+	for i := range m.entries {
+		if m.entries[i].RecommendationID == "rec-1" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[idx].ActiveOption != 1 {
+		t.Fatalf("active option after cycling filter = %d, want 1", m.entries[idx].ActiveOption)
+	}
+	if m.entries[idx].DraftComment != "second" {
+		t.Fatalf("draft after cycling filter = %q, want second", m.entries[idx].DraftComment)
+	}
+}
+
 func TestEditCurrentReplacesAllEntries(t *testing.T) {
 	m := NewModelWithActions([]Entry{
 		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Role: sharedtypes.RoleContributor, DraftComment: "draft"},

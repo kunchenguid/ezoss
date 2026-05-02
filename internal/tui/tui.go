@@ -555,6 +555,7 @@ func (m *Model) cycleOption(delta int) {
 	idx = ((idx % n) + n) % n
 	entry.ActiveOption = idx
 	entry.SyncActive()
+	m.replaceAllEntry(*entry)
 	m.cardScroll = 0
 }
 
@@ -574,6 +575,7 @@ func (m *Model) jumpToOption(idx int) {
 	entry.CommitEdits()
 	entry.ActiveOption = idx
 	entry.SyncActive()
+	m.replaceAllEntry(*entry)
 	m.cardScroll = 0
 }
 
@@ -857,7 +859,7 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 				m.cardScroll = 0
 			}
 		}
-		m.replaceAllEntry(updated)
+		m.replaceAllEntry(updated, msg.recommendationID)
 	}
 }
 
@@ -2573,7 +2575,7 @@ func (m *Model) removeAllEntriesByID(ids map[string]struct{}) {
 	m.allEntries = kept
 }
 
-func (m *Model) replaceAllEntry(updated Entry) {
+func (m *Model) replaceAllEntry(updated Entry, oldIDs ...string) {
 	if updated.RecommendationID == "" {
 		return
 	}
@@ -2581,6 +2583,20 @@ func (m *Model) replaceAllEntry(updated Entry) {
 		if m.allEntries[i].RecommendationID == updated.RecommendationID {
 			m.allEntries[i] = updated
 			return
+		}
+	}
+	oldIDSet := make(map[string]struct{}, len(oldIDs))
+	for _, id := range oldIDs {
+		if id != "" && id != updated.RecommendationID {
+			oldIDSet[id] = struct{}{}
+		}
+	}
+	if len(oldIDSet) > 0 {
+		for i := range m.allEntries {
+			if _, ok := oldIDSet[m.allEntries[i].RecommendationID]; ok {
+				m.allEntries[i] = updated
+				return
+			}
 		}
 	}
 }
