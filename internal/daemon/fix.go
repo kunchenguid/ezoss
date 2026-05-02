@@ -60,6 +60,10 @@ func runFixStage(ctx context.Context, poller Poller) (bool, error) {
 		update.Status = db.FixJobStatusRunning
 		update.Phase = db.FixJobPhaseWaitingForPR
 		update.Message = "waiting for PR"
+	} else if result.WaitingForManualReview {
+		update.Status = db.FixJobStatusRunning
+		update.Phase = db.FixJobPhaseWaitingForPR
+		update.Message = "waiting for manual review"
 	} else {
 		update.Status = db.FixJobStatusSucceeded
 		update.Phase = db.FixJobPhasePROpened
@@ -79,6 +83,9 @@ func detectWaitingFixPRs(ctx context.Context, poller Poller) (bool, error) {
 	didWork := false
 	for _, job := range waiting {
 		if job.Phase != db.FixJobPhaseWaitingForPR {
+			continue
+		}
+		if job.Message == "waiting for manual review" {
 			continue
 		}
 		detectCtx, cancel := context.WithTimeout(ctx, fixJobTimeout(poller))

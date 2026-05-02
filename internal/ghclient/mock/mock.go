@@ -75,6 +75,49 @@ func (c *Client) ListTriaged(_ context.Context, repo string, _ time.Time) ([]ghc
 	}, nil
 }
 
+func (c *Client) SearchAuthoredOpenPRs(_ context.Context) ([]ghclient.Item, error) {
+	now := time.Date(2026, time.April, 19, 12, 0, 0, 0, time.UTC)
+	return []ghclient.Item{
+		{
+			Repo:         "upstream/widgets",
+			Kind:         sharedtypes.ItemKindPR,
+			Number:       321,
+			Title:        "fix race in cache",
+			Body:         "Fixes the cache race condition you flagged in #310.",
+			Author:       "kun",
+			State:        sharedtypes.ItemStateOpen,
+			Labels:       []string{},
+			URL:          "https://github.com/upstream/widgets/pull/321",
+			UpdatedAt:    now.Add(-3 * time.Hour),
+			HeadRepo:     "kun/widgets",
+			HeadRef:      "fix-cache-race",
+			HeadCloneURL: "https://github.com/kun/widgets.git",
+		},
+	}, nil
+}
+
+func (c *Client) ListOwnedRepos(_ context.Context, _ ghclient.RepoVisibility) ([]string, error) {
+	return nil, nil
+}
+
+func (c *Client) SearchAuthoredOpenIssues(_ context.Context) ([]ghclient.Item, error) {
+	now := time.Date(2026, time.April, 19, 12, 0, 0, 0, time.UTC)
+	return []ghclient.Item{
+		{
+			Repo:      "upstream/widgets",
+			Kind:      sharedtypes.ItemKindIssue,
+			Number:    310,
+			Title:     "cache race triggers panic",
+			Body:      "Repros under load with two writers, see attached log.",
+			Author:    "kun",
+			State:     sharedtypes.ItemStateOpen,
+			Labels:    []string{},
+			URL:       "https://github.com/upstream/widgets/issues/310",
+			UpdatedAt: now.Add(-12 * time.Hour),
+		},
+	}, nil
+}
+
 func (c *Client) GetItem(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int) (ghclient.Item, error) {
 	items, err := c.ListNeedingTriage(ctx, repo)
 	if err != nil {

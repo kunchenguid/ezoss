@@ -44,6 +44,14 @@ func Open(path string) (*DB, error) {
 		{"recommendation_options.fix_prompt", "recommendation_options", "fix_prompt", `ALTER TABLE recommendation_options ADD COLUMN fix_prompt TEXT`},
 		{"recommendations.rerun_instructions", "recommendations", "rerun_instructions", `ALTER TABLE recommendations ADD COLUMN rerun_instructions TEXT`},
 		{"recommendations.created_at_nanos", "recommendations", "created_at_nanos", `ALTER TABLE recommendations ADD COLUMN created_at_nanos INTEGER`},
+		{"items.role", "items", "role", `ALTER TABLE items ADD COLUMN role TEXT NOT NULL DEFAULT 'maintainer'`},
+		{"items.last_seen_updated_at", "items", "last_seen_updated_at", `ALTER TABLE items ADD COLUMN last_seen_updated_at INTEGER`},
+		{"items.last_seen_comment_id", "items", "last_seen_comment_id", `ALTER TABLE items ADD COLUMN last_seen_comment_id INTEGER`},
+		{"items.last_self_activity_at", "items", "last_self_activity_at", `ALTER TABLE items ADD COLUMN last_self_activity_at INTEGER`},
+		{"items.head_repo", "items", "head_repo", `ALTER TABLE items ADD COLUMN head_repo TEXT`},
+		{"items.head_ref", "items", "head_ref", `ALTER TABLE items ADD COLUMN head_ref TEXT`},
+		{"items.head_clone_url", "items", "head_clone_url", `ALTER TABLE items ADD COLUMN head_clone_url TEXT`},
+		{"repos.source", "repos", "source", `ALTER TABLE repos ADD COLUMN source TEXT NOT NULL DEFAULT 'config'`},
 	}
 	for _, m := range migrations {
 		ran, err := ensureColumnExists(sqlDB, m.table, m.column, m.ddl)

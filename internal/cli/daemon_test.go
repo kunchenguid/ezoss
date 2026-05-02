@@ -511,6 +511,18 @@ func (s stubDaemonTriageLister) ListTriaged(_ context.Context, _ string, _ time.
 	return nil, nil
 }
 
+func (s stubDaemonTriageLister) SearchAuthoredOpenPRs(_ context.Context) ([]ghclient.Item, error) {
+	return nil, nil
+}
+
+func (s stubDaemonTriageLister) SearchAuthoredOpenIssues(_ context.Context) ([]ghclient.Item, error) {
+	return nil, nil
+}
+
+func (s stubDaemonTriageLister) ListOwnedRepos(_ context.Context, _ ghclient.RepoVisibility) ([]string, error) {
+	return nil, nil
+}
+
 func mustDaemonJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(value)

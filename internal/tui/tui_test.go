@@ -584,6 +584,282 @@ func TestModelMarkTriagedDismissesCurrentEntry(t *testing.T) {
 	}
 }
 
+func TestActionFinishedRemovesEntryFromAllEntries(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Role: sharedtypes.RoleContributor},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.roleFilter = RoleFilterContributor
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.applyActionFinished(actionFinishedMsg{verb: "approve", recommendationID: "rec-1"})
+	m.cycleRoleFilter()
+
+	for _, entry := range m.entries {
+		if entry.RecommendationID == "rec-1" {
+			t.Fatalf("removed recommendation reappeared after cycling role filter: %#v", m.entries)
+		}
+	}
+}
+
+func TestActionFinishedRemovesHiddenEntryFromAllEntries(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Role: sharedtypes.RoleContributor},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.roleFilter = RoleFilterMaintainer
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.applyActionFinished(actionFinishedMsg{verb: "approve", recommendationID: "rec-1"})
+	m.cycleRoleFilter()
+
+	for _, entry := range m.entries {
+		if entry.RecommendationID == "rec-1" {
+			t.Fatalf("hidden removed recommendation reappeared after cycling role filter: %#v", m.entries)
+		}
+	}
+}
+
+func TestRerunFinishedUpdatesHiddenEntryInAllEntries(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "old", Role: sharedtypes.RoleContributor, DraftComment: "old draft"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.roleFilter = RoleFilterMaintainer
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.applyActionFinished(actionFinishedMsg{
+		verb:             "rerun",
+		recommendationID: "rec-1",
+		updatedEntries:   []Entry{{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "new", Role: sharedtypes.RoleContributor, DraftComment: "new draft"}},
+	})
+	m.cycleRoleFilter()
+
+	if len(m.entries) != 1 || m.entries[0].RecommendationID != "rec-1" {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[0].DraftComment != "new draft" {
+		t.Fatalf("draft after hidden rerun = %q, want new draft", m.entries[0].DraftComment)
+	}
+}
+
+func TestRerunFinishedReplacesOldRecommendationIDInAllEntries(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-old", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "old", Role: sharedtypes.RoleContributor, DraftComment: "old draft"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.roleFilter = RoleFilterContributor
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.applyActionFinished(actionFinishedMsg{
+		verb:             "rerun",
+		recommendationID: "rec-old",
+		updatedEntries:   []Entry{{RecommendationID: "rec-new", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "new", Role: sharedtypes.RoleContributor, DraftComment: "new draft"}},
+	})
+	m.cycleRoleFilter()
+
+	idx := -1
+	for i := range m.entries {
+		if m.entries[i].RecommendationID == "rec-new" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("entries after cycling filter = %#v, want rec-new", m.entries)
+	}
+	if m.entries[idx].DraftComment != "new draft" {
+		t.Fatalf("draft after rerun = %q, want new draft", m.entries[idx].DraftComment)
+	}
+}
+
+func TestCycleOptionUpdatesAllEntries(t *testing.T) {
+	m := NewModel([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "one",
+		Role:             sharedtypes.RoleContributor,
+		Options: []EntryOption{
+			{ID: "opt-1", StateChange: sharedtypes.StateChangeNone, DraftComment: "first"},
+			{ID: "opt-2", StateChange: sharedtypes.StateChangeClose, DraftComment: "second"},
+		},
+	}})
+	m.width = 100
+	m.roleFilter = RoleFilterContributor
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.cycleOption(1)
+	m.cycleRoleFilter()
+
+	idx := -1
+	for i := range m.entries {
+		if m.entries[i].RecommendationID == "rec-1" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[idx].ActiveOption != 1 {
+		t.Fatalf("active option after cycling filter = %d, want 1", m.entries[idx].ActiveOption)
+	}
+	if m.entries[idx].DraftComment != "second" {
+		t.Fatalf("draft after cycling filter = %q, want second", m.entries[idx].DraftComment)
+	}
+}
+
+func TestJumpToOptionUpdatesAllEntries(t *testing.T) {
+	m := NewModel([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "one",
+		Role:             sharedtypes.RoleContributor,
+		Options: []EntryOption{
+			{ID: "opt-1", StateChange: sharedtypes.StateChangeNone, DraftComment: "first"},
+			{ID: "opt-2", StateChange: sharedtypes.StateChangeClose, DraftComment: "second"},
+		},
+	}})
+	m.width = 100
+	m.roleFilter = RoleFilterContributor
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.jumpToOption(1)
+	m.cycleRoleFilter()
+
+	idx := -1
+	for i := range m.entries {
+		if m.entries[i].RecommendationID == "rec-1" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[idx].ActiveOption != 1 {
+		t.Fatalf("active option after cycling filter = %d, want 1", m.entries[idx].ActiveOption)
+	}
+	if m.entries[idx].DraftComment != "second" {
+		t.Fatalf("draft after cycling filter = %q, want second", m.entries[idx].DraftComment)
+	}
+}
+
+func TestApplyReloadPreservesHiddenAllEntryEdits(t *testing.T) {
+	m := NewModel([]Entry{
+		{
+			RecommendationID: "rec-1",
+			RepoID:           "acme/widgets",
+			Number:           1,
+			Kind:             sharedtypes.ItemKindIssue,
+			Title:            "one",
+			Role:             sharedtypes.RoleContributor,
+			Options: []EntryOption{{
+				ID:                   "opt-1",
+				StateChange:          sharedtypes.StateChangeNone,
+				OriginalStateChange:  sharedtypes.StateChangeNone,
+				DraftComment:         "edited draft",
+				OriginalDraftComment: "raw draft",
+			}},
+		},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.allEntries[0].SyncActive()
+	m.roleFilter = RoleFilterMaintainer
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.applyReload([]Entry{
+		{
+			RecommendationID: "rec-1",
+			RepoID:           "acme/widgets",
+			Number:           1,
+			Kind:             sharedtypes.ItemKindIssue,
+			Title:            "one reloaded",
+			Role:             sharedtypes.RoleContributor,
+			Options: []EntryOption{{
+				ID:                   "opt-1",
+				StateChange:          sharedtypes.StateChangeNone,
+				OriginalStateChange:  sharedtypes.StateChangeNone,
+				DraftComment:         "raw draft",
+				OriginalDraftComment: "raw draft",
+			}},
+		},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two reloaded", Role: sharedtypes.RoleMaintainer},
+	})
+	m.cycleRoleFilter()
+
+	if len(m.entries) != 1 || m.entries[0].RecommendationID != "rec-1" {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[0].DraftComment != "edited draft" {
+		t.Fatalf("draft after hidden reload = %q, want edited draft", m.entries[0].DraftComment)
+	}
+}
+
+func TestEditCurrentReplacesAllEntries(t *testing.T) {
+	m := NewModelWithActions([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Role: sharedtypes.RoleContributor, DraftComment: "draft"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	}, ModelActions{
+		Edit: func(entry Entry) (Entry, error) {
+			entry.DraftComment = "edited draft"
+			return entry, nil
+		},
+	})
+	m.width = 100
+	m.roleFilter = RoleFilterContributor
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.editCurrent()
+	m.cycleRoleFilter()
+
+	idx := -1
+	for i := range m.entries {
+		if m.entries[i].RecommendationID == "rec-1" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[idx].DraftComment != "edited draft" {
+		t.Fatalf("draft after cycling filter = %q, want edited draft", m.entries[idx].DraftComment)
+	}
+}
+
+func TestEditFinishedUpdatesHiddenEntry(t *testing.T) {
+	m := NewModel([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Role: sharedtypes.RoleContributor, DraftComment: "draft"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.roleFilter = RoleFilterMaintainer
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+	finish := func(error) (Entry, error) {
+		return Entry{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Role: sharedtypes.RoleContributor, DraftComment: "edited draft"}, nil
+	}
+
+	m.applyEditFinished(editFinishedMsg{recommendationID: "rec-1", finish: finish})
+	m.cycleRoleFilter()
+
+	if len(m.entries) != 1 || m.entries[0].RecommendationID != "rec-1" {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[0].DraftComment != "edited draft" {
+		t.Fatalf("draft after cycling filter = %q, want edited draft", m.entries[0].DraftComment)
+	}
+}
+
 func TestModelSKeyDoesNotMarkTriaged(t *testing.T) {
 	called := false
 	m := NewModelWithDismiss([]Entry{{
@@ -1411,6 +1687,9 @@ func TestModelReloadRefreshesEntriesAndPreservesEditedDrafts(t *testing.T) {
 	if next.entries[0].DraftComment != "edited draft" {
 		t.Fatalf("edited draft after reload = %q, want %q", next.entries[0].DraftComment, "edited draft")
 	}
+	if next.allEntries[0].DraftComment != "edited draft" {
+		t.Fatalf("allEntries draft after reload = %q, want %q", next.allEntries[0].DraftComment, "edited draft")
+	}
 	if next.entries[0].OriginalDraftComment != "old draft" {
 		t.Fatalf("original draft after reload = %q, want %q", next.entries[0].OriginalDraftComment, "old draft")
 	}
@@ -2232,3 +2511,52 @@ func TestWaitForNotificationReturnsReloadMsg(t *testing.T) {
 type errReloadFailed struct{}
 
 func (errReloadFailed) Error() string { return "reload failed" }
+
+func TestRoleFilterCyclingNarrowsInbox(t *testing.T) {
+	entries := []Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Role: sharedtypes.RoleMaintainer, Title: "maintainer item", AgeLabel: "1m"},
+		{RecommendationID: "rec-2", RepoID: "upstream/widgets", Number: 99, Role: sharedtypes.RoleContributor, Title: "contributor PR", AgeLabel: "2m"},
+	}
+	m := NewModel(entries)
+	if got := len(m.entries); got != 2 {
+		t.Fatalf("initial entries = %d, want 2", got)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	mm := updated.(Model)
+	if mm.roleFilter != RoleFilterMaintainer {
+		t.Fatalf("after first F roleFilter = %v, want maintainer", mm.roleFilter)
+	}
+	if len(mm.entries) != 1 || mm.entries[0].Role != sharedtypes.RoleMaintainer {
+		t.Fatalf("maintainer filter did not narrow: %#v", mm.entries)
+	}
+
+	updated, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	mm = updated.(Model)
+	if mm.roleFilter != RoleFilterContributor {
+		t.Fatalf("after second F roleFilter = %v, want contributor", mm.roleFilter)
+	}
+	if len(mm.entries) != 1 || mm.entries[0].Role != sharedtypes.RoleContributor {
+		t.Fatalf("contributor filter did not narrow: %#v", mm.entries)
+	}
+
+	updated, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	mm = updated.(Model)
+	if mm.roleFilter != RoleFilterAll {
+		t.Fatalf("after third F roleFilter = %v, want all", mm.roleFilter)
+	}
+	if len(mm.entries) != 2 {
+		t.Fatalf("all filter did not restore: %#v", mm.entries)
+	}
+}
+
+func TestCardTitleShowsContribBadgeForContributorEntry(t *testing.T) {
+	contrib := Entry{RepoID: "upstream/widgets", Number: 99, Role: sharedtypes.RoleContributor, Kind: sharedtypes.ItemKindPR}
+	if got := cardTitle(contrib); !strings.Contains(got, "contrib") {
+		t.Fatalf("cardTitle() = %q, want to contain contrib", got)
+	}
+	maint := Entry{RepoID: "acme/widgets", Number: 1, Role: sharedtypes.RoleMaintainer, Kind: sharedtypes.ItemKindIssue}
+	if got := cardTitle(maint); strings.Contains(got, "contrib") {
+		t.Fatalf("cardTitle() = %q, must not include contrib for maintainer", got)
+	}
+}

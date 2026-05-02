@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/kunchenguid/ezoss/internal/db"
@@ -34,6 +35,16 @@ type triageLister interface {
 	ListTriaged(ctx context.Context, repo string, sinceUpdated time.Time) ([]ghclient.Item, error)
 }
 
+// contribSearcher is the optional capability the contributor sweep
+// needs. The daemon checks for it via type assertion on Poller.GitHub
+// so triageLister stays minimal and existing test stubs that don't
+// implement search keep working.
+type contribSearcher interface {
+	SearchAuthoredOpenPRs(ctx context.Context) ([]ghclient.Item, error)
+	SearchAuthoredOpenIssues(ctx context.Context) ([]ghclient.Item, error)
+	ListOwnedRepos(ctx context.Context, visibility ghclient.RepoVisibility) ([]string, error)
+}
+
 type itemGetter interface {
 	GetItem(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int) (ghclient.Item, error)
 }
@@ -48,10 +59,11 @@ type fixRunner interface {
 }
 
 type FixResult struct {
-	Branch       string
-	WorktreePath string
-	PRURL        string
-	WaitingForPR bool
+	Branch                 string
+	WorktreePath           string
+	PRURL                  string
+	WaitingForPR           bool
+	WaitingForManualReview bool
 }
 
 type TriageRequest struct {
@@ -92,6 +104,15 @@ type Poller struct {
 	// PerFixJobTimeout caps a single fix job invocation. Zero means
 	// defaultPerFixJobTimeout (30m).
 	PerFixJobTimeout time.Duration
+	// ContribEnabled gates Stage A.2 (the contributor sweep). When
+	// false the daemon behaves exactly as before: maintainer items
+	// only.
+	ContribEnabled bool
+	// ContribIgnoreRepos is the list of "owner/name" strings to drop
+	// from contributor sweep results before upsert. Useful for noisy
+	// upstreams the user does not want in their inbox.
+	ContribIgnoreRepos       []string
+	PreserveExistingItemRole bool
 }
 
 func (p Poller) log() *slog.Logger {
@@ -120,6 +141,10 @@ func PollOnce(ctx context.Context, poller Poller, repos []string) error {
 	if err := runSyncStage(ctx, poller, repos, polledAt); err != nil {
 		errs = append(errs, err)
 	}
+	contribRepos, err := runContribSweep(ctx, poller, repos, polledAt)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	fixDidWork, fixErr := runFixStage(ctx, poller)
 	if fixErr != nil {
 		errs = append(errs, fixErr)
@@ -130,7 +155,11 @@ func PollOnce(ctx context.Context, poller Poller, repos []string) error {
 		}
 		return nil
 	}
-	if err := runAgentsStage(ctx, poller, repos, polledAt); err != nil {
+	agentRepos := repos
+	if len(contribRepos) > 0 {
+		agentRepos = mergeUnique(repos, contribRepos)
+	}
+	if err := runAgentsStage(ctx, poller, agentRepos, polledAt); err != nil {
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 {
@@ -189,7 +218,11 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 		return fmt.Errorf("poll repo %s: list needing triage: %w", repoID, err)
 	}
 
-	if err := poller.DB.UpsertRepo(db.Repo{ID: repoID, LastPollAt: &polledAt}); err != nil {
+	repoSource := db.RepoSourceConfig
+	if poller.PreserveExistingItemRole {
+		repoSource = db.RepoSourceContrib
+	}
+	if err := poller.DB.UpsertRepo(db.Repo{ID: repoID, Source: repoSource, LastPollAt: &polledAt}); err != nil {
 		return fmt.Errorf("poll repo %s: upsert repo: %w", repoID, err)
 	}
 
@@ -217,6 +250,12 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 			return fmt.Errorf("poll repo %s: get item %d: %w", repoID, item.Number, err)
 		}
 		if existing != nil {
+			if poller.PreserveExistingItemRole {
+				itemRecord.Role = existing.Role
+				itemRecord.HeadRepo = existing.HeadRepo
+				itemRecord.HeadRef = existing.HeadRef
+				itemRecord.HeadCloneURL = existing.HeadCloneURL
+			}
 			itemRecord.WaitingOn = existing.WaitingOn
 			itemRecord.StaleSince = existing.StaleSince
 		}
@@ -262,18 +301,22 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 			return fmt.Errorf("get item %d: %w", cached.Number, err)
 		}
 		itemRecord := db.Item{
-			ID:          cached.ID,
-			RepoID:      repoID,
-			Kind:        current.Kind,
-			Number:      current.Number,
-			Title:       current.Title,
-			Author:      current.Author,
-			State:       current.State,
-			IsDraft:     current.IsDraft,
-			GHTriaged:   hasLabel(current.Labels, triagedLabel),
-			WaitingOn:   cached.WaitingOn,
-			LastEventAt: timePtr(current.UpdatedAt.UTC()),
-			StaleSince:  cached.StaleSince,
+			ID:           cached.ID,
+			RepoID:       repoID,
+			Kind:         current.Kind,
+			Role:         cached.Role,
+			Number:       current.Number,
+			Title:        current.Title,
+			Author:       current.Author,
+			State:        current.State,
+			IsDraft:      current.IsDraft,
+			GHTriaged:    hasLabel(current.Labels, triagedLabel),
+			WaitingOn:    cached.WaitingOn,
+			LastEventAt:  timePtr(current.UpdatedAt.UTC()),
+			StaleSince:   cached.StaleSince,
+			HeadRepo:     cached.HeadRepo,
+			HeadRef:      cached.HeadRef,
+			HeadCloneURL: cached.HeadCloneURL,
 		}
 		if current.State != sharedtypes.ItemStateOpen {
 			itemRecord.StaleSince = nil
@@ -288,6 +331,254 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 		}
 	}
 	return nil
+}
+
+// runContribSweep runs Stage A.2: the contributor item source. When
+// ContribEnabled is true and the underlying GitHub client supports the
+// search methods, it queries `gh search prs/issues --author=@me`,
+// upserts each item with role=contributor and source=contrib on its
+// repo, and prunes contrib repos that no longer have any open
+// contributor items. Returns the list of repos touched so the agents
+// stage can include them when picking items to triage.
+//
+// Items whose repo is in maintainerRepos are deliberately skipped: the
+// maintainer sync (Stage A.1) is the source of truth for those repos
+// and treats authored items the same as any other. Contributor mode is
+// only for repos the user does not maintain.
+func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []string, polledAt time.Time) ([]string, error) {
+	if !poller.ContribEnabled {
+		return nil, nil
+	}
+	searcher, ok := poller.GitHub.(contribSearcher)
+	if !ok {
+		return nil, nil
+	}
+
+	ignore := make(map[string]struct{}, len(poller.ContribIgnoreRepos))
+	for _, r := range poller.ContribIgnoreRepos {
+		if r = strings.TrimSpace(r); r != "" {
+			ignore[r] = struct{}{}
+		}
+	}
+	maintainer := make(map[string]struct{}, len(maintainerRepos))
+	for _, r := range maintainerRepos {
+		if r = strings.TrimSpace(r); r != "" {
+			maintainer[r] = struct{}{}
+		}
+	}
+	// Repos the authenticated user owns on GitHub are also "mine" -
+	// even when not in cfg.Repos, the user shouldn't see their own
+	// items as "contributor" in the inbox. A failure here downgrades to
+	// "no ownership filter applied" rather than aborting the sweep,
+	// since gh repo list errors shouldn't blackhole the inbox.
+	owned := make(map[string]struct{})
+	if ownedList, err := searcher.ListOwnedRepos(ctx, ghclient.RepoVisibilityAll); err != nil {
+		poller.log().Warn("contrib sweep: list owned repos failed (no ownership filter this cycle)", "err", err)
+	} else {
+		for _, r := range ownedList {
+			if r = strings.TrimSpace(r); r != "" {
+				owned[r] = struct{}{}
+			}
+		}
+	}
+
+	var errs []error
+	authoredSearchesComplete := true
+	prs, err := searcher.SearchAuthoredOpenPRs(ctx)
+	if err != nil {
+		authoredSearchesComplete = false
+		errs = append(errs, fmt.Errorf("contrib sweep: list authored prs: %w", err))
+	}
+	issues, err := searcher.SearchAuthoredOpenIssues(ctx)
+	if err != nil {
+		authoredSearchesComplete = false
+		errs = append(errs, fmt.Errorf("contrib sweep: list authored issues: %w", err))
+	}
+
+	repoSet := make(map[string]struct{})
+	seenItemIDs := make(map[string]struct{})
+
+	upsert := func(item ghclient.Item) error {
+		if item.Repo == "" {
+			return nil
+		}
+		if _, skip := ignore[item.Repo]; skip {
+			return nil
+		}
+		// Items in repos the user maintains belong to Stage A.1, not
+		// the contributor sweep. Skipping here avoids two stages
+		// fighting over the same item with different roles.
+		if _, isMaintainer := maintainer[item.Repo]; isMaintainer {
+			return nil
+		}
+		// Items in repos the user owns on GitHub but hasn't added to
+		// cfg.Repos: still not "contributor" - the user can review
+		// them via the maintainer flow whenever they configure the
+		// repo. Surfacing them as contributor in the meantime is
+		// misleading.
+		if _, isOwned := owned[item.Repo]; isOwned {
+			return nil
+		}
+		if isOlderThan(item.UpdatedAt, polledAt, poller.IgnoreOlderThan) {
+			return nil
+		}
+		repoSet[item.Repo] = struct{}{}
+		if err := poller.DB.UpsertRepo(db.Repo{
+			ID:         item.Repo,
+			Source:     db.RepoSourceContrib,
+			LastPollAt: &polledAt,
+		}); err != nil {
+			return fmt.Errorf("upsert contrib repo %s: %w", item.Repo, err)
+		}
+		id := itemID(item.Repo, item.Number)
+		seenItemIDs[id] = struct{}{}
+		existing, err := poller.DB.GetItem(id)
+		if err != nil {
+			return fmt.Errorf("get contrib item %s: %w", id, err)
+		}
+		updated := item.UpdatedAt.UTC()
+		record := db.Item{
+			ID:                id,
+			RepoID:            item.Repo,
+			Kind:              item.Kind,
+			Role:              sharedtypes.RoleContributor,
+			Number:            item.Number,
+			Title:             item.Title,
+			Author:            item.Author,
+			State:             item.State,
+			IsDraft:           item.IsDraft,
+			GHTriaged:         false,
+			WaitingOn:         sharedtypes.WaitingOnNone,
+			LastSeenUpdatedAt: timePtr(updated),
+			HeadRepo:          item.HeadRepo,
+			HeadRef:           item.HeadRef,
+			HeadCloneURL:      item.HeadCloneURL,
+		}
+		if existing != nil {
+			record.GHTriaged = existing.GHTriaged
+			record.WaitingOn = existing.WaitingOn
+			record.StaleSince = existing.StaleSince
+			record.LastSelfActivityAt = existing.LastSelfActivityAt
+			record.LastSeenCommentID = existing.LastSeenCommentID
+			if record.HeadRepo == "" {
+				record.HeadRepo = existing.HeadRepo
+			}
+			if record.HeadRef == "" {
+				record.HeadRef = existing.HeadRef
+			}
+			if record.HeadCloneURL == "" {
+				record.HeadCloneURL = existing.HeadCloneURL
+			}
+			// Only bump LastEventAt when GitHub reports a newer
+			// updated_at than we already saw. This is the watermark
+			// that drives ListItemsNeedingTriage.
+			prev := time.Time{}
+			if existing.LastSeenUpdatedAt != nil {
+				prev = existing.LastSeenUpdatedAt.UTC()
+			}
+			selfActivity := time.Time{}
+			if existing.LastSelfActivityAt != nil {
+				selfActivity = existing.LastSelfActivityAt.UTC()
+			}
+			if updated.After(prev) && (selfActivity.IsZero() || updated.After(selfActivity)) {
+				record.GHTriaged = false
+				record.LastEventAt = timePtr(updated)
+			} else {
+				record.LastEventAt = existing.LastEventAt
+			}
+		} else {
+			record.LastEventAt = timePtr(updated)
+		}
+		if err := poller.DB.UpsertItem(record); err != nil {
+			return fmt.Errorf("upsert contrib item %s: %w", id, err)
+		}
+		return nil
+	}
+
+	for _, item := range prs {
+		if err := upsert(item); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, item := range issues {
+		if err := upsert(item); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if authoredSearchesComplete {
+		if err := pruneContribRepos(poller, maintainer, repoSet, seenItemIDs); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	repos := make([]string, 0, len(repoSet))
+	for r := range repoSet {
+		repos = append(repos, r)
+	}
+	if len(errs) > 0 {
+		return repos, errors.Join(errs...)
+	}
+	return repos, nil
+}
+
+// pruneContribRepos removes contributor items that the latest sweep no
+// longer returned (their PR was merged, the issue closed, etc) and then
+// removes any contrib-source repo that no longer holds any contributor
+// items. Maintainer (config) repos are left alone.
+func pruneContribRepos(poller Poller, maintainerRepos map[string]struct{}, sweptRepos map[string]struct{}, sweptItems map[string]struct{}) error {
+	repos, err := poller.DB.ListReposWithContributorItems()
+	if err != nil {
+		return err
+	}
+	for _, repo := range repos {
+		repoID := repo.ID
+		if _, ok := maintainerRepos[repoID]; ok {
+			continue
+		}
+		items, err := poller.DB.ListContributorItemsForRepo(repoID)
+		if err != nil {
+			return err
+		}
+		for _, it := range items {
+			if _, ok := sweptItems[it.ID]; ok {
+				continue
+			}
+			if err := poller.DB.DeleteItem(it.ID); err != nil {
+				return err
+			}
+		}
+		remaining, err := poller.DB.ListContributorItemsForRepo(repoID)
+		if err != nil {
+			return err
+		}
+		if len(remaining) == 0 {
+			if _, err := poller.DB.DeleteRepoIfContrib(repoID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func mergeUnique(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, v := range a {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	for _, v := range b {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 func runAgentsStage(ctx context.Context, poller Poller, repos []string, polledAt time.Time) error {
@@ -383,9 +674,13 @@ func runTriageForItem(ctx context.Context, poller Poller, item db.Item, polledAt
 	defer cancel()
 
 	ghItem := dbItemToGHItem(item)
+	role := item.Role
+	if role == "" {
+		role = sharedtypes.RoleMaintainer
+	}
 	result, err := poller.Triage.Triage(itemCtx, TriageRequest{
 		Item:   ghItem,
-		Prompt: triage.PromptWithRerunInstructions(ghItem.URL, poller.AgentsInstructions, poller.RerunInstructions),
+		Prompt: triage.PromptForRole(role, ghItem.URL, poller.AgentsInstructions, poller.RerunInstructions),
 		Schema: triage.Schema(),
 	})
 	if err != nil {

@@ -71,6 +71,7 @@ type Entry struct {
 	RepoID            string
 	Number            int
 	Kind              sharedtypes.ItemKind
+	Role              sharedtypes.Role
 	Author            string
 	Unconfigured      bool
 	Title             string
@@ -192,8 +193,19 @@ type ModelActions struct {
 	OpenURL       func(Entry) error
 }
 
+// RoleFilter narrows the inbox to one role. Cycled with the "F" key.
+type RoleFilter int
+
+const (
+	RoleFilterAll RoleFilter = iota
+	RoleFilterMaintainer
+	RoleFilterContributor
+)
+
 type Model struct {
 	entries    []Entry
+	allEntries []Entry
+	roleFilter RoleFilter
 	cursor     int
 	cardScroll int
 	width      int
@@ -334,7 +346,9 @@ type spinnerTickMsg struct{}
 const refreshInterval = 5 * time.Second
 
 func NewModel(entries []Entry) Model {
-	return Model{entries: append([]Entry(nil), entries...), width: 100}
+	cloned := append([]Entry(nil), entries...)
+	all := append([]Entry(nil), entries...)
+	return Model{entries: cloned, allEntries: all, width: 100}
 }
 
 func NewModelWithActions(entries []Entry, actions ModelActions) Model {
@@ -483,6 +497,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd := m.fixCurrent(); cmd != nil {
 				return m, withSpinner(cmd, m.kickSpinnerIfPending())
 			}
+		case "F":
+			m.cycleRoleFilter()
 		case "r":
 			m.openRerunInput()
 		case "m":
@@ -539,6 +555,7 @@ func (m *Model) cycleOption(delta int) {
 	idx = ((idx % n) + n) % n
 	entry.ActiveOption = idx
 	entry.SyncActive()
+	m.replaceAllEntry(*entry)
 	m.cardScroll = 0
 }
 
@@ -558,6 +575,7 @@ func (m *Model) jumpToOption(idx int) {
 	entry.CommitEdits()
 	entry.ActiveOption = idx
 	entry.SyncActive()
+	m.replaceAllEntry(*entry)
 	m.cardScroll = 0
 }
 
@@ -645,6 +663,7 @@ func (m *Model) editCurrent() tea.Cmd {
 	}
 	updated.CommitEdits()
 	m.entries[m.cursor] = updated
+	m.replaceAllEntry(updated)
 	m.cardScroll = 0
 	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
 	return nil
@@ -822,16 +841,25 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 	}
 	switch msg.verb {
 	case "approve", "mark":
+		if idx < 0 {
+			m.removeAllEntriesByID(map[string]struct{}{msg.recommendationID: {}})
+			return
+		}
 		if idx >= 0 {
 			m.removeEntries([]int{idx})
 		}
 	case "rerun":
-		if idx >= 0 && len(msg.updatedEntries) > 0 {
-			m.entries[idx] = msg.updatedEntries[0]
+		if len(msg.updatedEntries) == 0 {
+			return
+		}
+		updated := msg.updatedEntries[0]
+		if idx >= 0 {
+			m.entries[idx] = updated
 			if idx == m.cursor {
 				m.cardScroll = 0
 			}
 		}
+		m.replaceAllEntry(updated, msg.recommendationID)
 	}
 }
 
@@ -876,7 +904,7 @@ func (m *Model) applyEditFinished(msg editFinishedMsg) {
 			break
 		}
 	}
-	if idx < 0 {
+	if idx < 0 && !m.hasAllEntry(msg.recommendationID) {
 		m.pushLog(logEntry{state: logStateInfo, note: "edit aborted: entry no longer in queue"})
 		return
 	}
@@ -886,8 +914,11 @@ func (m *Model) applyEditFinished(msg editFinishedMsg) {
 		return
 	}
 	updated.CommitEdits()
-	m.entries[idx] = updated
-	if idx == m.cursor {
+	if idx >= 0 {
+		m.entries[idx] = updated
+	}
+	m.replaceAllEntry(updated)
+	if idx >= 0 && idx == m.cursor {
 		m.cardScroll = 0
 	}
 	m.pushLog(logEntry{state: logStateInfo, note: fmt.Sprintf("edited recommendation for %s #%d", updated.RepoID, updated.Number)})
@@ -1373,6 +1404,7 @@ func (m Model) renderHelp() string {
 		"m                  mark triaged without approving",
 		"o                  open the current item's GitHub page in a browser",
 		"r                  rerun the agent on the current item with instructions",
+		"F                  cycle role filter: all / maintainer / contributor",
 		"?                  toggle this help",
 		"q                  quit",
 	}, "\n")
@@ -1896,6 +1928,9 @@ func (m Model) renderCard(width, boxHeight int) string {
 // option - the queue position is communicated by the rail's cursor.
 func cardTitle(entry Entry) string {
 	parts := []string{entry.RepoID, entryNumberLabel(entry)}
+	if badge := roleBadge(entry.Role); badge != "" {
+		parts = append(parts, badge)
+	}
 	if len(entry.Options) > 1 {
 		parts = append(parts, fmt.Sprintf("option %d/%d", entry.ActiveOption+1, len(entry.Options)))
 	}
@@ -1903,6 +1938,73 @@ func cardTitle(entry Entry) string {
 		parts = append(parts, "unconfigured")
 	}
 	return strings.Join(parts, " · ")
+}
+
+// applyRoleFilter narrows the inbox to entries matching the filter.
+// RoleFilterAll returns the input unchanged. The result preserves order.
+func applyRoleFilter(entries []Entry, filter RoleFilter) []Entry {
+	if filter == RoleFilterAll {
+		return entries
+	}
+	want := sharedtypes.RoleMaintainer
+	if filter == RoleFilterContributor {
+		want = sharedtypes.RoleContributor
+	}
+	out := make([]Entry, 0, len(entries))
+	for _, entry := range entries {
+		role := entry.Role
+		if role == "" {
+			role = sharedtypes.RoleMaintainer
+		}
+		if role == want {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// cycleRoleFilter advances the inbox role filter through
+// All -> Maintainer -> Contributor -> All. The cursor is reset to the
+// top of the filtered list so the user lands on something visible.
+func (m *Model) cycleRoleFilter() {
+	switch m.roleFilter {
+	case RoleFilterAll:
+		m.roleFilter = RoleFilterMaintainer
+	case RoleFilterMaintainer:
+		m.roleFilter = RoleFilterContributor
+	default:
+		m.roleFilter = RoleFilterAll
+	}
+	if len(m.allEntries) == 0 {
+		m.allEntries = append(m.allEntries[:0], m.entries...)
+	}
+	filtered := applyRoleFilter(m.allEntries, m.roleFilter)
+	m.entries = append(m.entries[:0], filtered...)
+	m.cursor = 0
+	m.cardScroll = 0
+	m.pushLog(logEntry{state: logStateInfo, note: "filter: " + roleFilterLabel(m.roleFilter)})
+}
+
+func roleFilterLabel(f RoleFilter) string {
+	switch f {
+	case RoleFilterMaintainer:
+		return "maintainer"
+	case RoleFilterContributor:
+		return "contributor"
+	default:
+		return "all"
+	}
+}
+
+// roleBadge returns a short marker for the entry's role. Maintainer is
+// the default and produces no badge to keep the chrome quiet for the
+// common case; contributor items get a small "contrib" tag so the user
+// can tell at a glance which are theirs to push and which they own.
+func roleBadge(role sharedtypes.Role) string {
+	if role == sharedtypes.RoleContributor {
+		return "contrib"
+	}
+	return ""
 }
 
 // renderQueueRail renders the queue grouped by repo, with the cursor's
@@ -2403,8 +2505,12 @@ func (m *Model) removeEntries(indices []int) {
 	origCursor := m.cursor
 	currentID := m.currentRecommendationID()
 	remove := make(map[int]struct{}, len(indices))
+	removeIDs := make(map[string]struct{}, len(indices))
 	for _, index := range indices {
 		remove[index] = struct{}{}
+		if index >= 0 && index < len(m.entries) && m.entries[index].RecommendationID != "" {
+			removeIDs[m.entries[index].RecommendationID] = struct{}{}
+		}
 	}
 	kept := m.entries[:0]
 	for index, entry := range m.entries {
@@ -2414,6 +2520,7 @@ func (m *Model) removeEntries(indices []int) {
 		kept = append(kept, entry)
 	}
 	m.entries = kept
+	m.removeAllEntriesByID(removeIDs)
 
 	// Try to keep the cursor on the same recommendation it pointed at
 	// before the removal - critical when an earlier entry (one before
@@ -2452,6 +2559,84 @@ func (m *Model) removeEntries(indices []int) {
 	if currentID != m.currentRecommendationID() {
 		m.cardScroll = 0
 	}
+}
+
+func (m *Model) removeAllEntriesByID(ids map[string]struct{}) {
+	if len(ids) == 0 || len(m.allEntries) == 0 {
+		return
+	}
+	kept := m.allEntries[:0]
+	for _, entry := range m.allEntries {
+		if _, ok := ids[entry.RecommendationID]; ok {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	m.allEntries = kept
+}
+
+func (m *Model) replaceAllEntry(updated Entry, oldIDs ...string) {
+	if updated.RecommendationID == "" {
+		return
+	}
+	for i := range m.allEntries {
+		if m.allEntries[i].RecommendationID == updated.RecommendationID {
+			m.allEntries[i] = updated
+			return
+		}
+	}
+	oldIDSet := make(map[string]struct{}, len(oldIDs))
+	for _, id := range oldIDs {
+		if id != "" && id != updated.RecommendationID {
+			oldIDSet[id] = struct{}{}
+		}
+	}
+	if len(oldIDSet) > 0 {
+		for i := range m.allEntries {
+			if _, ok := oldIDSet[m.allEntries[i].RecommendationID]; ok {
+				m.allEntries[i] = updated
+				return
+			}
+		}
+	}
+}
+
+func (m *Model) hasAllEntry(recommendationID string) bool {
+	if recommendationID == "" {
+		return false
+	}
+	for i := range m.allEntries {
+		if m.allEntries[i].RecommendationID == recommendationID {
+			return true
+		}
+	}
+	return false
+}
+
+func preserveEntryState(entry *Entry, prev Entry) {
+	if len(prev.Options) > 0 && len(entry.Options) > 0 {
+		byID := make(map[string]EntryOption, len(prev.Options))
+		for _, o := range prev.Options {
+			byID[o.ID] = o
+		}
+		for j := range entry.Options {
+			if p, ok := byID[entry.Options[j].ID]; ok && p.Edited() {
+				entry.Options[j].StateChange = p.StateChange
+				entry.Options[j].ProposedLabels = append([]string(nil), p.ProposedLabels...)
+				entry.Options[j].DraftComment = p.DraftComment
+			}
+		}
+		if prev.ActiveOption < len(entry.Options) {
+			entry.ActiveOption = prev.ActiveOption
+		}
+	}
+	entry.SyncActive()
+	entry.StateChange = prev.StateChange
+	entry.OriginalStateChange = prev.OriginalStateChange
+	entry.ProposedLabels = append([]string(nil), prev.ProposedLabels...)
+	entry.OriginalProposedLabels = append([]string(nil), prev.OriginalProposedLabels...)
+	entry.DraftComment = prev.DraftComment
+	entry.OriginalDraftComment = prev.OriginalDraftComment
 }
 
 func (m *Model) currentRecommendationID() string {
@@ -2498,6 +2683,12 @@ func (m *Model) applyReload(entries []Entry) {
 	}
 
 	editedByID := make(map[string]Entry)
+	for _, entry := range m.allEntries {
+		entry.CommitEdits()
+		if entry.Edited() || entry.ActiveOption > 0 {
+			editedByID[entry.RecommendationID] = entry
+		}
+	}
 	for _, entry := range m.entries {
 		entry.CommitEdits()
 		if entry.Edited() || entry.ActiveOption > 0 {
@@ -2505,42 +2696,19 @@ func (m *Model) applyReload(entries []Entry) {
 		}
 	}
 
+	m.allEntries = append(m.allEntries[:0], entries...)
+	for i := range m.allEntries {
+		if prev, ok := editedByID[m.allEntries[i].RecommendationID]; ok {
+			preserveEntryState(&m.allEntries[i], prev)
+		}
+	}
+	entries = applyRoleFilter(entries, m.roleFilter)
 	m.entries = append(m.entries[:0], entries...)
 	newCursor := 0
 	foundCursor := false
 	for i := range m.entries {
 		if prev, ok := editedByID[m.entries[i].RecommendationID]; ok {
-			// Preserve in-progress edits and active-option selection.
-			// Match options by ID so additions or reorderings on the
-			// server side don't clobber user edits. When the prior
-			// entry had no Options (legacy callers), fall back to the
-			// mirror fields and apply them to the active option.
-			if len(prev.Options) > 0 && len(m.entries[i].Options) > 0 {
-				byID := make(map[string]EntryOption, len(prev.Options))
-				for _, o := range prev.Options {
-					byID[o.ID] = o
-				}
-				for j := range m.entries[i].Options {
-					if p, ok := byID[m.entries[i].Options[j].ID]; ok && p.Edited() {
-						m.entries[i].Options[j].StateChange = p.StateChange
-						m.entries[i].Options[j].ProposedLabels = append([]string(nil), p.ProposedLabels...)
-						m.entries[i].Options[j].DraftComment = p.DraftComment
-					}
-				}
-				if prev.ActiveOption < len(m.entries[i].Options) {
-					m.entries[i].ActiveOption = prev.ActiveOption
-				}
-			}
-			m.entries[i].SyncActive()
-			// Always restore the user's mirror fields when any edit was
-			// in progress - even fields that weren't directly edited
-			// should not be clobbered by a partial server refresh.
-			m.entries[i].StateChange = prev.StateChange
-			m.entries[i].OriginalStateChange = prev.OriginalStateChange
-			m.entries[i].ProposedLabels = append([]string(nil), prev.ProposedLabels...)
-			m.entries[i].OriginalProposedLabels = append([]string(nil), prev.OriginalProposedLabels...)
-			m.entries[i].DraftComment = prev.DraftComment
-			m.entries[i].OriginalDraftComment = prev.OriginalDraftComment
+			preserveEntryState(&m.entries[i], prev)
 		}
 		if !foundCursor && currentID != "" && m.entries[i].RecommendationID == currentID {
 			newCursor = i

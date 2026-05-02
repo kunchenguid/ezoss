@@ -35,6 +35,68 @@ func TestLoadGlobalDefaults(t *testing.T) {
 	if cfg.Fixes.PRCreate != PRCreateAuto {
 		t.Fatalf("Fixes.PRCreate = %q, want %q", cfg.Fixes.PRCreate, PRCreateAuto)
 	}
+	if !cfg.Contrib.Enabled {
+		t.Fatalf("Contrib.Enabled = false, want true (contributor mode is on by default)")
+	}
+}
+
+func TestLoadGlobalContribExplicitOptOut(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("contrib:\n  enabled: false\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadGlobal(path)
+	if err != nil {
+		t.Fatalf("LoadGlobal error: %v", err)
+	}
+	if cfg.Contrib.Enabled {
+		t.Fatal("explicit contrib.enabled: false must override the default true")
+	}
+}
+
+func TestSaveGlobalPreservesLoadedContribExplicitOptOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("contrib:\n  enabled: false\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadGlobal(path)
+	if err != nil {
+		t.Fatalf("LoadGlobal() error = %v", err)
+	}
+
+	if err := SaveGlobal(path, cfg); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	got, err := LoadGlobal(path)
+	if err != nil {
+		t.Fatalf("LoadGlobal() after save error = %v", err)
+	}
+	if got.Contrib.Enabled {
+		t.Fatal("contrib.enabled = true, want explicit false preserved")
+	}
+}
+
+func TestLoadGlobalContribIgnoreReposKeepsDefaultEnabled(t *testing.T) {
+	// Regression: a user who only sets ignore_repos (no enabled key)
+	// must keep the default true. Earlier versions used a plain bool
+	// here and silently disabled contrib mode in this case.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("contrib:\n  ignore_repos:\n    - noisy/repo\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadGlobal(path)
+	if err != nil {
+		t.Fatalf("LoadGlobal error: %v", err)
+	}
+	if !cfg.Contrib.Enabled {
+		t.Fatalf("Contrib.Enabled = false, want true (only ignore_repos set, enabled key absent)")
+	}
+	if len(cfg.Contrib.IgnoreRepos) != 1 || cfg.Contrib.IgnoreRepos[0] != "noisy/repo" {
+		t.Fatalf("IgnoreRepos = %v, want [noisy/repo]", cfg.Contrib.IgnoreRepos)
+	}
 }
 
 func TestEnsureDefaultGlobalConfigCreatesLoadableFile(t *testing.T) {

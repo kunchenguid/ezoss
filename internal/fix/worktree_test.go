@@ -147,6 +147,76 @@ func TestPrepareWorktreeReusesExistingInvestigationCheckoutWithoutCloning(t *tes
 	}
 }
 
+func TestPrepareContribWorktreeUsesUniqueLocalBranchesForRepeatedFixes(t *testing.T) {
+	root := t.TempDir()
+	checkout := filepath.Join(root, "investigations", "kun__widgets")
+	if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	branches := map[string]bool{}
+	runGit := func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+		switch {
+		case len(args) == 4 && args[0] == "checkout" && args[1] == "-B":
+			branch := args[2]
+			if branches[branch] {
+				return nil, errors.New("branch already checked out")
+			}
+			branches[branch] = true
+		case len(args) == 4 && args[0] == "worktree" && args[1] == "add":
+			return nil, os.MkdirAll(args[2], 0o755)
+		}
+		return nil, nil
+	}
+
+	first, err := PrepareContribWorktree(context.Background(), ContribWorktreeOptions{Root: root, HeadRepo: "kun/widgets", HeadRef: "fix-race", CloneURL: "https://github.com/kun/widgets.git", Number: 12, RunGit: runGit})
+	if err != nil {
+		t.Fatalf("first PrepareContribWorktree() error = %v", err)
+	}
+	second, err := PrepareContribWorktree(context.Background(), ContribWorktreeOptions{Root: root, HeadRepo: "kun/widgets", HeadRef: "fix-race", CloneURL: "https://github.com/kun/widgets.git", Number: 12, RunGit: runGit})
+	if err != nil {
+		t.Fatalf("second PrepareContribWorktree() error = %v", err)
+	}
+
+	if first.Branch == second.Branch {
+		t.Fatalf("branches = %q and %q, want unique local branches", first.Branch, second.Branch)
+	}
+	if first.BaseRef != "origin/fix-race" || second.BaseRef != "origin/fix-race" {
+		t.Fatalf("base refs = %q and %q, want origin/fix-race", first.BaseRef, second.BaseRef)
+	}
+}
+
+func TestPrepareContribWorktreeClonesWithGHWhenCheckoutMissing(t *testing.T) {
+	root := t.TempDir()
+	var gitCalls [][]string
+	var ghCalls [][]string
+	runGit := func(_ context.Context, dir string, _ []string, args ...string) ([]byte, error) {
+		gitCalls = append(gitCalls, append([]string{dir}, args...))
+		if len(args) == 4 && args[0] == "worktree" && args[1] == "add" {
+			return nil, os.MkdirAll(args[2], 0o755)
+		}
+		return nil, nil
+	}
+	runGH := func(_ context.Context, dir string, args ...string) ([]byte, error) {
+		ghCalls = append(ghCalls, append([]string{dir}, args...))
+		checkout := args[3]
+		if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o755); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	_, err := PrepareContribWorktree(context.Background(), ContribWorktreeOptions{Root: root, HeadRepo: "kun/widgets", HeadRef: "fix-race", CloneURL: "https://github.com/kun/widgets.git", Number: 12, RunGit: runGit, RunGH: runGH})
+	if err != nil {
+		t.Fatalf("PrepareContribWorktree() error = %v", err)
+	}
+	if len(ghCalls) != 1 || !reflect.DeepEqual(ghCalls[0], []string{filepath.Join(root, "investigations"), "repo", "clone", "kun/widgets", filepath.Join(root, "investigations", "kun__widgets")}) {
+		t.Fatalf("gh calls = %#v, want gh repo clone", ghCalls)
+	}
+	if containsGitCall(gitCalls, filepath.Join(root, "investigations"), "clone", "https://github.com/kun/widgets.git", filepath.Join(root, "investigations", "kun__widgets")) {
+		t.Fatalf("git calls = %#v, must not use raw git clone", gitCalls)
+	}
+}
+
 func TestPrepareWorktreeFallsBackToInvestigationCheckoutHEAD(t *testing.T) {
 	root := t.TempDir()
 	checkout := filepath.Join(root, "investigations", "acme__widgets")

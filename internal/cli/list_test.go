@@ -721,6 +721,51 @@ func TestListCommandMarksUnconfiguredRowsInline(t *testing.T) {
 	}
 }
 
+func TestListCommandMarksContributorRowsSeparatelyFromUnconfigured(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "upstream/widgets#12", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Number: 12, Title: "contrib pr", State: sharedtypes.ItemStateOpen, Role: sharedtypes.RoleContributor}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: "upstream/widgets#12", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "upstream/widgets#12 (contributor)") {
+		t.Fatalf("output = %q, want contributor marker", got)
+	}
+	if strings.Contains(got, "upstream/widgets#12 (unconfigured)") || strings.Contains(got, "unconfigured") {
+		t.Fatalf("output = %q, contributor item should not be labeled unconfigured", got)
+	}
+}
+
 func TestListCommandSummarizesConfiguredAndUnconfiguredQueueCounts(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths

@@ -4,6 +4,7 @@ const schemaSQL = `
 CREATE TABLE IF NOT EXISTS repos (
     id              TEXT PRIMARY KEY,
     default_branch  TEXT,
+    source          TEXT NOT NULL DEFAULT 'config',
     last_poll_at    INTEGER,
     last_triaged_refresh_at INTEGER,
     created_at      INTEGER NOT NULL
@@ -13,6 +14,7 @@ CREATE TABLE IF NOT EXISTS items (
     id              TEXT PRIMARY KEY,
     repo_id         TEXT NOT NULL REFERENCES repos(id),
     kind            TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'maintainer',
     number          INTEGER NOT NULL,
     title           TEXT,
     author          TEXT,
@@ -22,6 +24,12 @@ CREATE TABLE IF NOT EXISTS items (
     waiting_on      TEXT,
     last_event_at   INTEGER,
     stale_since     INTEGER,
+    last_seen_updated_at  INTEGER,
+    last_seen_comment_id  INTEGER,
+    last_self_activity_at INTEGER,
+    head_repo       TEXT,
+    head_ref        TEXT,
+    head_clone_url  TEXT,
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL
 );

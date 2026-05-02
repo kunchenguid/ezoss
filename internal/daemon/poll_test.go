@@ -95,6 +95,108 @@ func TestPollOnceUpsertsRepoAndItems(t *testing.T) {
 	}
 }
 
+func TestSyncRepoDataConvertsContributorItemToMaintainer(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:           "upstream/widgets#12",
+		RepoID:       "upstream/widgets",
+		Kind:         sharedtypes.ItemKindPR,
+		Number:       12,
+		Role:         sharedtypes.RoleContributor,
+		HeadRepo:     "kun/widgets",
+		HeadRef:      "fix-race",
+		HeadCloneURL: "https://github.com/kun/widgets.git",
+		State:        sharedtypes.ItemStateOpen,
+		WaitingOn:    sharedtypes.WaitingOnMaintainer,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	client := &stubTriageClient{itemsByRepo: map[string][]ghclient.Item{
+		"upstream/widgets": {{
+			Repo:      "upstream/widgets",
+			Kind:      sharedtypes.ItemKindPR,
+			Number:    12,
+			Title:     "Fix race",
+			Author:    "kun",
+			State:     sharedtypes.ItemStateOpen,
+			UpdatedAt: time.Unix(1713511200, 0).UTC(),
+		}},
+	}}
+
+	if err := syncRepoData(context.Background(), Poller{DB: database, GitHub: client}, "upstream/widgets", time.Now()); err != nil {
+		t.Fatalf("syncRepoData() error = %v", err)
+	}
+
+	got, err := database.GetItem("upstream/widgets#12")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetItem() = nil")
+	}
+	if got.Role != sharedtypes.RoleMaintainer {
+		t.Fatalf("role = %q, want maintainer", got.Role)
+	}
+	if got.HeadRepo != "" || got.HeadRef != "" || got.HeadCloneURL != "" {
+		t.Fatalf("head metadata = %q/%q clone %q, want cleared", got.HeadRepo, got.HeadRef, got.HeadCloneURL)
+	}
+}
+
+func TestSyncRepoDataPreservesContributorMetadataForExplicitRerun(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:           "upstream/widgets#12",
+		RepoID:       "upstream/widgets",
+		Kind:         sharedtypes.ItemKindPR,
+		Number:       12,
+		Role:         sharedtypes.RoleContributor,
+		HeadRepo:     "kun/widgets",
+		HeadRef:      "fix-race",
+		HeadCloneURL: "https://github.com/kun/widgets.git",
+		State:        sharedtypes.ItemStateOpen,
+		WaitingOn:    sharedtypes.WaitingOnMaintainer,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	client := &stubTriageClient{itemsByRepo: map[string][]ghclient.Item{
+		"upstream/widgets": {{
+			Repo:      "upstream/widgets",
+			Kind:      sharedtypes.ItemKindPR,
+			Number:    12,
+			Title:     "Fix race",
+			Author:    "kun",
+			State:     sharedtypes.ItemStateOpen,
+			UpdatedAt: time.Unix(1713511200, 0).UTC(),
+		}},
+	}}
+
+	poller := Poller{DB: database, GitHub: client, PreserveExistingItemRole: true}
+	if err := syncRepoData(context.Background(), poller, "upstream/widgets", time.Now()); err != nil {
+		t.Fatalf("syncRepoData() error = %v", err)
+	}
+
+	got, err := database.GetItem("upstream/widgets#12")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetItem() = nil")
+	}
+	if got.Role != sharedtypes.RoleContributor || got.HeadRepo != "kun/widgets" || got.HeadRef != "fix-race" || got.HeadCloneURL != "https://github.com/kun/widgets.git" {
+		t.Fatalf("contributor metadata = role %q head %q/%q clone %q", got.Role, got.HeadRepo, got.HeadRef, got.HeadCloneURL)
+	}
+}
+
 func TestPollOnceReturnsRepoContextOnListFailure(t *testing.T) {
 	t.Parallel()
 
@@ -1571,6 +1673,36 @@ type stubTriageClient struct {
 	calls              []string
 	triagedCalls       []string
 	triagedSinceByCall []time.Time
+
+	authoredPRs    []ghclient.Item
+	authoredIssues []ghclient.Item
+	authoredErr    error
+	authoredCalls  int
+
+	ownedRepos    []string
+	ownedReposErr error
+}
+
+func (s *stubTriageClient) ListOwnedRepos(_ context.Context, _ ghclient.RepoVisibility) ([]string, error) {
+	if s.ownedReposErr != nil {
+		return nil, s.ownedReposErr
+	}
+	return append([]string(nil), s.ownedRepos...), nil
+}
+
+func (s *stubTriageClient) SearchAuthoredOpenPRs(_ context.Context) ([]ghclient.Item, error) {
+	s.authoredCalls++
+	if s.authoredErr != nil {
+		return nil, s.authoredErr
+	}
+	return append([]ghclient.Item(nil), s.authoredPRs...), nil
+}
+
+func (s *stubTriageClient) SearchAuthoredOpenIssues(_ context.Context) ([]ghclient.Item, error) {
+	if s.authoredErr != nil {
+		return nil, s.authoredErr
+	}
+	return append([]ghclient.Item(nil), s.authoredIssues...), nil
 }
 
 type stubRecommendationRunner struct {
@@ -1749,5 +1881,450 @@ func TestFilterItemsByAgeZeroThresholdIsNoop(t *testing.T) {
 	got := filterItemsByAge(items, now, 0)
 	if len(got) != 1 {
 		t.Fatalf("threshold=0 should keep all items, got %d", len(got))
+	}
+}
+
+func TestPollOnceContribSweepUpsertsAuthoredItems(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Date(2026, time.April, 30, 12, 0, 0, 0, time.UTC)
+	client := &stubTriageClient{
+		authoredPRs: []ghclient.Item{
+			{
+				Repo:         "upstream/widgets",
+				Kind:         sharedtypes.ItemKindPR,
+				Number:       321,
+				Title:        "fix race",
+				Author:       "kun",
+				State:        sharedtypes.ItemStateOpen,
+				URL:          "https://github.com/upstream/widgets/pull/321",
+				UpdatedAt:    now.Add(-1 * time.Hour),
+				HeadRepo:     "kun/widgets",
+				HeadRef:      "fix-race",
+				HeadCloneURL: "https://github.com/kun/widgets.git",
+			},
+		},
+		authoredIssues: []ghclient.Item{
+			{
+				Repo:      "upstream/widgets",
+				Kind:      sharedtypes.ItemKindIssue,
+				Number:    310,
+				Title:     "panic on race",
+				Author:    "kun",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/upstream/widgets/issues/310",
+				UpdatedAt: now.Add(-2 * time.Hour),
+			},
+		},
+	}
+
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+
+	if client.authoredCalls != 1 {
+		t.Fatalf("authoredCalls = %d, want 1", client.authoredCalls)
+	}
+
+	repo, err := database.GetRepo("upstream/widgets")
+	if err != nil {
+		t.Fatalf("GetRepo error: %v", err)
+	}
+	if repo == nil {
+		t.Fatal("expected contrib repo to be auto-created")
+	}
+	if repo.Source != db.RepoSourceContrib {
+		t.Fatalf("repo source = %q, want %q", repo.Source, db.RepoSourceContrib)
+	}
+
+	pr, err := database.GetItem("upstream/widgets#321")
+	if err != nil {
+		t.Fatalf("GetItem(pr) error: %v", err)
+	}
+	if pr == nil {
+		t.Fatal("expected PR item to be stored")
+	}
+	if pr.Role != sharedtypes.RoleContributor {
+		t.Fatalf("PR role = %q, want contributor", pr.Role)
+	}
+	if pr.HeadRepo != "kun/widgets" || pr.HeadRef != "fix-race" || pr.HeadCloneURL == "" {
+		t.Fatalf("PR head info missing: %#v", pr)
+	}
+	if pr.LastSeenUpdatedAt == nil {
+		t.Fatal("PR LastSeenUpdatedAt should be set after sweep")
+	}
+
+	issue, err := database.GetItem("upstream/widgets#310")
+	if err != nil {
+		t.Fatalf("GetItem(issue) error: %v", err)
+	}
+	if issue == nil || issue.Role != sharedtypes.RoleContributor {
+		t.Fatalf("issue not stored as contributor: %#v", issue)
+	}
+}
+
+func TestPollOnceContribSweepPreservesExistingHeadMetadataWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Date(2026, time.April, 30, 12, 0, 0, 0, time.UTC)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:                "upstream/widgets#321",
+		RepoID:            "upstream/widgets",
+		Kind:              sharedtypes.ItemKindPR,
+		Role:              sharedtypes.RoleContributor,
+		Number:            321,
+		Title:             "fix race",
+		State:             sharedtypes.ItemStateOpen,
+		LastSeenUpdatedAt: timePtr(now),
+		LastEventAt:       timePtr(now),
+		HeadRepo:          "kun/widgets",
+		HeadRef:           "fix-race",
+		HeadCloneURL:      "https://github.com/kun/widgets.git",
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{authoredPRs: []ghclient.Item{{
+		Repo:      "upstream/widgets",
+		Kind:      sharedtypes.ItemKindPR,
+		Number:    321,
+		Title:     "fix race",
+		State:     sharedtypes.ItemStateOpen,
+		UpdatedAt: now.Add(time.Hour),
+	}}}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+
+	item, err := database.GetItem("upstream/widgets#321")
+	if err != nil {
+		t.Fatalf("GetItem error: %v", err)
+	}
+	if item == nil || item.HeadRepo != "kun/widgets" || item.HeadRef != "fix-race" || item.HeadCloneURL != "https://github.com/kun/widgets.git" {
+		t.Fatalf("head metadata = %#v, want existing metadata preserved", item)
+	}
+}
+
+func TestPollOnceContribSweepPreservesLocalTriagedUntilNewActivity(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Date(2026, time.April, 30, 12, 0, 0, 0, time.UTC)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor,
+		Number: 321, Title: "fix race", State: sharedtypes.ItemStateOpen, GHTriaged: true, LastSeenUpdatedAt: timePtr(now), LastEventAt: timePtr(now),
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{authoredPRs: []ghclient.Item{{
+		Repo: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Number: 321, Title: "fix race", State: sharedtypes.ItemStateOpen, UpdatedAt: now,
+	}}}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+
+	item, err := database.GetItem("upstream/widgets#321")
+	if err != nil {
+		t.Fatalf("GetItem error: %v", err)
+	}
+	if item == nil || !item.GHTriaged {
+		t.Fatalf("GHTriaged after unchanged contributor sweep = %#v, want true", item)
+	}
+
+	client.authoredPRs[0].UpdatedAt = now.Add(time.Hour)
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce with new activity error: %v", err)
+	}
+	item, err = database.GetItem("upstream/widgets#321")
+	if err != nil {
+		t.Fatalf("GetItem after new activity error: %v", err)
+	}
+	if item == nil || item.GHTriaged {
+		t.Fatalf("GHTriaged after new contributor activity = %#v, want false", item)
+	}
+}
+
+func TestPollOnceContribSweepPreservesLocalTriagedForSelfActivity(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Date(2026, time.April, 30, 12, 0, 0, 0, time.UTC)
+	selfActivity := now.Add(5 * time.Minute)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:                 "upstream/widgets#321",
+		RepoID:             "upstream/widgets",
+		Kind:               sharedtypes.ItemKindPR,
+		Role:               sharedtypes.RoleContributor,
+		Number:             321,
+		Title:              "fix race",
+		State:              sharedtypes.ItemStateOpen,
+		GHTriaged:          true,
+		LastSeenUpdatedAt:  timePtr(now),
+		LastEventAt:        timePtr(now),
+		LastSelfActivityAt: timePtr(selfActivity),
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{authoredPRs: []ghclient.Item{{
+		Repo:      "upstream/widgets",
+		Kind:      sharedtypes.ItemKindPR,
+		Number:    321,
+		Title:     "fix race",
+		State:     sharedtypes.ItemStateOpen,
+		UpdatedAt: selfActivity,
+	}}}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+
+	item, err := database.GetItem("upstream/widgets#321")
+	if err != nil {
+		t.Fatalf("GetItem error: %v", err)
+	}
+	if item == nil || !item.GHTriaged {
+		t.Fatalf("GHTriaged after self contributor activity = %#v, want true", item)
+	}
+	if item.LastSeenUpdatedAt == nil || !item.LastSeenUpdatedAt.Equal(selfActivity) {
+		t.Fatalf("LastSeenUpdatedAt = %v, want %v", item.LastSeenUpdatedAt, selfActivity)
+	}
+}
+
+func TestPollOnceContribSweepDisabledByDefault(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	client := &stubTriageClient{
+		authoredPRs: []ghclient.Item{{
+			Repo: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Number: 1, State: sharedtypes.ItemStateOpen,
+			URL: "https://github.com/upstream/widgets/pull/1", UpdatedAt: time.Now().UTC(),
+		}},
+	}
+	poller := Poller{DB: database, GitHub: client}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+	if client.authoredCalls != 0 {
+		t.Fatalf("authoredCalls = %d, want 0 (contrib disabled)", client.authoredCalls)
+	}
+}
+
+func TestPollOnceContribSweepSkipsItemsInOwnedReposEvenWhenNotConfigured(t *testing.T) {
+	// User owns kun/scratch on GitHub but hasn't added it to cfg.Repos
+	// yet. The sweep must still skip authored items there - they
+	// belong to the maintainer flow whenever the user wires the repo
+	// up, and showing them as "contributor" in the inbox is misleading.
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Now().UTC()
+	client := &stubTriageClient{
+		ownedRepos: []string{"kun/scratch"},
+		authoredPRs: []ghclient.Item{
+			{Repo: "kun/scratch", Kind: sharedtypes.ItemKindPR, Number: 1, State: sharedtypes.ItemStateOpen, URL: "https://github.com/kun/scratch/pull/1", UpdatedAt: now},
+			{Repo: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Number: 99, State: sharedtypes.ItemStateOpen, URL: "https://github.com/upstream/widgets/pull/99", UpdatedAt: now, HeadRepo: "kun/widgets", HeadRef: "fix", HeadCloneURL: "https://github.com/kun/widgets.git"},
+		},
+	}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+	if got, _ := database.GetItem("kun/scratch#1"); got != nil {
+		t.Fatalf("kun/scratch#1 should be skipped (user owns the repo): %#v", got)
+	}
+	if got, _ := database.GetItem("upstream/widgets#99"); got == nil {
+		t.Fatalf("upstream/widgets#99 should be tracked as contributor")
+	}
+}
+
+func TestPollOnceContribSweepProceedsWhenOwnedReposLookupFails(t *testing.T) {
+	// gh repo list failures must not blackhole the inbox - the sweep
+	// downgrades to "no ownership filter this cycle" rather than
+	// dropping all authored items on the floor.
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Now().UTC()
+	client := &stubTriageClient{
+		ownedReposErr: errors.New("gh down"),
+		authoredPRs: []ghclient.Item{
+			{Repo: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Number: 99, State: sharedtypes.ItemStateOpen, URL: "https://github.com/upstream/widgets/pull/99", UpdatedAt: now, HeadRepo: "kun/widgets", HeadRef: "fix", HeadCloneURL: "https://github.com/kun/widgets.git"},
+		},
+	}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+	if got, _ := database.GetItem("upstream/widgets#99"); got == nil {
+		t.Fatal("upstream/widgets#99 should still be tracked when the ownership filter is unavailable")
+	}
+}
+
+func TestPollOnceContribSweepSkipsItemsInMaintainerRepos(t *testing.T) {
+	// When a user has their own repo in cfg.Repos, the maintainer sync
+	// (Stage A.1) is the source of truth - even for items they
+	// authored. The contrib sweep must skip those so the two stages
+	// don't fight over the same item with different roles.
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Now().UTC()
+	client := &stubTriageClient{
+		// Stage A.1 returns nothing for the configured repo here; the
+		// point of this test is just that Stage A.2 doesn't write a
+		// contributor row for the same item.
+		itemsByRepo: map[string][]ghclient.Item{"kun/own-repo": nil},
+		authoredPRs: []ghclient.Item{
+			{
+				Repo: "kun/own-repo", Kind: sharedtypes.ItemKindPR, Number: 7,
+				State: sharedtypes.ItemStateOpen, URL: "https://github.com/kun/own-repo/pull/7",
+				UpdatedAt: now, HeadRepo: "kun/own-repo", HeadRef: "feat", HeadCloneURL: "https://github.com/kun/own-repo.git",
+			},
+			{
+				Repo: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Number: 99,
+				State: sharedtypes.ItemStateOpen, URL: "https://github.com/upstream/widgets/pull/99",
+				UpdatedAt: now, HeadRepo: "kun/widgets", HeadRef: "fix", HeadCloneURL: "https://github.com/kun/widgets.git",
+			},
+		},
+	}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, []string{"kun/own-repo"}); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+
+	// The own-repo PR must NOT have been written as a contributor item.
+	if got, _ := database.GetItem("kun/own-repo#7"); got != nil {
+		t.Fatalf("kun/own-repo#7 should be skipped by contrib sweep, got %#v", got)
+	}
+	// The upstream PR (truly contributor-only) is still tracked.
+	if got, _ := database.GetItem("upstream/widgets#99"); got == nil || got.Role != sharedtypes.RoleContributor {
+		t.Fatalf("upstream/widgets#99 should be tracked as contributor, got %#v", got)
+	}
+}
+
+func TestPollOnceContribSweepPrunesReposMissingFromLatestSweep(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor,
+		Number: 321, Title: "old", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID:  "upstream/widgets#321",
+		Agent:   sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone}},
+	}); err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	client := &stubTriageClient{}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+	if got, err := database.GetItem("upstream/widgets#321"); err != nil || got != nil {
+		t.Fatalf("contributor item after prune = %#v, %v; want nil", got, err)
+	}
+	if got, err := database.GetRepo("upstream/widgets"); err != nil || got != nil {
+		t.Fatalf("contrib repo after prune = %#v, %v; want nil", got, err)
+	}
+}
+
+func TestPollOnceContribSweepPrunesContributorItemsInFormerConfigRepos(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceConfig}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor,
+		Number: 321, Title: "old", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+	if got, err := database.GetItem("upstream/widgets#321"); err != nil || got != nil {
+		t.Fatalf("contributor item after prune = %#v, %v; want nil", got, err)
+	}
+	if got, err := database.GetRepo("upstream/widgets"); err != nil || got == nil || got.Source != db.RepoSourceConfig {
+		t.Fatalf("former config repo after prune = %#v, %v; want config repo", got, err)
+	}
+}
+
+func TestPollOnceContribSweepDoesNotPruneAfterAuthoredSearchError(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor,
+		Number: 321, Title: "old", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{authoredErr: errors.New("search failed")}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err == nil {
+		t.Fatal("PollOnce error = nil, want authored search error")
+	}
+	if got, err := database.GetItem("upstream/widgets#321"); err != nil || got == nil {
+		t.Fatalf("contributor item after failed sweep = %#v, %v; want existing item", got, err)
+	}
+	if got, err := database.GetRepo("upstream/widgets"); err != nil || got == nil {
+		t.Fatalf("contrib repo after failed sweep = %#v, %v; want existing repo", got, err)
+	}
+}
+
+func TestPollOnceContribSweepIgnoresConfiguredRepos(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	now := time.Now().UTC()
+	client := &stubTriageClient{
+		authoredPRs: []ghclient.Item{
+			{Repo: "noisy/repo", Kind: sharedtypes.ItemKindPR, Number: 1, State: sharedtypes.ItemStateOpen, URL: "https://github.com/noisy/repo/pull/1", UpdatedAt: now},
+			{Repo: "good/repo", Kind: sharedtypes.ItemKindPR, Number: 2, State: sharedtypes.ItemStateOpen, URL: "https://github.com/good/repo/pull/2", UpdatedAt: now},
+		},
+	}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true, ContribIgnoreRepos: []string{"noisy/repo"}}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+	if got, _ := database.GetRepo("noisy/repo"); got != nil {
+		t.Fatal("noisy/repo should have been suppressed")
+	}
+	if got, _ := database.GetRepo("good/repo"); got == nil {
+		t.Fatal("good/repo should have been registered")
 	}
 }

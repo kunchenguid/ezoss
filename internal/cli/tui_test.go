@@ -2107,7 +2107,7 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 	if err != nil {
 		t.Fatalf("rerunInboxEntries() error = %v", err)
 	}
-	if !strings.Contains(prompt, "Maintainer-provided rerun instructions:") || !strings.Contains(prompt, "Focus on whether the maintainer's new log changes the waiting_on state.") {
+	if !strings.Contains(prompt, "User-provided rerun instructions:") || !strings.Contains(prompt, "Focus on whether the maintainer's new log changes the waiting_on state.") {
 		t.Fatalf("rerun prompt missing instructions:\n%s", prompt)
 	}
 	if len(entries) != 1 {
@@ -2115,6 +2115,9 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 	}
 	if entries[0].RerunInstructions != "Focus on whether the maintainer's new log changes the waiting_on state." {
 		t.Fatalf("entry RerunInstructions = %q", entries[0].RerunInstructions)
+	}
+	if entries[0].Role != sharedtypes.RoleMaintainer {
+		t.Fatalf("entry Role = %q, want maintainer", entries[0].Role)
 	}
 	if entries[0].RecommendationID == oldRec.ID {
 		t.Fatalf("rerun RecommendationID = %q, want a new recommendation", entries[0].RecommendationID)
@@ -2146,6 +2149,38 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 	}
 	if active[0].ID != entries[0].RecommendationID {
 		t.Fatalf("active recommendation id = %q, want %q", active[0].ID, entries[0].RecommendationID)
+	}
+}
+
+func TestLoadInboxEntryPreservesContributorRole(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "upstream/widgets#12", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Number: 12, Role: sharedtypes.RoleContributor, State: sharedtypes.ItemStateOpen}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: "upstream/widgets#12", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{Rationale: "Needs follow-up.", StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	entry, err := loadInboxEntry(database, "upstream/widgets", 12)
+	if err != nil {
+		t.Fatalf("loadInboxEntry() error = %v", err)
+	}
+	if entry == nil {
+		t.Fatal("loadInboxEntry() = nil")
+	}
+	if entry.Role != sharedtypes.RoleContributor {
+		t.Fatalf("entry Role = %q, want contributor", entry.Role)
 	}
 }
 
@@ -3348,6 +3383,192 @@ func TestApproveInboxEntriesAbortsCloseWhenLabelEditFails(t *testing.T) {
 	}
 	if item.State != sharedtypes.ItemStateOpen {
 		t.Fatalf("item state after failed close = %q, want %q", item.State, sharedtypes.ItemStateOpen)
+	}
+}
+
+func TestApproveInboxEntriesContributorSkipsLabelEdits(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewApprovalExecutor := newApprovalExecutor
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newApprovalExecutor = originalNewApprovalExecutor
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	executor := &stubApprovalExecutor{}
+	newApprovalExecutor = func() approvalExecutor {
+		return executor
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#12", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor,
+		Number: 12, Title: "question", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "upstream/widgets#12",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			DraftComment: "Thanks, that helps.", StateChange: sharedtypes.StateChangeNone,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: rec.ID,
+		RepoID:           "upstream/widgets",
+		Number:           12,
+		Kind:             sharedtypes.ItemKindPR,
+		Role:             sharedtypes.RoleContributor,
+		DraftComment:     "Thanks, that helps.",
+		StateChange:      sharedtypes.StateChangeNone,
+	}}); err != nil {
+		t.Fatalf("approveInboxEntries() error = %v", err)
+	}
+	if len(executor.labels) != 0 {
+		t.Fatalf("label edits = %#v, want none for contributor approval", executor.labels)
+	}
+	if len(executor.comments) != 1 {
+		t.Fatalf("comments = %d, want 1", len(executor.comments))
+	}
+}
+
+func TestExecuteApprovalRejectsContributorMaintainerActions(t *testing.T) {
+	executor := &stubApprovalExecutor{}
+	for _, stateChange := range []sharedtypes.StateChange{
+		sharedtypes.StateChangeRequestChanges,
+		sharedtypes.StateChangeMerge,
+	} {
+		err := executeApproval(context.Background(), executor, tui.Entry{
+			RepoID:       "upstream/widgets",
+			Number:       12,
+			Kind:         sharedtypes.ItemKindPR,
+			Role:         sharedtypes.RoleContributor,
+			DraftComment: "please update this",
+			StateChange:  stateChange,
+		}, nil, nil, "squash")
+		if err == nil {
+			t.Fatalf("executeApproval(%q) error = nil, want rejection", stateChange)
+		}
+	}
+	if len(executor.reviews) != 0 || len(executor.merges) != 0 || len(executor.comments) != 0 {
+		t.Fatalf("executor calls reviews:%#v merges:%#v comments:%#v, want none", executor.reviews, executor.merges, executor.comments)
+	}
+}
+
+func TestDismissInboxEntriesContributorSkipsLabelEdits(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewLabelEditor := newLabelEditor
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newLabelEditor = originalNewLabelEditor
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	editor := &stubLabelEditor{}
+	newLabelEditor = func() labelEditor { return editor }
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#13", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindIssue, Role: sharedtypes.RoleContributor,
+		Number: 13, Title: "question", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID:  "upstream/widgets#13",
+		Agent:   sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	if err := dismissInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: rec.ID,
+		RepoID:           "upstream/widgets",
+		Number:           13,
+		Kind:             sharedtypes.ItemKindIssue,
+		Role:             sharedtypes.RoleContributor,
+	}}); err != nil {
+		t.Fatalf("dismissInboxEntries() error = %v", err)
+	}
+	if len(editor.entries) != 0 {
+		t.Fatalf("label edits = %#v, want none for contributor dismissal", editor.entries)
+	}
+}
+
+func TestCreateFixJobRejectsContributorIssue(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#13", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindIssue, Role: sharedtypes.RoleContributor,
+		Number: 13, Title: "question", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "upstream/widgets#13",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			StateChange: sharedtypes.StateChangeFixRequired,
+			FixPrompt:   "fix this issue",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	_, err = createFixJobFromIPC(context.Background(), database, nil, ipc.FixStartParams{RecommendationID: rec.ID, OptionID: rec.Options[0].ID})
+	if err == nil || !strings.Contains(err.Error(), "contributor issue") {
+		t.Fatalf("createFixJobFromIPC() error = %v, want contributor issue rejection", err)
+	}
+	jobs, err := database.ListFixJobsByStatus(db.FixJobStatusQueued)
+	if err != nil {
+		t.Fatalf("ListFixJobsByStatus() error = %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("queued jobs = %#v, want none", jobs)
 	}
 }
 

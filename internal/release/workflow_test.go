@@ -1091,7 +1091,7 @@ func TestREADMEShowsCheckedInDemoGif(t *testing.T) {
 	text := string(data)
 	checks := []string{
 		"<img src=\"https://raw.githubusercontent.com/kunchenguid/ezoss/main/demo.gif\" alt=\"ezoss demo\" width=\"800\" />",
-		"The agent drafts. The maintainer decides.",
+		"The agent drafts. You decide.",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
@@ -1111,10 +1111,11 @@ func TestREADMEHeroMatchesCurrentReleaseMessaging(t *testing.T) {
 	checks := []string{
 		"<h1 align=\"center\">ezoss</h1>",
 		"Turn your issue queue into a reviewable inbox instead of a background tax.",
-		"You stay in control. The agent drafts. The maintainer decides.",
+		"You stay in control. The agent drafts. You decide.",
 		"- **Private by default** - agent rationale, draft comments, fix prompts, and token usage stay in local SQLite until you approve an action.",
-		"- **GitHub-native state** - triage visibility is mirrored back to GitHub with `ezoss/*` labels so co-maintainers can see what's going on.",
+		"- **GitHub-native maintainer state** - maintainer triage visibility is mirrored back to GitHub with `ezoss/*` labels, while contributor items stay local.",
 		"- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/fix-PR/copy-prompt/edit/rerun flows already work end to end.",
+		"- **PRs can pause before review** - PRs without prior agreement can be routed into a maintainer approval step before code review.",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
@@ -1289,9 +1290,9 @@ func TestREADMECLIReferenceMatchesCurrentCommandSurface(t *testing.T) {
 		"| `ezoss doctor` | Check local prerequisites including `gh`, agent availability, daemon state, and SQLite access |",
 		"| `ezoss init` | Create or update `~/.ezoss/config.yaml` |",
 		"| `ezoss status` | Open the realtime status TUI; in non-interactive output, print rich text status |",
-		"| `ezoss status --short` | Print a one-line summary of pending recommendations and configured repos |",
-		"| `ezoss list` | Print pending recommendations in a text format |",
-		"| `ezoss fix <repo>#<number>` | Run the active fix prompt in an isolated worktree; PR creation follows config |",
+		"| `ezoss status --short` | Print a one-line summary of pending recommendations, configured repos, and contributor state |",
+		"| `ezoss list` | Print pending recommendations in a text format, including contributor markers |",
+		"| `ezoss fix <repo>#<number>` | Run the active fix prompt in an isolated worktree; maintainer PRs and contributor pushes follow config |",
 		"| `ezoss triage <repo>#<number>` | Manually triage one issue or PR |",
 		"| `ezoss update` | Download and install the latest released binary for the current platform |",
 		"| `ezoss daemon start` | Start the background poller |",
@@ -1300,7 +1301,7 @@ func TestREADMECLIReferenceMatchesCurrentCommandSurface(t *testing.T) {
 		"### Flags",
 		"| `daemon start` | `--mock` | Use canned GitHub items and recommendations |",
 		"| `triage <repo>#<number>` | `--mock` | Triage against canned fixtures instead of live GitHub + agent backends |",
-		"| `fix <repo>#<number>` | `--pr-create` | Override fix PR creation: `auto`, `no-mistakes`, `gh`, or `disabled` |",
+		"| `fix <repo>#<number>` | `--pr-create` | Override maintainer fix PR creation: `auto`, `no-mistakes`, `gh`, or `disabled` |",
 		"| `fix <repo>#<number>` | `--prepare-only` | Prepare the isolated worktree without running the coding agent |",
 		"| `init` | `--repo` | Repository to monitor, repeatable |",
 		"| `init` | `--agent` | Agent backend: `auto`, `claude`, `codex`, `rovodev`, `opencode` |",
@@ -1347,19 +1348,22 @@ func TestREADMEHowItWorksSectionMatchesCurrentMaintainerFirstFlow(t *testing.T) 
 	text := string(data)
 	checks := []string{
 		"## How It Works",
-		"poll for items without",
+		"maintainer label poll",
+		"+ contributor search",
 		"ezoss/triaged",
 		"│ daemon poller      │",
 		"│ agent backend      │",
 		"│ local SQLite cache │",
 		"│ inbox TUI          │",
 		"│ GitHub labels /    │",
-		"│ / draft fix PRs    │",
+		"│ / fix branch work  │",
 		"or queued fix job",
-		"- **GitHub is the visible truth** - `ezoss/triaged` is the public signal that an item has already been handled.",
+		"- **GitHub is the maintainer truth** - for configured repos, `ezoss/triaged` is the public signal that an item has already been handled.",
+		"Contributor items are found with `gh search prs/issues --author=@me`, do not edit upstream labels, and are tracked with local sweep metadata.",
 		"- **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.",
-		"- **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and either create draft PRs or leave commits according to `fixes.pr_create`.",
-		"- **Approval is explicit** - comments, labels, closes, merges, and fix PRs only happen after you approve an inbox action, queue a fix job, or run `ezoss fix`.",
+		"- **Contributor mode is automatic** - by default, the daemon searches for open issues and PRs authored by you in repos you do not maintain, marks them with a `contrib` badge in the inbox, and uses contributor-safe actions instead of maintainer actions.",
+		"- **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and either create maintainer draft PRs according to `fixes.pr_create` or prepare contributor PR branch updates according to `fixes.contrib_push`.",
+		"- **Approval is explicit** - comments, labels, closes, merges, maintainer fix PRs, and contributor PR branch updates only happen after you approve an inbox action, queue a fix job, or run `ezoss fix`.",
 	}
 	for _, want := range checks {
 		if !strings.Contains(text, want) {
@@ -1381,11 +1385,13 @@ func TestREADMEInboxActionsAndRequirementsCoverShippedWorkflow(t *testing.T) {
 		"Copying fix prompts from the inbox also needs a platform clipboard command",
 		"Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistakes`.",
 		"## Inbox Actions",
-		"| `a` | Approve | Execute the selected GitHub action and sync triage labels |",
+		"| `a` | Approve | Execute the selected GitHub action; maintainer items sync labels, contributor items are marked handled locally |",
 		"| `c` | Copy prompt | Copy the active option's coding-agent fix prompt when one exists |",
 		"| `f` | Fix | Queue a daemon-backed coding-agent fix job when a fix prompt exists |",
 		"| `e` | Edit | Open the draft in your editor before approval |",
-		"| `m` | Mark triaged | Stamp `ezoss/triaged` without approving the recommendation |",
+		"| `F` | Filter | Cycle role filter through all, maintainer, and contributor items |",
+		"| `m` | Mark triaged | Stamp `ezoss/triaged` for maintainer items, or mark contributor items handled locally |",
+		"| `o` | Open | Open the current item's GitHub page in your browser |",
 		"| `r` | Rerun | Re-triage the item and replace the active recommendation |",
 		"| `j`/`k` | Navigate | Move between inbox items; use arrow keys to scroll overflowing text |",
 	}
