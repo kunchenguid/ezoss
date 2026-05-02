@@ -211,8 +211,9 @@ func (c *Client) EditLabels(ctx context.Context, repo string, kind sharedtypes.I
 
 // runAddLabels issues a bulk --add-label call. If gh reports that a label
 // in the ezoss/* namespace doesn't exist in the repo, the client creates
-// it on the fly and retries - ezoss owns that namespace per the design
-// intent ("ezoss/triaged is always managed automatically"). Labels outside
+// it on the fly and retries for maintainer/configured-repo label writes -
+// ezoss owns that namespace per the design intent ("ezoss/triaged is always
+// managed automatically" for maintainer items). Labels outside
 // the namespace are not auto-created; missing user labels surface as
 // errors so the user can decide how to handle them.
 func (c *Client) runAddLabels(ctx context.Context, resource, repo string, number int, add []string) error {

@@ -6,7 +6,8 @@ This file provides shared guidance for coding agents working in this repository.
 
 `ezoss` is a single-user maintainer/contributor orchestrator written in Go.
 A background daemon polls configured GitHub repos, searches for issues and PRs authored by the user in repos they do not maintain, runs a coding agent (`claude`, `codex`, `rovodev`, or `opencode`) against each untriaged item, stores a structured recommendation in a local SQLite cache, and surfaces drafts in a Bubble Tea TUI inbox where the user approves, queues fixes, edits, marks triaged, or reruns.
-Nothing is posted to GitHub until the maintainer approves an action, queues a fix job, or runs `ezoss fix`; daemon fix jobs run only after the maintainer queues them.
+Nothing is posted to GitHub until the user approves an action, queues a fix job, or runs `ezoss fix`; maintainer writes use the configured repo flow, while contributor writes stay within contributor-safe actions.
+Daemon fix jobs run only after the user queues them.
 
 `README.md` is the user-facing surface. This file is the agent-facing implementation guide.
 
@@ -73,12 +74,12 @@ Maintainer fixes create a draft PR or leave the branch in the worktree according
 User-provided TUI rerun instructions are threaded through `Poller.RerunInstructions`, appended to the agent prompt as private context, and stored on the refreshed `recommendations` row. Guided reruns use `InsertRecommendationReplacingActiveBefore` so an older in-flight triage result cannot supersede a newer active recommendation.
 
 The agent's contract is the `Recommendation` JSON schema in `internal/triage/triage.go` - a list of self-contained `RecommendationOption` entries, each with `state_change` (`none|close|merge|request_changes|fix_required`), `rationale`, `waiting_on`, `draft_comment`, `fix_prompt`, `confidence`, optional `followups`.
-Use `fix_required` plus `fix_prompt` when the item should be handed to a coding agent before it can be closed.
+Use `fix_required` plus `fix_prompt` when the item should be handed to a coding agent before it can be closed; in contributor mode, fix jobs apply to authored PRs, not authored issues.
 The agent is asked to return 2-3 options when there are multiple reasonable next steps.
 **User-namespaced labels are deliberately not part of the agent contract** (the agent has no reliable view of which labels exist in the repo); only the `ezoss/*` namespace is managed automatically for maintainer items.
 
 For PRs without prior issue-level agreement on the approach, the maintainer prompt instructs the agent to set `state_change: none` and ask in `draft_comment` rather than going straight to `request_changes` or `merge`.
-Contributor prompts restrict in-bounds actions to `none`, `close`, and `fix_required`; contributor fixes target the existing PR branch rather than opening a new PR.
+Contributor prompts restrict in-bounds actions to `none`, `close`, and `fix_required`; contributor fixes target existing authored PR branches rather than opening a new PR, and contributor issue fixes are not supported.
 
 ### Agent backend layer
 

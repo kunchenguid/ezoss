@@ -34,7 +34,7 @@ If you maintain open source long enough, every new issue and PR starts with the 
 
 `ezoss` handles that first pass for you. It polls your repos, also tracks issues and PRs you authored in repos you do not maintain, runs your coding agent against each untriaged item, stores a private recommendation locally, and lets you review or edit the draft before anything touches GitHub.
 
-You stay in control. The agent drafts. The maintainer decides.
+You stay in control. The agent drafts. You decide.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/kunchenguid/ezoss/main/demo.gif" alt="ezoss demo" width="800" />
