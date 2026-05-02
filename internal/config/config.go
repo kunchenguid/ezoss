@@ -223,7 +223,7 @@ merge_method: merge
 # pr_create: how maintainer fix PRs are created (auto, no-mistakes, gh, disabled).
 # contrib_push: how contributor fix jobs push to the existing PR branch
 # (auto, no-mistakes, disabled). Default no-mistakes leaves the worktree
-# in place so the maintainer reviews and pushes manually.
+# in place so you review and push the existing PR branch manually.
 fixes:
   pr_create: auto
   contrib_push: no-mistakes

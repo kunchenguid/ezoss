@@ -156,7 +156,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 
 | Key     | Action       | Description                                                               |
 | ------- | ------------ | ------------------------------------------------------------------------- |
-| `a`     | Approve      | Execute the selected GitHub action and sync triage labels                 |
+| `a`     | Approve      | Execute the selected GitHub action; maintainer items sync labels, contributor items are marked handled locally |
 | `c`     | Copy prompt  | Copy the active option's coding-agent fix prompt when one exists          |
 | `f`     | Fix          | Queue a daemon-backed coding-agent fix job when a fix prompt exists        |
 | `F`     | Filter       | Cycle role filter through all, maintainer, and contributor items           |
@@ -226,7 +226,7 @@ Contributor fix jobs apply to authored PRs, not authored issues.
 
 `contrib.enabled` controls contributor mode and defaults to `true`.
 When enabled, the daemon searches for open issues and PRs authored by you in repos you do not maintain.
-Use `contrib.ignore_repos` to suppress noisy upstream repos, or set `enabled: false` to only triage configured maintainer repos.
+Use `contrib.ignore_repos` to suppress noisy upstream repos by exact `owner/name` match, or set `enabled: false` to only triage configured maintainer repos.
 
 ```yaml
 # ~/.ezoss/config.yaml

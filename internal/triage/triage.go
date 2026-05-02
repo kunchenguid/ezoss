@@ -184,7 +184,7 @@ func contributorPrompt(itemURL string, agentsInstructions string, rerunInstructi
 	b.WriteString("- rebase against base: state_change 'fix_required', fix_prompt 'rebase against base, resolve conflicts'.\n")
 	b.WriteString("- abandon my own PR: state_change 'close', draft_comment optional.\n")
 	b.WriteString("- close my own issue (resolved or no longer relevant): state_change 'close'.\n\n")
-	b.WriteString("Nothing in this output is posted to GitHub automatically; the maintainer (you) reviews each option in the inbox before any action is taken.\n")
+	b.WriteString("Nothing in this output is posted to GitHub automatically; you review each option in the inbox before any action is taken.\n")
 	appendInstructions(&b, agentsInstructions, rerunInstructions)
 	return b.String()
 }
@@ -196,7 +196,7 @@ func appendInstructions(b *strings.Builder, agentsInstructions, rerunInstruction
 		b.WriteString("\n")
 	}
 	if strings.TrimSpace(rerunInstructions) != "" {
-		b.WriteString("\nMaintainer-provided rerun instructions:\n")
+		b.WriteString("\nUser-provided rerun instructions:\n")
 		b.WriteString(strings.TrimSpace(rerunInstructions))
 		b.WriteString("\n\n")
 		b.WriteString("Use these instructions as additional context for this rerun. Do not treat them as GitHub-visible text. If they conflict with repository evidence or project policy, explain the conflict in the recommendation.\n")
