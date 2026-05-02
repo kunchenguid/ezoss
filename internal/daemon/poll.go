@@ -244,8 +244,12 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 			return fmt.Errorf("poll repo %s: get item %d: %w", repoID, item.Number, err)
 		}
 		if existing != nil {
+			itemRecord.Role = existing.Role
 			itemRecord.WaitingOn = existing.WaitingOn
 			itemRecord.StaleSince = existing.StaleSince
+			itemRecord.HeadRepo = existing.HeadRepo
+			itemRecord.HeadRef = existing.HeadRef
+			itemRecord.HeadCloneURL = existing.HeadCloneURL
 		}
 		if err := poller.DB.UpsertItem(itemRecord); err != nil {
 			return fmt.Errorf("poll repo %s: upsert item %d: %w", repoID, item.Number, err)
@@ -289,18 +293,22 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 			return fmt.Errorf("get item %d: %w", cached.Number, err)
 		}
 		itemRecord := db.Item{
-			ID:          cached.ID,
-			RepoID:      repoID,
-			Kind:        current.Kind,
-			Number:      current.Number,
-			Title:       current.Title,
-			Author:      current.Author,
-			State:       current.State,
-			IsDraft:     current.IsDraft,
-			GHTriaged:   hasLabel(current.Labels, triagedLabel),
-			WaitingOn:   cached.WaitingOn,
-			LastEventAt: timePtr(current.UpdatedAt.UTC()),
-			StaleSince:  cached.StaleSince,
+			ID:           cached.ID,
+			RepoID:       repoID,
+			Kind:         current.Kind,
+			Role:         cached.Role,
+			Number:       current.Number,
+			Title:        current.Title,
+			Author:       current.Author,
+			State:        current.State,
+			IsDraft:      current.IsDraft,
+			GHTriaged:    hasLabel(current.Labels, triagedLabel),
+			WaitingOn:    cached.WaitingOn,
+			LastEventAt:  timePtr(current.UpdatedAt.UTC()),
+			StaleSince:   cached.StaleSince,
+			HeadRepo:     cached.HeadRepo,
+			HeadRef:      cached.HeadRef,
+			HeadCloneURL: cached.HeadCloneURL,
 		}
 		if current.State != sharedtypes.ItemStateOpen {
 			itemRecord.StaleSince = nil

@@ -175,25 +175,22 @@ func PrepareContribWorktree(ctx context.Context, opts ContribWorktreeOptions) (W
 	if number <= 0 {
 		number = 0
 	}
+	branch := branchName("ezoss/contrib", number, run)
 	worktreePath := filepath.Join(root, "fixes", safeRepo, strconv.Itoa(number)+"-"+run)
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return Worktree{}, fmt.Errorf("create contrib fix worktree parent: %w", err)
 	}
-	// Check out the existing head branch into a dedicated worktree so
-	// concurrent fix jobs do not stomp each other's working trees.
 	if _, err := runGit(ctx, checkoutPath, nil, "worktree", "add", worktreePath, "origin/"+opts.HeadRef); err != nil {
 		return Worktree{}, err
 	}
-	// Track the local branch back to origin/<HeadRef> so subsequent
-	// pushes target the right ref.
-	if _, err := runGit(ctx, worktreePath, nil, "checkout", "-B", opts.HeadRef, "origin/"+opts.HeadRef); err != nil {
+	if _, err := runGit(ctx, worktreePath, nil, "checkout", "-B", branch, "origin/"+opts.HeadRef); err != nil {
 		return Worktree{}, err
 	}
 
 	return Worktree{
 		BasePath:     checkoutPath,
 		WorktreePath: worktreePath,
-		Branch:       opts.HeadRef,
+		Branch:       branch,
 		BaseRef:      "origin/" + opts.HeadRef,
 	}, nil
 }

@@ -244,8 +244,8 @@ func TestFixCommandContributorUsesExistingHeadBranch(t *testing.T) {
 	if len(pushArgs) == 0 {
 		t.Fatal("expected contributor fix to push the PR head branch")
 	}
-	if pushArgs[0] != "push" || pushArgs[1] != "origin" || pushArgs[2] != "fix-race" {
-		t.Fatalf("push args = %#v, want push origin fix-race", pushArgs)
+	if pushArgs[0] != "push" || pushArgs[1] != "origin" || pushArgs[2] != "HEAD:fix-race" {
+		t.Fatalf("push args = %#v, want push origin HEAD:fix-race", pushArgs)
 	}
 }
 
@@ -813,8 +813,8 @@ func TestRunFixContributorAutoPushesToHeadBranch(t *testing.T) {
 	if len(pushArgs) == 0 {
 		t.Fatal("expected git push to be invoked in auto mode")
 	}
-	if pushArgs[0] != "push" || pushArgs[1] != "origin" || pushArgs[2] != "fix-race" {
-		t.Fatalf("push args = %#v, want push origin fix-race", pushArgs)
+	if pushArgs[0] != "push" || pushArgs[1] != "origin" || pushArgs[2] != "HEAD:fix-race" {
+		t.Fatalf("push args = %#v, want push origin HEAD:fix-race", pushArgs)
 	}
 }
 

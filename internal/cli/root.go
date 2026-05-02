@@ -554,6 +554,7 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 		return nil, err
 	}
 	if prepared.Contributor {
+		headRef := baseBranch(worktree.BaseRef)
 		pushMode := config.ContribPushNoMistakes
 		if prepared.Config != nil && prepared.Config.Fixes.ContribPush != "" {
 			pushMode = prepared.Config.Fixes.ContribPush
@@ -562,11 +563,11 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 			return nil, fmt.Errorf("contrib push disabled: refusing to run contributor fix for %s#%d", entry.RepoID, entry.Number)
 		}
 		if pushMode == config.ContribPushAuto {
-			if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "push", "origin", worktree.Branch); err != nil {
-				return nil, fmt.Errorf("push contrib branch %s: %w", worktree.Branch, err)
+			if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "push", "origin", "HEAD:"+headRef); err != nil {
+				return nil, fmt.Errorf("push contrib branch %s: %w", headRef, err)
 			}
 		}
-		return &fixRunResult{WorktreePath: worktree.WorktreePath, Branch: worktree.Branch}, nil
+		return &fixRunResult{WorktreePath: worktree.WorktreePath, Branch: headRef}, nil
 	}
 
 	created, _, err := createFixPRWithFallback(ctx, prepared.PRCreate, prcreator.CreateOptions{
@@ -831,7 +832,7 @@ func (r cliFixRunner) runContribFix(ctx context.Context, job db.FixJob, progress
 	}
 	if pushMode == config.ContribPushNoMistakes {
 		return &daemon.FixResult{
-			Branch:       worktree.Branch,
+			Branch:       headRef,
 			WorktreePath: worktree.WorktreePath,
 			WaitingForPR: false,
 		}, nil
@@ -839,11 +840,11 @@ func (r cliFixRunner) runContribFix(ctx context.Context, job db.FixJob, progress
 	if progress != nil {
 		_ = progress(db.FixJobUpdate{Phase: db.FixJobPhasePushing, Message: "pushing branch to PR head"})
 	}
-	if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "push", "origin", worktree.Branch); err != nil {
-		return nil, fmt.Errorf("push contrib branch %s: %w", worktree.Branch, err)
+	if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "push", "origin", "HEAD:"+headRef); err != nil {
+		return nil, fmt.Errorf("push contrib branch %s: %w", headRef, err)
 	}
 	return &daemon.FixResult{
-		Branch:       worktree.Branch,
+		Branch:       headRef,
 		WorktreePath: worktree.WorktreePath,
 	}, nil
 }
@@ -1855,6 +1856,10 @@ func loadInboxEntry(database *db.DB, repoID string, number int) (*tui.Entry, err
 		if item == nil {
 			return nil, nil
 		}
+		role := item.Role
+		if role == "" {
+			role = sharedtypes.RoleMaintainer
+		}
 		totals, err := database.RecommendationTokenTotalsForItem(itemID)
 		if err != nil {
 			return nil, fmt.Errorf("recommendation token totals for %s: %w", itemID, err)
@@ -1864,6 +1869,7 @@ func loadInboxEntry(database *db.DB, repoID string, number int) (*tui.Entry, err
 			RepoID:            item.RepoID,
 			Number:            item.Number,
 			Kind:              item.Kind,
+			Role:              role,
 			Author:            item.Author,
 			Title:             item.Title,
 			URL:               githubItemURL(item.RepoID, item.Kind, item.Number),

@@ -2116,6 +2116,9 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 	if entries[0].RerunInstructions != "Focus on whether the maintainer's new log changes the waiting_on state." {
 		t.Fatalf("entry RerunInstructions = %q", entries[0].RerunInstructions)
 	}
+	if entries[0].Role != sharedtypes.RoleMaintainer {
+		t.Fatalf("entry Role = %q, want maintainer", entries[0].Role)
+	}
 	if entries[0].RecommendationID == oldRec.ID {
 		t.Fatalf("rerun RecommendationID = %q, want a new recommendation", entries[0].RecommendationID)
 	}
@@ -2146,6 +2149,38 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 	}
 	if active[0].ID != entries[0].RecommendationID {
 		t.Fatalf("active recommendation id = %q, want %q", active[0].ID, entries[0].RecommendationID)
+	}
+}
+
+func TestLoadInboxEntryPreservesContributorRole(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "upstream/widgets#12", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Number: 12, Role: sharedtypes.RoleContributor, State: sharedtypes.ItemStateOpen}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: "upstream/widgets#12", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{Rationale: "Needs follow-up.", StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	entry, err := loadInboxEntry(database, "upstream/widgets", 12)
+	if err != nil {
+		t.Fatalf("loadInboxEntry() error = %v", err)
+	}
+	if entry == nil {
+		t.Fatal("loadInboxEntry() = nil")
+	}
+	if entry.Role != sharedtypes.RoleContributor {
+		t.Fatalf("entry Role = %q, want contributor", entry.Role)
 	}
 }
 

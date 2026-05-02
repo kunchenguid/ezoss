@@ -87,6 +87,7 @@ type GlobalConfig struct {
 	SyncLabels      SyncLabels
 	Fixes           FixesConfig
 	Contrib         ContribConfig
+	contribSet      bool
 }
 
 type globalConfigRaw struct {
@@ -332,11 +333,7 @@ func SaveGlobal(path string, cfg *GlobalConfig) error {
 		return err
 	}
 	file.Fixes.ContribPush = contribPush
-	// Treat a zero-value ContribConfig (the bool default + nil slice)
-	// as "the caller didn't configure contrib, give them the default".
-	// Without this, callers passing a bare &GlobalConfig{} would silently
-	// disable contributor mode in the persisted file.
-	if !cfg.Contrib.Enabled && len(cfg.Contrib.IgnoreRepos) == 0 {
+	if !cfg.contribSet && !cfg.Contrib.Enabled && len(cfg.Contrib.IgnoreRepos) == 0 {
 		file.Contrib = ContribConfig{
 			Enabled:     defaultCfg.Contrib.Enabled,
 			IgnoreRepos: nil,
@@ -421,6 +418,7 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 		cfg.Fixes.ContribPush = contribPush
 	}
 	if raw.Contrib != nil {
+		cfg.contribSet = true
 		if raw.Contrib.Enabled != nil {
 			cfg.Contrib.Enabled = *raw.Contrib.Enabled
 		}

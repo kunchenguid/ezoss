@@ -95,6 +95,55 @@ func TestPollOnceUpsertsRepoAndItems(t *testing.T) {
 	}
 }
 
+func TestSyncRepoDataPreservesContributorMetadata(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:           "upstream/widgets#12",
+		RepoID:       "upstream/widgets",
+		Kind:         sharedtypes.ItemKindPR,
+		Number:       12,
+		Role:         sharedtypes.RoleContributor,
+		HeadRepo:     "kun/widgets",
+		HeadRef:      "fix-race",
+		HeadCloneURL: "https://github.com/kun/widgets.git",
+		State:        sharedtypes.ItemStateOpen,
+		WaitingOn:    sharedtypes.WaitingOnMaintainer,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	client := &stubTriageClient{itemsByRepo: map[string][]ghclient.Item{
+		"upstream/widgets": {{
+			Repo:      "upstream/widgets",
+			Kind:      sharedtypes.ItemKindPR,
+			Number:    12,
+			Title:     "Fix race",
+			Author:    "kun",
+			State:     sharedtypes.ItemStateOpen,
+			UpdatedAt: time.Unix(1713511200, 0).UTC(),
+		}},
+	}}
+
+	if err := syncRepoData(context.Background(), Poller{DB: database, GitHub: client}, "upstream/widgets", time.Now()); err != nil {
+		t.Fatalf("syncRepoData() error = %v", err)
+	}
+
+	got, err := database.GetItem("upstream/widgets#12")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetItem() = nil")
+	}
+	if got.Role != sharedtypes.RoleContributor || got.HeadRepo != "kun/widgets" || got.HeadRef != "fix-race" || got.HeadCloneURL != "https://github.com/kun/widgets.git" {
+		t.Fatalf("contributor metadata = role %q head %q/%q clone %q", got.Role, got.HeadRepo, got.HeadRef, got.HeadCloneURL)
+	}
+}
+
 func TestPollOnceReturnsRepoContextOnListFailure(t *testing.T) {
 	t.Parallel()
 
