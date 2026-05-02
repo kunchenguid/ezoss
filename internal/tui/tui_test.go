@@ -753,6 +753,58 @@ func TestJumpToOptionUpdatesAllEntries(t *testing.T) {
 	}
 }
 
+func TestApplyReloadPreservesHiddenAllEntryEdits(t *testing.T) {
+	m := NewModel([]Entry{
+		{
+			RecommendationID: "rec-1",
+			RepoID:           "acme/widgets",
+			Number:           1,
+			Kind:             sharedtypes.ItemKindIssue,
+			Title:            "one",
+			Role:             sharedtypes.RoleContributor,
+			Options: []EntryOption{{
+				ID:                   "opt-1",
+				StateChange:          sharedtypes.StateChangeNone,
+				OriginalStateChange:  sharedtypes.StateChangeNone,
+				DraftComment:         "edited draft",
+				OriginalDraftComment: "raw draft",
+			}},
+		},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two", Role: sharedtypes.RoleMaintainer},
+	})
+	m.width = 100
+	m.allEntries[0].SyncActive()
+	m.roleFilter = RoleFilterMaintainer
+	m.entries = applyRoleFilter(m.allEntries, m.roleFilter)
+
+	m.applyReload([]Entry{
+		{
+			RecommendationID: "rec-1",
+			RepoID:           "acme/widgets",
+			Number:           1,
+			Kind:             sharedtypes.ItemKindIssue,
+			Title:            "one reloaded",
+			Role:             sharedtypes.RoleContributor,
+			Options: []EntryOption{{
+				ID:                   "opt-1",
+				StateChange:          sharedtypes.StateChangeNone,
+				OriginalStateChange:  sharedtypes.StateChangeNone,
+				DraftComment:         "raw draft",
+				OriginalDraftComment: "raw draft",
+			}},
+		},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two reloaded", Role: sharedtypes.RoleMaintainer},
+	})
+	m.cycleRoleFilter()
+
+	if len(m.entries) != 1 || m.entries[0].RecommendationID != "rec-1" {
+		t.Fatalf("entries after cycling filter = %#v, want rec-1", m.entries)
+	}
+	if m.entries[0].DraftComment != "edited draft" {
+		t.Fatalf("draft after hidden reload = %q, want edited draft", m.entries[0].DraftComment)
+	}
+}
+
 func TestEditCurrentReplacesAllEntries(t *testing.T) {
 	m := NewModelWithActions([]Entry{
 		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", Role: sharedtypes.RoleContributor, DraftComment: "draft"},

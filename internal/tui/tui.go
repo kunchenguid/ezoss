@@ -2683,6 +2683,12 @@ func (m *Model) applyReload(entries []Entry) {
 	}
 
 	editedByID := make(map[string]Entry)
+	for _, entry := range m.allEntries {
+		entry.CommitEdits()
+		if entry.Edited() || entry.ActiveOption > 0 {
+			editedByID[entry.RecommendationID] = entry
+		}
+	}
 	for _, entry := range m.entries {
 		entry.CommitEdits()
 		if entry.Edited() || entry.ActiveOption > 0 {

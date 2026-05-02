@@ -1511,6 +1511,9 @@ func createFixJobFromIPC(_ context.Context, database *db.DB, cfg *config.GlobalC
 	if strings.TrimSpace(option.FixPrompt) == "" {
 		return ipc.FixStartResult{}, fmt.Errorf("option has no fix prompt")
 	}
+	if item.Role == sharedtypes.RoleContributor && item.Kind != sharedtypes.ItemKindPR {
+		return ipc.FixStartResult{}, fmt.Errorf("contributor issue fixes are not supported for %s#%d", item.RepoID, item.Number)
+	}
 	prCreate := config.PRCreateAuto
 	agentName := config.AgentAuto
 	if cfg != nil {

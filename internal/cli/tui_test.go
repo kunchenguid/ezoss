@@ -3528,6 +3528,50 @@ func TestDismissInboxEntriesContributorSkipsLabelEdits(t *testing.T) {
 	}
 }
 
+func TestCreateFixJobRejectsContributorIssue(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#13", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindIssue, Role: sharedtypes.RoleContributor,
+		Number: 13, Title: "question", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "upstream/widgets#13",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			StateChange: sharedtypes.StateChangeFixRequired,
+			FixPrompt:   "fix this issue",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	_, err = createFixJobFromIPC(context.Background(), database, nil, ipc.FixStartParams{RecommendationID: rec.ID, OptionID: rec.Options[0].ID})
+	if err == nil || !strings.Contains(err.Error(), "contributor issue") {
+		t.Fatalf("createFixJobFromIPC() error = %v, want contributor issue rejection", err)
+	}
+	jobs, err := database.ListFixJobsByStatus(db.FixJobStatusQueued)
+	if err != nil {
+		t.Fatalf("ListFixJobsByStatus() error = %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("queued jobs = %#v, want none", jobs)
+	}
+}
+
 func TestApproveInboxEntriesExecutesNoneRecommendationAndMarksTriaged(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths
