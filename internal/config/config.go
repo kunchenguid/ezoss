@@ -239,8 +239,9 @@ contrib:
 # Repositories to monitor
 repos: []
 
-# Optional ezoss/* state labels to mirror to GitHub.
-# ezoss/triaged is always managed automatically.
+# Optional ezoss/* state labels to mirror to GitHub for maintainer items.
+# ezoss/triaged is always managed automatically for maintainer items.
+# Contributor items are tracked locally and do not edit upstream labels.
 sync_labels:
   waiting_on: true
   stale: true

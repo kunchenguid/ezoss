@@ -1061,8 +1061,13 @@ func newDaemonStartCmd() *cobra.Command {
 					return fmt.Errorf("load config: %w", err)
 				}
 				if cfg == nil || len(cfg.Repos) == 0 {
-					fmt.Fprintln(cmd.ErrOrStderr(), "warning: no repos configured; daemon will run idle.")
-					fmt.Fprintln(cmd.ErrOrStderr(), "hint: ezoss init --repo owner/name")
+					if cfg != nil && cfg.Contrib.Enabled {
+						fmt.Fprintln(cmd.ErrOrStderr(), "warning: no repos configured; daemon will only track contributor items.")
+						fmt.Fprintln(cmd.ErrOrStderr(), "hint: add maintainer repos with ezoss init --repo owner/name")
+					} else {
+						fmt.Fprintln(cmd.ErrOrStderr(), "warning: no repos configured and contributor mode is disabled; daemon will run idle.")
+						fmt.Fprintln(cmd.ErrOrStderr(), "hint: ezoss init --repo owner/name")
+					}
 				}
 			}
 
@@ -2561,7 +2566,11 @@ func writeInitSummary(w io.Writer, configPath string, cfg *config.GlobalConfig) 
 		}
 	}
 	if len(cfg.Repos) == 0 {
-		_, err := fmt.Fprintln(w, "\nNo repos configured. Add one with:\n  ezoss init --repo owner/name")
+		if cfg.Contrib.Enabled {
+			_, err := fmt.Fprintln(w, "\nNo maintainer repos configured. Contributor tracking is enabled.\nAdd a maintainer repo with:\n  ezoss init --repo owner/name")
+			return err
+		}
+		_, err := fmt.Fprintln(w, "\nNo maintainer repos configured and contributor tracking is disabled.\nAdd one with:\n  ezoss init --repo owner/name")
 		return err
 	}
 	_, err := fmt.Fprintln(w, "\nNext: ezoss daemon start")
