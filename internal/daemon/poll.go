@@ -497,7 +497,7 @@ func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []strin
 	}
 
 	if authoredSearchesComplete {
-		if err := pruneContribRepos(poller, repoSet, seenItemIDs); err != nil {
+		if err := pruneContribRepos(poller, maintainer, repoSet, seenItemIDs); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -516,13 +516,16 @@ func runContribSweep(ctx context.Context, poller Poller, maintainerRepos []strin
 // longer returned (their PR was merged, the issue closed, etc) and then
 // removes any contrib-source repo that no longer holds any contributor
 // items. Maintainer (config) repos are left alone.
-func pruneContribRepos(poller Poller, sweptRepos map[string]struct{}, sweptItems map[string]struct{}) error {
-	repos, err := poller.DB.ListReposBySource(db.RepoSourceContrib)
+func pruneContribRepos(poller Poller, maintainerRepos map[string]struct{}, sweptRepos map[string]struct{}, sweptItems map[string]struct{}) error {
+	repos, err := poller.DB.ListReposWithContributorItems()
 	if err != nil {
 		return err
 	}
 	for _, repo := range repos {
 		repoID := repo.ID
+		if _, ok := maintainerRepos[repoID]; ok {
+			continue
+		}
 		items, err := poller.DB.ListContributorItemsForRepo(repoID)
 		if err != nil {
 			return err

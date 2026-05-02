@@ -2205,6 +2205,33 @@ func TestPollOnceContribSweepPrunesReposMissingFromLatestSweep(t *testing.T) {
 	}
 }
 
+func TestPollOnceContribSweepPrunesContributorItemsInFormerConfigRepos(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceConfig}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor,
+		Number: 321, Title: "old", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{}
+	poller := Poller{DB: database, GitHub: client, ContribEnabled: true}
+	if err := PollOnce(context.Background(), poller, nil); err != nil {
+		t.Fatalf("PollOnce error: %v", err)
+	}
+	if got, err := database.GetItem("upstream/widgets#321"); err != nil || got != nil {
+		t.Fatalf("contributor item after prune = %#v, %v; want nil", got, err)
+	}
+	if got, err := database.GetRepo("upstream/widgets"); err != nil || got == nil || got.Source != db.RepoSourceConfig {
+		t.Fatalf("former config repo after prune = %#v, %v; want config repo", got, err)
+	}
+}
+
 func TestPollOnceContribSweepDoesNotPruneAfterAuthoredSearchError(t *testing.T) {
 	t.Parallel()
 

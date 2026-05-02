@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"fmt"
+
+	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
 )
 
 func (d *DB) UpsertRepo(repo Repo) error {
@@ -97,6 +99,43 @@ func (d *DB) ListReposBySource(source RepoSource) ([]Repo, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list repos by source: %w", err)
+	}
+	return repos, nil
+}
+
+func (d *DB) ListReposWithContributorItems() ([]Repo, error) {
+	rows, err := d.sql.Query(
+		`SELECT DISTINCT r.id, r.default_branch, r.source, r.last_poll_at, r.last_triaged_refresh_at, r.created_at
+		 FROM repos r
+		 JOIN items i ON i.repo_id = r.id
+		 WHERE i.role = ?
+		 ORDER BY r.id ASC`,
+		sharedtypes.RoleContributor,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list repos with contributor items: %w", err)
+	}
+	defer rows.Close()
+
+	var repos []Repo
+	for rows.Next() {
+		var repo Repo
+		var lastPollAt sql.NullInt64
+		var lastTriagedRefreshAt sql.NullInt64
+		var source sql.NullString
+		if err := rows.Scan(&repo.ID, &repo.DefaultBranch, &source, &lastPollAt, &lastTriagedRefreshAt, &repo.CreatedAt); err != nil {
+			return nil, fmt.Errorf("list repos with contributor items: %w", err)
+		}
+		repo.Source = RepoSource(source.String)
+		if repo.Source == "" {
+			repo.Source = RepoSourceConfig
+		}
+		repo.LastPollAt = unixToTimePtr(lastPollAt)
+		repo.LastTriagedRefreshAt = unixToTimePtr(lastTriagedRefreshAt)
+		repos = append(repos, repo)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list repos with contributor items: %w", err)
 	}
 	return repos, nil
 }
