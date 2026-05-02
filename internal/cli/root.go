@@ -338,13 +338,18 @@ func newFixCmd() *cobra.Command {
 			if strings.TrimSpace(prCreate) != "" {
 				mode = prcreator.Mode(prCreate)
 			}
-			resolution, err := resolvePRCreator(mode, lookPath)
-			if err != nil {
-				return err
-			}
+			var resolution prcreator.Resolution
 			var entry tui.Entry
 			if !prepareOnly {
 				entry, err = loadFixEntry(repoID, number)
+				if err != nil {
+					return err
+				}
+				if entry.Role == sharedtypes.RoleContributor && contributorPushMode(cfg) == config.ContribPushDisabled {
+					return fmt.Errorf("contrib push disabled: refusing to run contributor fix for %s#%d", repoID, number)
+				}
+			} else {
+				resolution, err = resolvePRCreator(mode, lookPath)
 				if err != nil {
 					return err
 				}
@@ -359,6 +364,12 @@ func newFixCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("prepare fix worktree: %w", err)
 			}
+			if !prepareOnly && !contributor {
+				resolution, err = resolvePRCreator(mode, lookPath)
+				if err != nil {
+					return err
+				}
+			}
 
 			w := cmd.OutOrStdout()
 			fmt.Fprintln(w, "fix:")
@@ -368,12 +379,14 @@ func newFixCmd() *cobra.Command {
 			fmt.Fprintf(w, "  worktree: %s\n", worktree.WorktreePath)
 			fmt.Fprintf(w, "  branch: %s\n", worktree.Branch)
 			fmt.Fprintf(w, "  base_ref: %s\n", worktree.BaseRef)
-			fmt.Fprintf(w, "  pr_create: %s\n", resolution.Mode)
-			if resolution.Binary != "" {
-				fmt.Fprintf(w, "  pr_create_binary: %s\n", resolution.Binary)
-			}
-			for _, skipped := range resolution.Skipped {
-				fmt.Fprintf(w, "  skipped_%s: %s\n", skipped.Mode, skipped.Reason)
+			if resolution.Mode != "" {
+				fmt.Fprintf(w, "  pr_create: %s\n", resolution.Mode)
+				if resolution.Binary != "" {
+					fmt.Fprintf(w, "  pr_create_binary: %s\n", resolution.Binary)
+				}
+				for _, skipped := range resolution.Skipped {
+					fmt.Fprintf(w, "  skipped_%s: %s\n", skipped.Mode, skipped.Reason)
+				}
 			}
 			if prepareOnly {
 				telemetry.Track("command", telemetry.Fields{"command": "fix", "entrypoint": "fix", "pr_create": string(resolution.Mode), "prepare_only": true})
@@ -462,9 +475,12 @@ func runFixEntry(ctx context.Context, entry tui.Entry, out io.Writer) (*fixRunRe
 	if err != nil {
 		return nil, fmt.Errorf("prepare fix worktree: %w", err)
 	}
-	resolution, err := resolvePRCreator(prcreator.Mode(cfg.Fixes.PRCreate), lookPath)
-	if err != nil {
-		return nil, err
+	var resolution prcreator.Resolution
+	if !contributor {
+		resolution, err = resolvePRCreator(prcreator.Mode(cfg.Fixes.PRCreate), lookPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return runFixEntryWithPrepared(ctx, entry, out, fixRunPrepared{
 		Root:        p.Root(),
@@ -512,6 +528,9 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 	if strings.TrimSpace(entry.FixPrompt) == "" {
 		return nil, fmt.Errorf("%s#%d has no fix prompt", entry.RepoID, entry.Number)
 	}
+	if prepared.Contributor && contributorPushMode(prepared.Config) == config.ContribPushDisabled {
+		return nil, fmt.Errorf("contrib push disabled: refusing to run contributor fix for %s#%d", entry.RepoID, entry.Number)
+	}
 	cfg, err := loadFixRunConfig(prepared.Config, prepared.Worktree.WorktreePath)
 	if err != nil {
 		return nil, err
@@ -555,13 +574,7 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 	}
 	if prepared.Contributor {
 		headRef := baseBranch(worktree.BaseRef)
-		pushMode := config.ContribPushNoMistakes
-		if prepared.Config != nil && prepared.Config.Fixes.ContribPush != "" {
-			pushMode = prepared.Config.Fixes.ContribPush
-		}
-		if pushMode == config.ContribPushDisabled {
-			return nil, fmt.Errorf("contrib push disabled: refusing to run contributor fix for %s#%d", entry.RepoID, entry.Number)
-		}
+		pushMode := contributorPushMode(prepared.Config)
 		if pushMode == config.ContribPushAuto {
 			if _, err := runFixGitCommand(ctx, worktree.WorktreePath, nil, "push", "origin", "HEAD:"+headRef); err != nil {
 				return nil, fmt.Errorf("push contrib branch %s: %w", headRef, err)
@@ -583,6 +596,13 @@ func runFixEntryWithPrepared(ctx context.Context, entry tui.Entry, out io.Writer
 		return nil, err
 	}
 	return &fixRunResult{WorktreePath: worktree.WorktreePath, Branch: worktree.Branch, PRURL: created.URL}, nil
+}
+
+func contributorPushMode(cfg *config.GlobalConfig) config.ContribPushMode {
+	if cfg != nil && cfg.Fixes.ContribPush != "" {
+		return cfg.Fixes.ContribPush
+	}
+	return config.ContribPushNoMistakes
 }
 
 func promptWithFixWorktree(prompt string, checkout string) string {

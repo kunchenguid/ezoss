@@ -182,7 +182,8 @@ func TestFixCommandContributorUsesExistingHeadBranch(t *testing.T) {
 		return fixflow.Worktree{WorktreePath: filepath.Join(root, "fixes", "kun__widgets", "321-run"), Branch: "fix-race", BaseRef: "origin/fix-race"}, nil
 	}
 	resolvePRCreator = func(prcreator.Mode, func(string) (string, error)) (prcreator.Resolution, error) {
-		return prcreator.Resolution{Mode: prcreator.ModeGH, Binary: "/bin/gh"}, nil
+		t.Fatal("resolvePRCreator must not be called for contributor fix")
+		return prcreator.Resolution{}, nil
 	}
 	lookPath = func(string) (string, error) { return "/bin/codex", nil }
 	newAgent = func(sharedtypes.AgentName, string) (triageAgent, error) {
@@ -246,6 +247,79 @@ func TestFixCommandContributorUsesExistingHeadBranch(t *testing.T) {
 	}
 	if pushArgs[0] != "push" || pushArgs[1] != "origin" || pushArgs[2] != "HEAD:fix-race" {
 		t.Fatalf("push args = %#v, want push origin HEAD:fix-race", pushArgs)
+	}
+}
+
+func TestFixCommandContributorDisabledRefusesBeforePreparingWorktree(t *testing.T) {
+	root := t.TempDir()
+	originalNewPaths := newPaths
+	originalLoadGlobalConfig := loadGlobalConfig
+	originalPrepareContribWorktree := prepareContribWorktree
+	originalResolvePRCreator := resolvePRCreator
+	originalNewAgent := newAgent
+	originalApplyShellEnv := applyShellEnv
+	originalCloseTelemetry := closeTelemetry
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		loadGlobalConfig = originalLoadGlobalConfig
+		prepareContribWorktree = originalPrepareContribWorktree
+		resolvePRCreator = originalResolvePRCreator
+		newAgent = originalNewAgent
+		applyShellEnv = originalApplyShellEnv
+		closeTelemetry = originalCloseTelemetry
+	})
+
+	newPaths = func() (*paths.Paths, error) { return paths.WithRoot(root), nil }
+	loadGlobalConfig = func(string) (*config.GlobalConfig, error) {
+		return &config.GlobalConfig{Agent: config.AgentCodex, Fixes: config.FixesConfig{ContribPush: config.ContribPushDisabled}}, nil
+	}
+	prepareContribWorktree = func(context.Context, fixflow.ContribWorktreeOptions) (fixflow.Worktree, error) {
+		t.Fatal("prepareContribWorktree must not be called when contrib push is disabled")
+		return fixflow.Worktree{}, nil
+	}
+	resolvePRCreator = func(prcreator.Mode, func(string) (string, error)) (prcreator.Resolution, error) {
+		t.Fatal("resolvePRCreator must not be called for contributor fix")
+		return prcreator.Resolution{}, nil
+	}
+	newAgent = func(sharedtypes.AgentName, string) (triageAgent, error) {
+		t.Fatal("newAgent must not be called when contrib push is disabled")
+		return nil, nil
+	}
+	applyShellEnv = func() error { return nil }
+	closeTelemetry = func() {}
+
+	database, err := db.Open(filepath.Join(root, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "upstream/widgets#321", RepoID: "upstream/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor,
+		Number: 321, Title: "fix race", State: sharedtypes.ItemStateOpen,
+		HeadRepo: "kun/widgets", HeadRef: "fix-race", HeadCloneURL: "https://github.com/kun/widgets.git",
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "upstream/widgets#321",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			StateChange: sharedtypes.StateChangeFixRequired,
+			FixPrompt:   "fix the race",
+		}},
+	}); err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	cmd := NewRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"fix", "upstream/widgets#321"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "contrib push disabled") {
+		t.Fatalf("Execute() error = %v, want contrib push disabled", err)
 	}
 }
 

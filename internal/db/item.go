@@ -115,7 +115,7 @@ func (d *DB) ListItemsNeedingTriage() ([]Item, error) {
 		   GROUP BY item_id
 		 ) r ON r.item_id = i.id
 		 WHERE i.state = ?
-		   AND (i.role = 'contributor' OR i.gh_triaged = 0)
+			   AND i.gh_triaged = 0
 		   AND (r.item_id IS NULL OR (i.last_event_at IS NOT NULL AND r.rec_created_at < i.last_event_at))
 		 ORDER BY i.repo_id ASC, i.number ASC`,
 		sharedtypes.ItemStateOpen,

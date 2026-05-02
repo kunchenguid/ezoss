@@ -546,6 +546,43 @@ func TestListItemsNeedingTriageDedupesAgainstActiveRecommendations(t *testing.T)
 	}
 }
 
+func TestListItemsNeedingTriageSkipsLocallyTriagedContributorItems(t *testing.T) {
+	database := openTestDB(t)
+
+	if err := database.UpsertRepo(Repo{ID: "upstream/widgets", Source: RepoSourceContrib}); err != nil {
+		t.Fatalf("upsert repo: %v", err)
+	}
+	lastEvent := time.Unix(1800000000, 0).UTC()
+	if err := database.UpsertItem(Item{
+		ID:          "upstream/widgets#7",
+		RepoID:      "upstream/widgets",
+		Kind:        sharedtypes.ItemKindPR,
+		Role:        sharedtypes.RoleContributor,
+		Number:      7,
+		Title:       "fix widgets",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   true,
+		LastEventAt: &lastEvent,
+	}); err != nil {
+		t.Fatalf("upsert item: %v", err)
+	}
+	if _, err := database.sql.Exec(
+		`INSERT INTO recommendations (id, item_id, agent, model, rationale, draft_comment, followups, proposed_labels, state_change, confidence, tokens_in, tokens_out, created_at, superseded_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"sup-contrib", "upstream/widgets#7", sharedtypes.AgentClaude, "sonnet", "x", "", nil, nil, sharedtypes.StateChangeNone, sharedtypes.ConfidenceMedium, 0, 0, time.Now().Unix(), time.Now().Unix(),
+	); err != nil {
+		t.Fatalf("insert superseded recommendation: %v", err)
+	}
+
+	got, err := database.ListItemsNeedingTriage()
+	if err != nil {
+		t.Fatalf("ListItemsNeedingTriage() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListItemsNeedingTriage() = %v, want no locally triaged contributor items", got)
+	}
+}
+
 func TestRecommendationRoundTripAndListActive(t *testing.T) {
 	database := openTestDB(t)
 
