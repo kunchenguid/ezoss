@@ -178,7 +178,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | `ezoss status`                 | Open the realtime status TUI; in non-interactive output, print rich text status               |
 | `ezoss status --short`         | Print a one-line summary of pending recommendations, configured repos, and contributor state  |
 | `ezoss list`                   | Print pending recommendations in a text format, including contributor markers                 |
-| `ezoss fix <repo>#<number>`    | Run or replace the active fix prompt in an isolated worktree; maintainer PRs and contributor pushes follow config |
+| `ezoss fix <repo>#<number>`    | Run the active fix prompt directly in an isolated worktree; maintainer PRs and contributor pushes follow config |
 | `ezoss triage <repo>#<number>` | Manually triage one issue or PR                                                               |
 | `ezoss update`                 | Download and install the latest released binary for the current platform                      |
 | `ezoss daemon start`           | Start the background poller                                                                   |
