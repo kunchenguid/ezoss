@@ -798,6 +798,13 @@ func ghPathSegment(kind sharedtypes.ItemKind) string {
 	return "issues"
 }
 
+func shouldCheckPostLabelActivity(cached *db.Item, item ghclient.Item) bool {
+	if cached == nil || !cached.GHTriaged || cached.LastEventAt == nil || item.UpdatedAt.IsZero() {
+		return true
+	}
+	return !cached.LastEventAt.UTC().Equal(item.UpdatedAt.UTC())
+}
+
 func shouldRefreshTriagedItems(poller Poller, repoID string, polledAt time.Time) bool {
 	repo, err := poller.DB.GetRepo(repoID)
 	if err != nil || repo == nil || repo.LastTriagedRefreshAt == nil {
@@ -829,7 +836,7 @@ func refreshTriagedItems(ctx context.Context, poller Poller, repoID string, poll
 		}
 
 		ghTriaged := hasLabel(item.Labels, triagedLabel)
-		if ghTriaged && item.State == sharedtypes.ItemStateOpen && activityChecker != nil {
+		if ghTriaged && item.State == sharedtypes.ItemStateOpen && activityChecker != nil && shouldCheckPostLabelActivity(cached, item) {
 			hasActivity, err := activityChecker.HasActivityAfterLabel(ctx, repoID, item.Number, triagedLabel)
 			if err != nil {
 				return fmt.Errorf("check post-triage activity for item %d: %w", item.Number, err)

@@ -1125,6 +1125,63 @@ func TestHasActivityAfterLabelDetectsDifferentActorActivity(t *testing.T) {
 	}
 }
 
+func TestHasActivityAfterLabelUsesEventSpecificTimestamps(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "committed",
+			event: `{"event":"committed","committed_at":"2026-05-03T19:14:03Z","actor":{"login":"alice"}}`,
+		},
+		{
+			name:  "reviewed",
+			event: `{"event":"reviewed","submitted_at":"2026-05-03T19:14:03Z","actor":{"login":"alice"}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &stubRunner{responses: []stubResponse{{stdout: `[
+				{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+				` + tc.event + `
+			]`}}}
+			client := New(runner)
+
+			got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+			if err != nil {
+				t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+			}
+			if !got {
+				t.Fatal("HasActivityAfterLabel = false, want true")
+			}
+		})
+	}
+}
+
+func TestHasActivityAfterLabelDecodesConcatenatedPaginatedTimeline(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}}
+	]
+	[
+		{"event":"commented","created_at":"2026-05-03T19:14:03Z","actor":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabel = false, want true")
+	}
+}
+
 type stubRunner struct {
 	responses []stubResponse
 	calls     []stubCall

@@ -1110,6 +1110,82 @@ func TestPollOnceRefreshesTriagedContributorItemBeforeStaleCheck(t *testing.T) {
 	}
 }
 
+func TestPollOnceSkipsPostLabelActivityCheckWhenCachedUpdatedAtMatches(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	updatedAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	previousRefresh := updatedAt.Add(-2 * time.Hour)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", LastTriagedRefreshAt: &previousRefresh}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:          "acme/widgets#42",
+		RepoID:      "acme/widgets",
+		Kind:        sharedtypes.ItemKindPR,
+		Number:      42,
+		Title:       "feat: improve bridge startup",
+		Author:      "alice",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   true,
+		WaitingOn:   sharedtypes.WaitingOnMaintainer,
+		LastEventAt: &updatedAt,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{
+		itemsByRepo: map[string][]ghclient.Item{"acme/widgets": nil},
+		triagedItemsByRepo: map[string][]ghclient.Item{
+			"acme/widgets": {
+				{
+					Repo:      "acme/widgets",
+					Kind:      sharedtypes.ItemKindPR,
+					Number:    42,
+					Title:     "feat: improve bridge startup",
+					Author:    "alice",
+					State:     sharedtypes.ItemStateOpen,
+					Labels:    []string{triagedLabel},
+					URL:       "https://github.com/acme/widgets/pull/42",
+					UpdatedAt: updatedAt,
+				},
+			},
+		},
+		activityAfterLabelByKey: map[string]bool{
+			"acme/widgets#42": true,
+		},
+	}
+	runner := &stubRecommendationRunner{result: &TriageResult{
+		Agent: sharedtypes.AgentClaude,
+		Model: "sonnet",
+		Recommendation: &triage.Recommendation{Options: []triage.RecommendationOption{{
+			StateChange:  sharedtypes.StateChangeNone,
+			Rationale:    "Contributor updated the PR after triage.",
+			DraftComment: "Thanks, I will take another look.",
+			Confidence:   sharedtypes.ConfidenceHigh,
+			WaitingOn:    sharedtypes.WaitingOnMaintainer,
+		}}},
+	}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client, Triage: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	if len(client.activityAfterLabelCalls) != 0 {
+		t.Fatalf("post-label activity calls = %#v, want none when updated_at is unchanged", client.activityAfterLabelCalls)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("triage runner calls = %d, want 0", len(runner.calls))
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || !item.GHTriaged {
+		t.Fatalf("GHTriaged after unchanged refresh = %#v, want true", item)
+	}
+}
+
 func TestPollOnceRetriagesTriagedItemAfterActivityFollowingTriagedLabel(t *testing.T) {
 	t.Parallel()
 

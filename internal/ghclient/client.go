@@ -104,10 +104,12 @@ type ghLabel struct {
 }
 
 type timelineItem struct {
-	Event     string         `json:"event"`
-	CreatedAt string         `json:"created_at"`
-	Actor     *ghLogin       `json:"actor"`
-	Label     *timelineLabel `json:"label"`
+	Event       string         `json:"event"`
+	CreatedAt   string         `json:"created_at"`
+	SubmittedAt string         `json:"submitted_at"`
+	CommittedAt string         `json:"committed_at"`
+	Actor       *ghLogin       `json:"actor"`
+	Label       *timelineLabel `json:"label"`
 }
 
 type timelineLabel struct {
@@ -531,8 +533,8 @@ func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number 
 	if err != nil {
 		return false, fmt.Errorf("gh api repos/%s/issues/%d/timeline: %w", repo, number, classifyError(err))
 	}
-	var events []timelineItem
-	if err := json.Unmarshal(stdout, &events); err != nil {
+	events, err := decodeTimelineItems(stdout)
+	if err != nil {
 		return false, fmt.Errorf("decode issue timeline %s#%d: %w", repo, number, err)
 	}
 
@@ -542,7 +544,7 @@ func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number 
 		if event.Event != "labeled" || event.Label == nil || event.Label.Name != label {
 			continue
 		}
-		createdAt, err := time.Parse(time.RFC3339, event.CreatedAt)
+		createdAt, err := timelineEventTime(event)
 		if err != nil {
 			return false, fmt.Errorf("parse labeled event time %s#%d: %w", repo, number, err)
 		}
@@ -559,7 +561,7 @@ func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number 
 		if !isPostLabelActivityEvent(event.Event) {
 			continue
 		}
-		createdAt, err := time.Parse(time.RFC3339, event.CreatedAt)
+		createdAt, err := timelineEventTime(event)
 		if err != nil {
 			return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
 		}
@@ -573,6 +575,37 @@ func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number 
 		return true, nil
 	}
 	return false, nil
+}
+
+func decodeTimelineItems(stdout []byte) ([]timelineItem, error) {
+	decoder := json.NewDecoder(strings.NewReader(string(stdout)))
+	events := make([]timelineItem, 0)
+	for {
+		var page []timelineItem
+		if err := decoder.Decode(&page); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		events = append(events, page...)
+	}
+	return events, nil
+}
+
+func timelineEventTime(event timelineItem) (time.Time, error) {
+	value := event.CreatedAt
+	switch event.Event {
+	case "committed":
+		if strings.TrimSpace(event.CommittedAt) != "" {
+			value = event.CommittedAt
+		}
+	case "reviewed":
+		if strings.TrimSpace(event.SubmittedAt) != "" {
+			value = event.SubmittedAt
+		}
+	}
+	return time.Parse(time.RFC3339, value)
 }
 
 func loginOf(actor *ghLogin) string {
