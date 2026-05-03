@@ -580,12 +580,12 @@ func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		}
 		createdAt, err := timelineEventTime(event)
 		if err != nil {
-			if !isCommitAfterLabelByTimelineOrder(event, i, labeledIndex, since, labeledAt) {
+			if !isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy) {
 				return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
 			}
 		}
 		occurredAfter := !createdAt.IsZero() && createdAt.After(activityAfter)
-		if !occurredAfter && isCommitAfterLabelByTimelineOrder(event, i, labeledIndex, since, labeledAt) {
+		if !occurredAfter && isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy) {
 			occurredAfter = true
 		}
 		if !occurredAfter {
@@ -637,11 +637,37 @@ func timelineEventTime(event timelineItem) (time.Time, error) {
 	return time.Parse(time.RFC3339, value)
 }
 
-func isCommitAfterLabelByTimelineOrder(event timelineItem, eventIndex int, labeledIndex int, since time.Time, labeledAt time.Time) bool {
+const timelineOrderBoundaryTolerance = 5 * time.Minute
+
+func isCommitAfterLabelByTimelineOrder(events []timelineItem, event timelineItem, eventIndex int, labeledIndex int, since time.Time, labeledAt time.Time, labeledBy string) bool {
 	if event.Event != "committed" || labeledIndex < 0 || eventIndex <= labeledIndex {
 		return false
 	}
-	return since.IsZero() || !since.UTC().After(labeledAt.UTC())
+	if since.IsZero() || !since.UTC().After(labeledAt.UTC()) {
+		return true
+	}
+	return hasTimelineOrderBoundaryBeforeCommit(events, eventIndex, labeledIndex, since, labeledBy)
+}
+
+func hasTimelineOrderBoundaryBeforeCommit(events []timelineItem, eventIndex int, labeledIndex int, since time.Time, labeledBy string) bool {
+	if labeledBy == "" {
+		return false
+	}
+	sinceStart := since.UTC().Add(-timelineOrderBoundaryTolerance)
+	for i := labeledIndex + 1; i < eventIndex && i < len(events); i++ {
+		event := events[i]
+		if event.Event == "committed" || timelineActorLogin(event) != labeledBy {
+			continue
+		}
+		occurredAt, err := timelineEventTime(event)
+		if err != nil {
+			continue
+		}
+		if !occurredAt.UTC().Before(sinceStart) {
+			return true
+		}
+	}
+	return false
 }
 
 func loginOf(actor *ghLogin) string {
