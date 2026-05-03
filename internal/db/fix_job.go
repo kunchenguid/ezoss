@@ -2,12 +2,19 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
 )
+
+// ErrFixJobInFlight is returned by CreateFixJob when an existing fix job for
+// the same item is mid-agent (preparing the worktree, running the agent,
+// committing, or pushing). The caller is expected to surface this so the user
+// can retry once the in-flight job either reaches waiting_for_pr or finishes.
+var ErrFixJobInFlight = errors.New("fix job already in flight for this item")
 
 func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 	if strings.TrimSpace(input.ItemID) == "" {
@@ -54,7 +61,20 @@ func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 		return nil, err
 	}
 	if existing != nil {
-		return existing, nil
+		// Reject when the existing job is mid-agent: the agent subprocess is
+		// in flight inside runFixStage and we cannot externally cancel it.
+		// Once it reaches waiting_for_pr (or terminates) the new fix can be
+		// queued.
+		if !canSupersedeFixJob(existing) {
+			return nil, fmt.Errorf("%w: %s/%s", ErrFixJobInFlight, existing.Status, existing.Phase)
+		}
+		now := nowUnix()
+		if _, err := tx.Exec(
+			`UPDATE fix_jobs SET status = ?, message = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?) WHERE id = ?`,
+			FixJobStatusCancelled, "superseded by newer fix request", now, now, existing.ID,
+		); err != nil {
+			return nil, fmt.Errorf("supersede fix job: %w", err)
+		}
 	}
 
 	now := nowUnix()
@@ -274,6 +294,23 @@ func (d *DB) UpdateFixJob(id string, update FixJobUpdate) error {
 		return fmt.Errorf("update fix job: %w", err)
 	}
 	return nil
+}
+
+// canSupersedeFixJob reports whether an existing active fix job can be safely
+// cancelled to make room for a new one. Queued jobs haven't been claimed yet,
+// and waiting_for_pr jobs are past the agent run; both can be cancelled
+// without abandoning a live agent subprocess.
+func canSupersedeFixJob(job *FixJob) bool {
+	if job == nil {
+		return true
+	}
+	if job.Status == FixJobStatusQueued {
+		return true
+	}
+	if job.Status == FixJobStatusRunning && job.Phase == FixJobPhaseWaitingForPR {
+		return true
+	}
+	return false
 }
 
 func scanOptionalFixJob(rows *sql.Rows) (*FixJob, error) {
