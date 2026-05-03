@@ -142,13 +142,14 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 ```
 
 - **GitHub is the maintainer truth** - for configured repos, `ezoss/triaged` is the public signal that an item has already been handled.
+  The daemon also watches for new comments, reviews, or commits after that label and can put the item back in the inbox even if the label remains.
   Contributor items are found with `gh search prs/issues --author=@me`, do not edit upstream labels, and are tracked with local sweep metadata.
 - **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
   Rerun instructions are stored there too.
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
 - **Contributor mode is automatic** - by default, the daemon searches for open issues and PRs authored by you in repos you do not maintain, marks them with a `contrib` badge in the inbox, and uses contributor-safe actions instead of maintainer actions.
 - **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and either create maintainer draft PRs according to `fixes.pr_create` or prepare contributor PR branch updates according to `fixes.contrib_push`.
-- **Polling is deliberate** - v1 avoids webhook complexity; maintainer items re-triage when the GitHub label disappears, and contributor items re-triage from local self-activity tracking.
+- **Polling is deliberate** - v1 avoids webhook complexity; maintainer items re-triage when the GitHub label disappears or post-label comments, reviews, or commits appear, and contributor items re-triage from local self-activity tracking.
 - **Approval is explicit** - comments, labels, closes, merges, maintainer fix PRs, and contributor PR branch updates only happen after you approve an inbox action, queue a fix job, or run `ezoss fix`.
 - **PR review is gated when needed** - unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.
 
@@ -248,6 +249,7 @@ sync_labels:
 ```
 
 For maintainer items, `ezoss/triaged` is always managed automatically because it is the public source-of-truth signal for whether an item has already been handled.
+New comments, reviews, or commits after that label can still re-queue the item locally.
 
 Precedence is simple:
 
