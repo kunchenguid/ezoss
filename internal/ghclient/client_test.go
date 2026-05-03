@@ -1238,6 +1238,24 @@ func TestHasActivityAfterLabelUsesNestedCommitTimestamp(t *testing.T) {
 	}
 }
 
+func TestHasActivityAfterLabelUsesCommitTimelineOrder(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"committed","committer":{"date":"2026-05-03T19:01:03Z"},"author":{"date":"2026-05-03T19:00:03Z"},"actor":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabel = false, want true")
+	}
+}
+
 func TestHasActivityAfterLabelDecodesConcatenatedPaginatedTimeline(t *testing.T) {
 	t.Parallel()
 

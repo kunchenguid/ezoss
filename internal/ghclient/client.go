@@ -551,7 +551,8 @@ func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, nu
 
 	var labeledAt time.Time
 	var labeledBy string
-	for _, event := range events {
+	labeledIndex := -1
+	for i, event := range events {
 		if event.Event != "labeled" || event.Label == nil || event.Label.Name != label {
 			continue
 		}
@@ -562,6 +563,7 @@ func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		if createdAt.After(labeledAt) {
 			labeledAt = createdAt
 			labeledBy = timelineActorLogin(event)
+			labeledIndex = i
 		}
 	}
 	if labeledAt.IsZero() {
@@ -572,15 +574,21 @@ func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, nu
 	if since.UTC().After(activityAfter) {
 		activityAfter = since.UTC()
 	}
-	for _, event := range events {
+	for i, event := range events {
 		if !isPostLabelActivityEvent(event.Event) {
 			continue
 		}
 		createdAt, err := timelineEventTime(event)
 		if err != nil {
-			return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
+			if !isCommitAfterLabelByTimelineOrder(event, i, labeledIndex, since, labeledAt) {
+				return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
+			}
 		}
-		if !createdAt.After(activityAfter) {
+		occurredAfter := !createdAt.IsZero() && createdAt.After(activityAfter)
+		if !occurredAfter && isCommitAfterLabelByTimelineOrder(event, i, labeledIndex, since, labeledAt) {
+			occurredAfter = true
+		}
+		if !occurredAfter {
 			continue
 		}
 		actor := timelineActorLogin(event)
@@ -612,12 +620,14 @@ func timelineEventTime(event timelineItem) (time.Time, error) {
 	value := event.CreatedAt
 	switch event.Event {
 	case "committed":
-		if strings.TrimSpace(event.CommittedAt) != "" {
-			value = event.CommittedAt
-		} else if event.Committer != nil && strings.TrimSpace(event.Committer.Date) != "" {
-			value = event.Committer.Date
-		} else if event.Author != nil && strings.TrimSpace(event.Author.Date) != "" {
-			value = event.Author.Date
+		if strings.TrimSpace(value) == "" {
+			if strings.TrimSpace(event.CommittedAt) != "" {
+				value = event.CommittedAt
+			} else if event.Committer != nil && strings.TrimSpace(event.Committer.Date) != "" {
+				value = event.Committer.Date
+			} else if event.Author != nil && strings.TrimSpace(event.Author.Date) != "" {
+				value = event.Author.Date
+			}
 		}
 	case "reviewed":
 		if strings.TrimSpace(event.SubmittedAt) != "" {
@@ -625,6 +635,13 @@ func timelineEventTime(event timelineItem) (time.Time, error) {
 		}
 	}
 	return time.Parse(time.RFC3339, value)
+}
+
+func isCommitAfterLabelByTimelineOrder(event timelineItem, eventIndex int, labeledIndex int, since time.Time, labeledAt time.Time) bool {
+	if event.Event != "committed" || labeledIndex < 0 || eventIndex <= labeledIndex {
+		return false
+	}
+	return since.IsZero() || !since.UTC().After(labeledAt.UTC())
 }
 
 func loginOf(actor *ghLogin) string {
