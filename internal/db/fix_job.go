@@ -69,11 +69,12 @@ func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 			return nil, fmt.Errorf("%w: %s/%s", ErrFixJobInFlight, existing.Status, existing.Phase)
 		}
 		now := nowUnix()
-		if _, err := tx.Exec(
-			`UPDATE fix_jobs SET status = ?, message = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?) WHERE id = ?`,
-			FixJobStatusCancelled, "superseded by newer fix request", now, now, existing.ID,
-		); err != nil {
+		superseded, err := supersedeFixJobIfCancellable(tx, existing.ID, now)
+		if err != nil {
 			return nil, fmt.Errorf("supersede fix job: %w", err)
+		}
+		if !superseded {
+			return nil, fmt.Errorf("%w: %s/%s", ErrFixJobInFlight, existing.Status, existing.Phase)
 		}
 	}
 
@@ -294,6 +295,77 @@ func (d *DB) UpdateFixJob(id string, update FixJobUpdate) error {
 		return fmt.Errorf("update fix job: %w", err)
 	}
 	return nil
+}
+
+func (d *DB) SupersedeFixJobIfCancellable(id string) (bool, error) {
+	superseded, err := supersedeFixJobIfCancellable(d.sql, id, nowUnix())
+	if err != nil {
+		return false, fmt.Errorf("supersede fix job: %w", err)
+	}
+	return superseded, nil
+}
+
+func (d *DB) CompleteWaitingFixJobWithPR(id, url string) (bool, error) {
+	now := nowUnix()
+	result, err := d.sql.Exec(
+		`UPDATE fix_jobs SET
+		 status = ?,
+		 phase = ?,
+		 pr_url = ?,
+		 message = ?,
+		 updated_at = ?,
+		 completed_at = COALESCE(completed_at, ?)
+		 WHERE id = ? AND status = ? AND phase = ?`,
+		FixJobStatusSucceeded,
+		FixJobPhasePROpened,
+		url,
+		"PR opened",
+		now,
+		now,
+		id,
+		FixJobStatusRunning,
+		FixJobPhaseWaitingForPR,
+	)
+	if err != nil {
+		return false, fmt.Errorf("complete waiting fix job with PR: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("complete waiting fix job with PR: rows affected: %w", err)
+	}
+	return rows > 0, nil
+}
+
+type fixJobExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func supersedeFixJobIfCancellable(exec fixJobExecer, id string, now int64) (bool, error) {
+	result, err := exec.Exec(
+		`UPDATE fix_jobs SET
+		 status = ?,
+		 message = ?,
+		 updated_at = ?,
+		 completed_at = COALESCE(completed_at, ?)
+		 WHERE id = ?
+		   AND (status = ? OR (status = ? AND phase = ?))`,
+		FixJobStatusCancelled,
+		"superseded by newer fix request",
+		now,
+		now,
+		id,
+		FixJobStatusQueued,
+		FixJobStatusRunning,
+		FixJobPhaseWaitingForPR,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return rows > 0, nil
 }
 
 // canSupersedeFixJob reports whether an existing active fix job can be safely

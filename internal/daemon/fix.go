@@ -101,18 +101,12 @@ func detectWaitingFixPRs(ctx context.Context, poller Poller) (bool, error) {
 		if strings.TrimSpace(url) == "" {
 			continue
 		}
-		// The job may have been superseded (cancelled) while DetectPR was
-		// in flight. Re-read before writing so a late URL doesn't clobber
-		// the cancellation.
-		current, err := poller.DB.GetFixJob(job.ID)
+		completed, err := poller.DB.CompleteWaitingFixJobWithPR(job.ID, url)
 		if err != nil {
-			return didWork, err
-		}
-		if current == nil || current.Status != db.FixJobStatusRunning {
-			continue
-		}
-		if err := poller.DB.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusSucceeded, Phase: db.FixJobPhasePROpened, PRURL: url, Message: "PR opened"}); err != nil {
 			return true, err
+		}
+		if !completed {
+			continue
 		}
 		didWork = true
 	}

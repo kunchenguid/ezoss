@@ -207,6 +207,67 @@ func TestCreateFixJobRejectsMidAgentJob(t *testing.T) {
 	}
 }
 
+func TestSupersedeFixJobIfCancellableRejectsAdvancedJob(t *testing.T) {
+	database := openTestDB(t)
+	job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseRunningAgent}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+
+	superseded, err := database.SupersedeFixJobIfCancellable(job.ID)
+	if err != nil {
+		t.Fatalf("SupersedeFixJobIfCancellable() error = %v", err)
+	}
+	if superseded {
+		t.Fatalf("SupersedeFixJobIfCancellable() = true, want false for mid-agent job")
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != FixJobStatusRunning || got.Phase != FixJobPhaseRunningAgent {
+		t.Fatalf("job = %#v, want still running/running_agent", got)
+	}
+}
+
+func TestCompleteWaitingFixJobWithPRRejectsSupersededJob(t *testing.T) {
+	database := openTestDB(t)
+	job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "no-mistakes"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseWaitingForPR}); err != nil {
+		t.Fatalf("UpdateFixJob() waiting error = %v", err)
+	}
+	if _, err := database.SupersedeFixJobIfCancellable(job.ID); err != nil {
+		t.Fatalf("SupersedeFixJobIfCancellable() error = %v", err)
+	}
+
+	completed, err := database.CompleteWaitingFixJobWithPR(job.ID, "https://github.com/acme/widgets/pull/99")
+	if err != nil {
+		t.Fatalf("CompleteWaitingFixJobWithPR() error = %v", err)
+	}
+	if completed {
+		t.Fatalf("CompleteWaitingFixJobWithPR() = true, want false for superseded job")
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != FixJobStatusCancelled || got.PRURL != "" {
+		t.Fatalf("job = %#v, want cancelled without PR URL", got)
+	}
+}
+
 func TestCreateFixJobConcurrentSupersedeLeavesOneActive(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
 	database, err := Open(dbPath)
