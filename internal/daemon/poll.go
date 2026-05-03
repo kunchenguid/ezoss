@@ -289,6 +289,7 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 	if err != nil {
 		return err
 	}
+	activityChecker, _ := poller.GitHub.(labelActivityChecker)
 	for _, recommendation := range recommendations {
 		cached, err := poller.DB.GetItem(recommendation.ItemID)
 		if err != nil {
@@ -304,6 +305,10 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 		if err != nil {
 			return fmt.Errorf("get item %d: %w", cached.Number, err)
 		}
+		ghTriaged, err := reconciledGHTriaged(ctx, activityChecker, cached, current)
+		if err != nil {
+			return fmt.Errorf("check post-triage activity for item %d: %w", cached.Number, err)
+		}
 		itemRecord := db.Item{
 			ID:           cached.ID,
 			RepoID:       repoID,
@@ -314,7 +319,7 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 			Author:       current.Author,
 			State:        current.State,
 			IsDraft:      current.IsDraft,
-			GHTriaged:    hasLabel(current.Labels, triagedLabel),
+			GHTriaged:    ghTriaged,
 			WaitingOn:    cached.WaitingOn,
 			LastEventAt:  timePtr(current.UpdatedAt.UTC()),
 			StaleSince:   cached.StaleSince,
@@ -796,6 +801,27 @@ func ghPathSegment(kind sharedtypes.ItemKind) string {
 		return "pull"
 	}
 	return "issues"
+}
+
+func reconciledGHTriaged(ctx context.Context, checker labelActivityChecker, cached *db.Item, item ghclient.Item) (bool, error) {
+	ghTriaged := hasLabel(item.Labels, triagedLabel)
+	if !ghTriaged || cached == nil || cached.GHTriaged || cached.LastEventAt == nil || item.UpdatedAt.IsZero() || item.State != sharedtypes.ItemStateOpen {
+		return ghTriaged, nil
+	}
+	if cached.LastEventAt.UTC().Equal(item.UpdatedAt.UTC()) {
+		return false, nil
+	}
+	if checker == nil {
+		return ghTriaged, nil
+	}
+	hasActivity, err := checker.HasActivityAfterLabel(ctx, cached.RepoID, cached.Number, triagedLabel)
+	if err != nil {
+		return false, err
+	}
+	if hasActivity {
+		return false, nil
+	}
+	return ghTriaged, nil
 }
 
 func shouldCheckPostLabelActivity(cached *db.Item, item ghclient.Item) bool {
