@@ -111,6 +111,7 @@ type timelineItem struct {
 	Committer   *timelineCommitIdentity `json:"committer"`
 	Author      *timelineCommitIdentity `json:"author"`
 	Actor       *ghLogin                `json:"actor"`
+	User        *ghLogin                `json:"user"`
 	Label       *timelineLabel          `json:"label"`
 }
 
@@ -560,7 +561,7 @@ func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		}
 		if createdAt.After(labeledAt) {
 			labeledAt = createdAt
-			labeledBy = loginOf(event.Actor)
+			labeledBy = timelineActorLogin(event)
 		}
 	}
 	if labeledAt.IsZero() {
@@ -582,7 +583,7 @@ func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		if !createdAt.After(activityAfter) {
 			continue
 		}
-		actor := loginOf(event.Actor)
+		actor := timelineActorLogin(event)
 		if actor != "" && actor == labeledBy {
 			continue
 		}
@@ -631,6 +632,13 @@ func loginOf(actor *ghLogin) string {
 		return ""
 	}
 	return strings.TrimSpace(actor.Login)
+}
+
+func timelineActorLogin(event timelineItem) string {
+	if login := loginOf(event.Actor); login != "" {
+		return login
+	}
+	return loginOf(event.User)
 }
 
 func isPostLabelActivityEvent(event string) bool {
