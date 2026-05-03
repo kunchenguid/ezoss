@@ -1162,6 +1162,43 @@ func TestHasActivityAfterLabelUsesEventSpecificTimestamps(t *testing.T) {
 	}
 }
 
+func TestHasActivityAfterLabelUsesNestedCommitTimestamp(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "committer date",
+			event: `{"event":"committed","committer":{"date":"2026-05-03T19:14:03Z"},"author":{"date":"2026-05-03T19:13:03Z"},"actor":{"login":"alice"}}`,
+		},
+		{
+			name:  "author date",
+			event: `{"event":"committed","author":{"date":"2026-05-03T19:14:03Z"},"actor":{"login":"alice"}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &stubRunner{responses: []stubResponse{{stdout: `[
+				{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+				` + tc.event + `
+			]`}}}
+			client := New(runner)
+
+			got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+			if err != nil {
+				t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+			}
+			if !got {
+				t.Fatal("HasActivityAfterLabel = false, want true")
+			}
+		})
+	}
+}
+
 func TestHasActivityAfterLabelDecodesConcatenatedPaginatedTimeline(t *testing.T) {
 	t.Parallel()
 

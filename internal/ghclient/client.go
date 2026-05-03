@@ -104,12 +104,18 @@ type ghLabel struct {
 }
 
 type timelineItem struct {
-	Event       string         `json:"event"`
-	CreatedAt   string         `json:"created_at"`
-	SubmittedAt string         `json:"submitted_at"`
-	CommittedAt string         `json:"committed_at"`
-	Actor       *ghLogin       `json:"actor"`
-	Label       *timelineLabel `json:"label"`
+	Event       string                  `json:"event"`
+	CreatedAt   string                  `json:"created_at"`
+	SubmittedAt string                  `json:"submitted_at"`
+	CommittedAt string                  `json:"committed_at"`
+	Committer   *timelineCommitIdentity `json:"committer"`
+	Author      *timelineCommitIdentity `json:"author"`
+	Actor       *ghLogin                `json:"actor"`
+	Label       *timelineLabel          `json:"label"`
+}
+
+type timelineCommitIdentity struct {
+	Date string `json:"date"`
 }
 
 type timelineLabel struct {
@@ -599,6 +605,10 @@ func timelineEventTime(event timelineItem) (time.Time, error) {
 	case "committed":
 		if strings.TrimSpace(event.CommittedAt) != "" {
 			value = event.CommittedAt
+		} else if event.Committer != nil && strings.TrimSpace(event.Committer.Date) != "" {
+			value = event.Committer.Date
+		} else if event.Author != nil && strings.TrimSpace(event.Author.Date) != "" {
+			value = event.Author.Date
 		}
 	case "reviewed":
 		if strings.TrimSpace(event.SubmittedAt) != "" {
