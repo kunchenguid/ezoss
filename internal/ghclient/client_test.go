@@ -1099,6 +1099,242 @@ func TestSearchAuthoredOpenIssuesReturnsAuthoredIssues(t *testing.T) {
 	}
 }
 
+func TestHasActivityAfterLabelDetectsDifferentActorActivity(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"commented","created_at":"2026-05-03T19:07:18Z","actor":{"login":"kunchenguid"}},
+		{"event":"commented","created_at":"2026-05-03T19:14:03Z","actor":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabel = false, want true")
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("gh calls = %d, want 1", len(runner.calls))
+	}
+	if !reflect.DeepEqual(runner.calls[0].args, []string{"api", "repos/acme/widgets/issues/47/timeline", "--paginate"}) {
+		t.Fatalf("unexpected gh api call: %#v", runner.calls[0].args)
+	}
+}
+
+func TestHasActivityAfterLabelSinceIgnoresEarlierActivity(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"commented","created_at":"2026-05-03T19:14:03Z","actor":{"login":"alice"}},
+		{"event":"commented","created_at":"2026-05-03T19:22:03Z","actor":{"login":"kunchenguid"}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, time.May, 3, 19, 20, 0, 0, time.UTC)
+	got, err := client.HasActivityAfterLabelSince(context.Background(), "acme/widgets", 47, "ezoss/triaged", since)
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabelSince returned error: %v", err)
+	}
+	if got {
+		t.Fatal("HasActivityAfterLabelSince = true, want false")
+	}
+}
+
+func TestHasActivityAfterLabelIgnoresSameUserActivity(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"commented","created_at":"2026-05-03T19:14:03Z","user":{"login":"kunchenguid"}},
+		{"event":"reviewed","submitted_at":"2026-05-03T19:22:03Z","user":{"login":"kunchenguid"}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+	}
+	if got {
+		t.Fatal("HasActivityAfterLabel = true, want false")
+	}
+}
+
+func TestHasActivityAfterLabelUsesEventSpecificTimestamps(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "committed",
+			event: `{"event":"committed","committed_at":"2026-05-03T19:14:03Z","actor":{"login":"alice"}}`,
+		},
+		{
+			name:  "reviewed",
+			event: `{"event":"reviewed","submitted_at":"2026-05-03T19:14:03Z","actor":{"login":"alice"}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &stubRunner{responses: []stubResponse{{stdout: `[
+				{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+				` + tc.event + `
+			]`}}}
+			client := New(runner)
+
+			got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+			if err != nil {
+				t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+			}
+			if !got {
+				t.Fatal("HasActivityAfterLabel = false, want true")
+			}
+		})
+	}
+}
+
+func TestHasActivityAfterLabelUsesNestedCommitTimestamp(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "committer date",
+			event: `{"event":"committed","committer":{"date":"2026-05-03T19:14:03Z"},"author":{"date":"2026-05-03T19:13:03Z"},"actor":{"login":"alice"}}`,
+		},
+		{
+			name:  "author date",
+			event: `{"event":"committed","author":{"date":"2026-05-03T19:14:03Z"},"actor":{"login":"alice"}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &stubRunner{responses: []stubResponse{{stdout: `[
+				{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+				` + tc.event + `
+			]`}}}
+			client := New(runner)
+
+			got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+			if err != nil {
+				t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+			}
+			if !got {
+				t.Fatal("HasActivityAfterLabel = false, want true")
+			}
+		})
+	}
+}
+
+func TestHasActivityAfterLabelUsesCommitTimelineOrder(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"committed","committer":{"date":"2026-05-03T19:01:03Z"},"author":{"date":"2026-05-03T19:00:03Z"},"actor":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabel = false, want true")
+	}
+}
+
+func TestHasActivityAfterLabelSinceUsesCommitTimelineOrderAfterSelfActivity(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"commented","created_at":"2026-05-03T19:22:03Z","user":{"login":"kunchenguid"}},
+		{"event":"committed","committer":{"date":"2026-05-03T19:01:03Z"},"author":{"date":"2026-05-03T19:00:03Z"},"actor":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, time.May, 3, 19, 22, 5, 0, time.UTC)
+	got, err := client.HasActivityAfterLabelSince(context.Background(), "acme/widgets", 47, "ezoss/triaged", since)
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabelSince returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabelSince = false, want true")
+	}
+}
+
+func TestHasActivityAfterLabelSinceDoesNotUseCommitTimelineOrderWithoutSelfBoundary(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"committed","committer":{"date":"2026-05-03T19:01:03Z"},"author":{"date":"2026-05-03T19:00:03Z"},"actor":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, time.May, 3, 19, 22, 3, 0, time.UTC)
+	got, err := client.HasActivityAfterLabelSince(context.Background(), "acme/widgets", 47, "ezoss/triaged", since)
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabelSince returned error: %v", err)
+	}
+	if got {
+		t.Fatal("HasActivityAfterLabelSince = true, want false")
+	}
+}
+
+func TestHasActivityAfterLabelSinceUpdatedUsesCommitTimelineOrderWithoutSelfBoundary(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"committed","committer":{"date":"2026-05-03T19:01:03Z"},"author":{"date":"2026-05-03T19:00:03Z"},"actor":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, time.May, 3, 19, 22, 3, 0, time.UTC)
+	updatedAt := since.Add(4 * time.Minute)
+	got, err := client.HasActivityAfterLabelSinceUpdated(context.Background(), "acme/widgets", 47, "ezoss/triaged", since, updatedAt)
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabelSinceUpdated returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabelSinceUpdated = false, want true")
+	}
+}
+
+func TestHasActivityAfterLabelDecodesConcatenatedPaginatedTimeline(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}}
+	]
+	[
+		{"event":"commented","created_at":"2026-05-03T19:14:03Z","actor":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 47, "ezoss/triaged")
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabel = false, want true")
+	}
+}
+
 type stubRunner struct {
 	responses []stubResponse
 	calls     []stubCall

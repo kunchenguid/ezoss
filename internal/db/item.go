@@ -99,11 +99,10 @@ func (d *DB) GetItem(id string) (*Item, error) {
 	return item, nil
 }
 
-// ListItemsNeedingTriage returns open, GitHub-untriaged items that have
-// no active recommendation, or whose latest GitHub event is more recent
-// than the active recommendation. This drives the agent stage of the
-// poll cycle so we don't re-investigate items we already have a fresh
-// take on.
+// ListItemsNeedingTriage returns open items whose local triage gate is unset
+// and that have no active recommendation, or whose latest GitHub event is more
+// recent than the active recommendation. This drives the agent stage of the
+// poll cycle so we don't re-investigate items we already have a fresh take on.
 func (d *DB) ListItemsNeedingTriage() ([]Item, error) {
 	rows, err := d.sql.Query(
 		`SELECT `+itemColumns+`

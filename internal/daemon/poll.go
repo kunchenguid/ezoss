@@ -49,6 +49,18 @@ type itemGetter interface {
 	GetItem(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int) (ghclient.Item, error)
 }
 
+type labelActivityChecker interface {
+	HasActivityAfterLabel(ctx context.Context, repo string, number int, label string) (bool, error)
+}
+
+type labelActivitySinceChecker interface {
+	HasActivityAfterLabelSince(ctx context.Context, repo string, number int, label string, since time.Time) (bool, error)
+}
+
+type labelActivitySinceUpdatedChecker interface {
+	HasActivityAfterLabelSinceUpdated(ctx context.Context, repo string, number int, label string, since time.Time, updatedAt time.Time) (bool, error)
+}
+
 type triageRunner interface {
 	Triage(ctx context.Context, req TriageRequest) (*TriageResult, error)
 }
@@ -285,6 +297,7 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 	if err != nil {
 		return err
 	}
+	activityChecker, _ := poller.GitHub.(labelActivityChecker)
 	for _, recommendation := range recommendations {
 		cached, err := poller.DB.GetItem(recommendation.ItemID)
 		if err != nil {
@@ -300,23 +313,28 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 		if err != nil {
 			return fmt.Errorf("get item %d: %w", cached.Number, err)
 		}
+		ghTriaged, err := reconciledGHTriaged(ctx, activityChecker, cached, current)
+		if err != nil {
+			return fmt.Errorf("check post-triage activity for item %d: %w", cached.Number, err)
+		}
 		itemRecord := db.Item{
-			ID:           cached.ID,
-			RepoID:       repoID,
-			Kind:         current.Kind,
-			Role:         cached.Role,
-			Number:       current.Number,
-			Title:        current.Title,
-			Author:       current.Author,
-			State:        current.State,
-			IsDraft:      current.IsDraft,
-			GHTriaged:    hasLabel(current.Labels, triagedLabel),
-			WaitingOn:    cached.WaitingOn,
-			LastEventAt:  timePtr(current.UpdatedAt.UTC()),
-			StaleSince:   cached.StaleSince,
-			HeadRepo:     cached.HeadRepo,
-			HeadRef:      cached.HeadRef,
-			HeadCloneURL: cached.HeadCloneURL,
+			ID:                 cached.ID,
+			RepoID:             repoID,
+			Kind:               current.Kind,
+			Role:               cached.Role,
+			Number:             current.Number,
+			Title:              current.Title,
+			Author:             current.Author,
+			State:              current.State,
+			IsDraft:            current.IsDraft,
+			GHTriaged:          ghTriaged,
+			WaitingOn:          cached.WaitingOn,
+			LastEventAt:        timePtr(current.UpdatedAt.UTC()),
+			LastSelfActivityAt: cached.LastSelfActivityAt,
+			StaleSince:         cached.StaleSince,
+			HeadRepo:           cached.HeadRepo,
+			HeadRef:            cached.HeadRef,
+			HeadCloneURL:       cached.HeadCloneURL,
 		}
 		if current.State != sharedtypes.ItemStateOpen {
 			itemRecord.StaleSince = nil
@@ -794,6 +812,53 @@ func ghPathSegment(kind sharedtypes.ItemKind) string {
 	return "issues"
 }
 
+func reconciledGHTriaged(ctx context.Context, checker labelActivityChecker, cached *db.Item, item ghclient.Item) (bool, error) {
+	ghTriaged := hasLabel(item.Labels, triagedLabel)
+	if !ghTriaged || cached == nil || cached.GHTriaged || cached.LastEventAt == nil || item.UpdatedAt.IsZero() || item.State != sharedtypes.ItemStateOpen {
+		return ghTriaged, nil
+	}
+	if cached.LastEventAt.UTC().Equal(item.UpdatedAt.UTC()) {
+		return false, nil
+	}
+	if checker == nil {
+		return ghTriaged, nil
+	}
+	hasActivity, err := hasActivityAfterLabel(ctx, checker, cached, cached.RepoID, cached.Number, item.UpdatedAt)
+	if err != nil {
+		return false, err
+	}
+	if hasActivity {
+		return false, nil
+	}
+	return ghTriaged, nil
+}
+
+func hasActivityAfterLabel(ctx context.Context, checker labelActivityChecker, cached *db.Item, repoID string, number int, updatedAt time.Time) (bool, error) {
+	if cached != nil && cached.LastSelfActivityAt != nil {
+		since := cached.LastSelfActivityAt.UTC()
+		if updatedChecker, ok := checker.(labelActivitySinceUpdatedChecker); ok {
+			return updatedChecker.HasActivityAfterLabelSinceUpdated(ctx, repoID, number, triagedLabel, since, updatedAt.UTC())
+		}
+		if sinceChecker, ok := checker.(labelActivitySinceChecker); ok {
+			return sinceChecker.HasActivityAfterLabelSince(ctx, repoID, number, triagedLabel, since)
+		}
+	}
+	return checker.HasActivityAfterLabel(ctx, repoID, number, triagedLabel)
+}
+
+func shouldCheckPostLabelActivity(cached *db.Item, item ghclient.Item) bool {
+	if cached == nil {
+		return false
+	}
+	if !cached.GHTriaged || cached.LastEventAt == nil || item.UpdatedAt.IsZero() {
+		return true
+	}
+	if cached.LastSelfActivityAt != nil && !item.UpdatedAt.UTC().After(cached.LastSelfActivityAt.UTC()) {
+		return false
+	}
+	return !cached.LastEventAt.UTC().Equal(item.UpdatedAt.UTC())
+}
+
 func shouldRefreshTriagedItems(poller Poller, repoID string, polledAt time.Time) bool {
 	repo, err := poller.DB.GetRepo(repoID)
 	if err != nil || repo == nil || repo.LastTriagedRefreshAt == nil {
@@ -816,11 +881,23 @@ func refreshTriagedItems(ctx context.Context, poller Poller, repoID string, poll
 	if err != nil {
 		return fmt.Errorf("list triaged: %w", err)
 	}
+	activityChecker, _ := poller.GitHub.(labelActivityChecker)
 
 	for _, item := range items {
 		cached, err := poller.DB.GetItem(itemID(repoID, item.Number))
 		if err != nil {
 			return fmt.Errorf("get item %d: %w", item.Number, err)
+		}
+
+		ghTriaged := hasLabel(item.Labels, triagedLabel)
+		if ghTriaged && item.State == sharedtypes.ItemStateOpen && activityChecker != nil && shouldCheckPostLabelActivity(cached, item) {
+			hasActivity, err := hasActivityAfterLabel(ctx, activityChecker, cached, repoID, item.Number, item.UpdatedAt)
+			if err != nil {
+				return fmt.Errorf("check post-triage activity for item %d: %w", item.Number, err)
+			}
+			if hasActivity {
+				ghTriaged = false
+			}
 		}
 
 		itemRecord := db.Item{
@@ -832,13 +909,14 @@ func refreshTriagedItems(ctx context.Context, poller Poller, repoID string, poll
 			Author:      item.Author,
 			State:       item.State,
 			IsDraft:     item.IsDraft,
-			GHTriaged:   hasLabel(item.Labels, triagedLabel),
+			GHTriaged:   ghTriaged,
 			WaitingOn:   sharedtypes.WaitingOnNone,
 			LastEventAt: timePtr(item.UpdatedAt.UTC()),
 		}
 		if cached != nil {
 			itemRecord.WaitingOn = cached.WaitingOn
 			itemRecord.StaleSince = cached.StaleSince
+			itemRecord.LastSelfActivityAt = cached.LastSelfActivityAt
 		}
 
 		if itemRecord.WaitingOn == sharedtypes.WaitingOnContributor && poller.StaleThreshold > 0 {

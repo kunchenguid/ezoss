@@ -103,6 +103,26 @@ type ghLabel struct {
 	Name string `json:"name"`
 }
 
+type timelineItem struct {
+	Event       string                  `json:"event"`
+	CreatedAt   string                  `json:"created_at"`
+	SubmittedAt string                  `json:"submitted_at"`
+	CommittedAt string                  `json:"committed_at"`
+	Committer   *timelineCommitIdentity `json:"committer"`
+	Author      *timelineCommitIdentity `json:"author"`
+	Actor       *ghLogin                `json:"actor"`
+	User        *ghLogin                `json:"user"`
+	Label       *timelineLabel          `json:"label"`
+}
+
+type timelineCommitIdentity struct {
+	Date string `json:"date"`
+}
+
+type timelineLabel struct {
+	Name string `json:"name"`
+}
+
 func New(runner Runner) *Client {
 	if runner == nil {
 		runner = commandRunner{}
@@ -513,6 +533,189 @@ func (c *Client) SearchAuthoredOpenIssues(ctx context.Context) ([]Item, error) {
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number int, label string) (bool, error) {
+	return c.hasActivityAfterLabelSince(ctx, repo, number, label, time.Time{}, time.Time{})
+}
+
+func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, number int, label string, since time.Time) (bool, error) {
+	return c.hasActivityAfterLabelSince(ctx, repo, number, label, since, time.Time{})
+}
+
+func (c *Client) HasActivityAfterLabelSinceUpdated(ctx context.Context, repo string, number int, label string, since time.Time, updatedAt time.Time) (bool, error) {
+	return c.hasActivityAfterLabelSince(ctx, repo, number, label, since, updatedAt)
+}
+
+func (c *Client) hasActivityAfterLabelSince(ctx context.Context, repo string, number int, label string, since time.Time, updatedAt time.Time) (bool, error) {
+	stdout, err := c.runner.Run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline", "--paginate")
+	if err != nil {
+		return false, fmt.Errorf("gh api repos/%s/issues/%d/timeline: %w", repo, number, classifyError(err))
+	}
+	events, err := decodeTimelineItems(stdout)
+	if err != nil {
+		return false, fmt.Errorf("decode issue timeline %s#%d: %w", repo, number, err)
+	}
+
+	var labeledAt time.Time
+	var labeledBy string
+	labeledIndex := -1
+	for i, event := range events {
+		if event.Event != "labeled" || event.Label == nil || event.Label.Name != label {
+			continue
+		}
+		createdAt, err := timelineEventTime(event)
+		if err != nil {
+			return false, fmt.Errorf("parse labeled event time %s#%d: %w", repo, number, err)
+		}
+		if createdAt.After(labeledAt) {
+			labeledAt = createdAt
+			labeledBy = timelineActorLogin(event)
+			labeledIndex = i
+		}
+	}
+	if labeledAt.IsZero() {
+		return false, nil
+	}
+
+	activityAfter := labeledAt
+	if since.UTC().After(activityAfter) {
+		activityAfter = since.UTC()
+	}
+	for i, event := range events {
+		if !isPostLabelActivityEvent(event.Event) {
+			continue
+		}
+		createdAt, err := timelineEventTime(event)
+		if err != nil {
+			if !isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
+				return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
+			}
+		}
+		occurredAfter := !createdAt.IsZero() && createdAt.After(activityAfter)
+		if !occurredAfter && isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
+			occurredAfter = true
+		}
+		if !occurredAfter {
+			continue
+		}
+		actor := timelineActorLogin(event)
+		if actor != "" && actor == labeledBy {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func decodeTimelineItems(stdout []byte) ([]timelineItem, error) {
+	decoder := json.NewDecoder(strings.NewReader(string(stdout)))
+	events := make([]timelineItem, 0)
+	for {
+		var page []timelineItem
+		if err := decoder.Decode(&page); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		events = append(events, page...)
+	}
+	return events, nil
+}
+
+func timelineEventTime(event timelineItem) (time.Time, error) {
+	value := event.CreatedAt
+	switch event.Event {
+	case "committed":
+		if strings.TrimSpace(value) == "" {
+			if strings.TrimSpace(event.CommittedAt) != "" {
+				value = event.CommittedAt
+			} else if event.Committer != nil && strings.TrimSpace(event.Committer.Date) != "" {
+				value = event.Committer.Date
+			} else if event.Author != nil && strings.TrimSpace(event.Author.Date) != "" {
+				value = event.Author.Date
+			}
+		}
+	case "reviewed":
+		if strings.TrimSpace(event.SubmittedAt) != "" {
+			value = event.SubmittedAt
+		}
+	}
+	return time.Parse(time.RFC3339, value)
+}
+
+const timelineOrderBoundaryTolerance = 5 * time.Minute
+
+func isCommitAfterLabelByTimelineOrder(events []timelineItem, event timelineItem, eventIndex int, labeledIndex int, since time.Time, labeledAt time.Time, labeledBy string, updatedAt time.Time) bool {
+	if event.Event != "committed" || labeledIndex < 0 || eventIndex <= labeledIndex {
+		return false
+	}
+	if since.IsZero() || !since.UTC().After(labeledAt.UTC()) {
+		return true
+	}
+	if hasTimelineOrderBoundaryBeforeCommit(events, eventIndex, labeledIndex, since, labeledBy) {
+		return true
+	}
+	return updatedAt.UTC().After(since.UTC()) && !hasDatedTimelineEventAfter(events, labeledIndex, since)
+}
+
+func hasDatedTimelineEventAfter(events []timelineItem, labeledIndex int, since time.Time) bool {
+	sinceStart := since.UTC().Add(-timelineOrderBoundaryTolerance)
+	for i := labeledIndex + 1; i < len(events); i++ {
+		occurredAt, err := timelineEventTime(events[i])
+		if err != nil {
+			continue
+		}
+		if !occurredAt.UTC().Before(sinceStart) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTimelineOrderBoundaryBeforeCommit(events []timelineItem, eventIndex int, labeledIndex int, since time.Time, labeledBy string) bool {
+	if labeledBy == "" {
+		return false
+	}
+	sinceStart := since.UTC().Add(-timelineOrderBoundaryTolerance)
+	for i := labeledIndex + 1; i < eventIndex && i < len(events); i++ {
+		event := events[i]
+		if event.Event == "committed" || timelineActorLogin(event) != labeledBy {
+			continue
+		}
+		occurredAt, err := timelineEventTime(event)
+		if err != nil {
+			continue
+		}
+		if !occurredAt.UTC().Before(sinceStart) {
+			return true
+		}
+	}
+	return false
+}
+
+func loginOf(actor *ghLogin) string {
+	if actor == nil {
+		return ""
+	}
+	return strings.TrimSpace(actor.Login)
+}
+
+func timelineActorLogin(event timelineItem) string {
+	if login := loginOf(event.Actor); login != "" {
+		return login
+	}
+	return loginOf(event.User)
+}
+
+func isPostLabelActivityEvent(event string) bool {
+	switch event {
+	case "commented", "committed", "reviewed":
+		return true
+	default:
+		return false
+	}
 }
 
 func repoFromEntry(entry listItem) string {
