@@ -839,7 +839,10 @@ func hasActivityAfterLabel(ctx context.Context, checker labelActivityChecker, ca
 }
 
 func shouldCheckPostLabelActivity(cached *db.Item, item ghclient.Item) bool {
-	if cached == nil || !cached.GHTriaged || cached.LastEventAt == nil || item.UpdatedAt.IsZero() {
+	if cached == nil {
+		return false
+	}
+	if !cached.GHTriaged || cached.LastEventAt == nil || item.UpdatedAt.IsZero() {
 		return true
 	}
 	if cached.LastSelfActivityAt != nil && !item.UpdatedAt.UTC().After(cached.LastSelfActivityAt.UTC()) {

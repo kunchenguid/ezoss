@@ -1186,6 +1186,64 @@ func TestPollOnceSkipsPostLabelActivityCheckWhenCachedUpdatedAtMatches(t *testin
 	}
 }
 
+func TestPollOnceDoesNotRetriageColdCachedTriagedItem(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	updatedAt := time.Date(2026, time.May, 3, 19, 14, 15, 0, time.UTC)
+	client := &stubTriageClient{
+		itemsByRepo: map[string][]ghclient.Item{"acme/widgets": nil},
+		triagedItemsByRepo: map[string][]ghclient.Item{
+			"acme/widgets": {
+				{
+					Repo:      "acme/widgets",
+					Kind:      sharedtypes.ItemKindPR,
+					Number:    42,
+					Title:     "feat: improve bridge startup",
+					Author:    "alice",
+					State:     sharedtypes.ItemStateOpen,
+					Labels:    []string{triagedLabel},
+					URL:       "https://github.com/acme/widgets/pull/42",
+					UpdatedAt: updatedAt,
+				},
+			},
+		},
+		activityAfterLabelByKey: map[string]bool{
+			"acme/widgets#42": true,
+		},
+	}
+	runner := &stubRecommendationRunner{result: &TriageResult{
+		Agent: sharedtypes.AgentClaude,
+		Model: "sonnet",
+		Recommendation: &triage.Recommendation{Options: []triage.RecommendationOption{{
+			StateChange: sharedtypes.StateChangeNone,
+			Rationale:   "This cold cached item should stay triaged.",
+			Confidence:  sharedtypes.ConfidenceHigh,
+		}}},
+	}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client, Triage: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	if len(client.activityAfterLabelCalls) != 0 {
+		t.Fatalf("post-label activity calls = %#v, want none for uncached triaged item", client.activityAfterLabelCalls)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("triage runner calls = %d, want 0 for uncached triaged item", len(runner.calls))
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || !item.GHTriaged {
+		t.Fatalf("GHTriaged after cold triaged refresh = %#v, want true", item)
+	}
+}
+
 func TestPollOnceRetriagesTriagedItemAfterActivityFollowingTriagedLabel(t *testing.T) {
 	t.Parallel()
 
