@@ -828,6 +828,9 @@ func shouldCheckPostLabelActivity(cached *db.Item, item ghclient.Item) bool {
 	if cached == nil || !cached.GHTriaged || cached.LastEventAt == nil || item.UpdatedAt.IsZero() {
 		return true
 	}
+	if cached.LastSelfActivityAt != nil && !item.UpdatedAt.UTC().After(cached.LastSelfActivityAt.UTC()) {
+		return false
+	}
 	return !cached.LastEventAt.UTC().Equal(item.UpdatedAt.UTC())
 }
 
@@ -888,6 +891,7 @@ func refreshTriagedItems(ctx context.Context, poller Poller, repoID string, poll
 		if cached != nil {
 			itemRecord.WaitingOn = cached.WaitingOn
 			itemRecord.StaleSince = cached.StaleSince
+			itemRecord.LastSelfActivityAt = cached.LastSelfActivityAt
 		}
 
 		if itemRecord.WaitingOn == sharedtypes.WaitingOnContributor && poller.StaleThreshold > 0 {
