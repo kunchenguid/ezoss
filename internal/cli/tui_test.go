@@ -3797,6 +3797,104 @@ func TestApproveInboxEntriesQueuesFixRequiredRecommendationWithComment(t *testin
 	}
 }
 
+func TestApproveInboxEntriesQueuesFixRequiredRecommendationThroughDaemonWhenAvailable(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewApprovalExecutor := newApprovalExecutor
+	originalDialDaemonIPC := dialDaemonIPC
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newApprovalExecutor = originalNewApprovalExecutor
+		dialDaemonIPC = originalDialDaemonIPC
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	executor := &stubApprovalExecutor{}
+	newApprovalExecutor = func() approvalExecutor {
+		return executor
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue,
+		Number: 42, Title: "panic in parser", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#42",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			DraftComment: "I can reproduce this and will put up a fix.",
+			StateChange:  sharedtypes.StateChangeFixRequired,
+			FixPrompt:    "Fix https://github.com/acme/widgets/issues/42 by adding a regression test.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	var gotMethod string
+	var gotParams ipc.FixStartParams
+	dialDaemonIPC = func(socketPath string) (daemonIPCClient, error) {
+		if socketPath != paths.WithRoot(tempRoot).IPCPath() {
+			t.Fatalf("socket path = %q, want %q", socketPath, paths.WithRoot(tempRoot).IPCPath())
+		}
+		return stubDaemonIPCClient{call: func(method string, params interface{}, result interface{}) error {
+			gotMethod = method
+			var ok bool
+			gotParams, ok = params.(ipc.FixStartParams)
+			if !ok {
+				t.Fatalf("params = %T, want ipc.FixStartParams", params)
+			}
+			if fixResult, ok := result.(*ipc.FixStartResult); ok {
+				*fixResult = ipc.FixStartResult{JobID: "job-1", ItemID: "acme/widgets#42", Status: string(db.FixJobStatusQueued)}
+			}
+			return nil
+		}}, nil
+	}
+
+	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: rec.ID,
+		OptionID:         rec.Options[0].ID,
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		DraftComment:     "I can reproduce this and will put up a fix.",
+		StateChange:      sharedtypes.StateChangeFixRequired,
+		FixPrompt:        "Fix https://github.com/acme/widgets/issues/42 by adding a regression test.",
+	}}); err != nil {
+		t.Fatalf("approveInboxEntries() error = %v", err)
+	}
+
+	if gotMethod != ipc.MethodFixStart {
+		t.Fatalf("daemon method = %q, want %q", gotMethod, ipc.MethodFixStart)
+	}
+	if gotParams.RecommendationID != rec.ID || gotParams.OptionID != rec.Options[0].ID {
+		t.Fatalf("fix.start params = %#v, want recommendation %q option %q", gotParams, rec.ID, rec.Options[0].ID)
+	}
+	jobs, err := database.ListFixJobs()
+	if err != nil {
+		t.Fatalf("ListFixJobs() error = %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("local fix jobs = %#v, want daemon to own job creation", jobs)
+	}
+}
+
 func TestApproveInboxEntriesExecutesNoneRecommendationAndMarksTriaged(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths

@@ -1648,6 +1648,19 @@ func queueApprovedFixJob(ctx context.Context, database *db.DB, cfg *config.Globa
 	if err != nil {
 		return err
 	}
+	p, err := newPaths()
+	if err != nil {
+		return fmt.Errorf("resolve paths: %w", err)
+	}
+	client, err := dialDaemonIPC(p.IPCPath())
+	if err == nil {
+		defer client.Close()
+		var result ipc.FixStartResult
+		if err := client.Call(ipc.MethodFixStart, ipc.FixStartParams{RecommendationID: entry.RecommendationID, OptionID: optionID}, &result); err != nil {
+			return fmt.Errorf("queue fix for %s#%d: %w", entry.RepoID, entry.Number, err)
+		}
+		return nil
+	}
 	_, err = createFixJobFromIPC(ctx, database, cfg, ipc.FixStartParams{RecommendationID: entry.RecommendationID, OptionID: optionID})
 	if err != nil {
 		return fmt.Errorf("queue fix for %s#%d: %w", entry.RepoID, entry.Number, err)
