@@ -1295,6 +1295,26 @@ func TestHasActivityAfterLabelSinceDoesNotUseCommitTimelineOrderWithoutSelfBound
 	}
 }
 
+func TestHasActivityAfterLabelSinceUpdatedUsesCommitTimelineOrderWithoutSelfBoundary(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"committed","committer":{"date":"2026-05-03T19:01:03Z"},"author":{"date":"2026-05-03T19:00:03Z"},"actor":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, time.May, 3, 19, 22, 3, 0, time.UTC)
+	updatedAt := since.Add(4 * time.Minute)
+	got, err := client.HasActivityAfterLabelSinceUpdated(context.Background(), "acme/widgets", 47, "ezoss/triaged", since, updatedAt)
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabelSinceUpdated returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabelSinceUpdated = false, want true")
+	}
+}
+
 func TestHasActivityAfterLabelDecodesConcatenatedPaginatedTimeline(t *testing.T) {
 	t.Parallel()
 

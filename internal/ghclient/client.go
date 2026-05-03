@@ -536,10 +536,18 @@ func (c *Client) SearchAuthoredOpenIssues(ctx context.Context) ([]Item, error) {
 }
 
 func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number int, label string) (bool, error) {
-	return c.HasActivityAfterLabelSince(ctx, repo, number, label, time.Time{})
+	return c.hasActivityAfterLabelSince(ctx, repo, number, label, time.Time{}, time.Time{})
 }
 
 func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, number int, label string, since time.Time) (bool, error) {
+	return c.hasActivityAfterLabelSince(ctx, repo, number, label, since, time.Time{})
+}
+
+func (c *Client) HasActivityAfterLabelSinceUpdated(ctx context.Context, repo string, number int, label string, since time.Time, updatedAt time.Time) (bool, error) {
+	return c.hasActivityAfterLabelSince(ctx, repo, number, label, since, updatedAt)
+}
+
+func (c *Client) hasActivityAfterLabelSince(ctx context.Context, repo string, number int, label string, since time.Time, updatedAt time.Time) (bool, error) {
 	stdout, err := c.runner.Run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline", "--paginate")
 	if err != nil {
 		return false, fmt.Errorf("gh api repos/%s/issues/%d/timeline: %w", repo, number, classifyError(err))
@@ -580,12 +588,12 @@ func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		}
 		createdAt, err := timelineEventTime(event)
 		if err != nil {
-			if !isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy) {
+			if !isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
 				return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
 			}
 		}
 		occurredAfter := !createdAt.IsZero() && createdAt.After(activityAfter)
-		if !occurredAfter && isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy) {
+		if !occurredAfter && isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
 			occurredAfter = true
 		}
 		if !occurredAfter {
@@ -639,14 +647,31 @@ func timelineEventTime(event timelineItem) (time.Time, error) {
 
 const timelineOrderBoundaryTolerance = 5 * time.Minute
 
-func isCommitAfterLabelByTimelineOrder(events []timelineItem, event timelineItem, eventIndex int, labeledIndex int, since time.Time, labeledAt time.Time, labeledBy string) bool {
+func isCommitAfterLabelByTimelineOrder(events []timelineItem, event timelineItem, eventIndex int, labeledIndex int, since time.Time, labeledAt time.Time, labeledBy string, updatedAt time.Time) bool {
 	if event.Event != "committed" || labeledIndex < 0 || eventIndex <= labeledIndex {
 		return false
 	}
 	if since.IsZero() || !since.UTC().After(labeledAt.UTC()) {
 		return true
 	}
-	return hasTimelineOrderBoundaryBeforeCommit(events, eventIndex, labeledIndex, since, labeledBy)
+	if hasTimelineOrderBoundaryBeforeCommit(events, eventIndex, labeledIndex, since, labeledBy) {
+		return true
+	}
+	return updatedAt.UTC().After(since.UTC()) && !hasDatedTimelineEventAfter(events, labeledIndex, since)
+}
+
+func hasDatedTimelineEventAfter(events []timelineItem, labeledIndex int, since time.Time) bool {
+	sinceStart := since.UTC().Add(-timelineOrderBoundaryTolerance)
+	for i := labeledIndex + 1; i < len(events); i++ {
+		occurredAt, err := timelineEventTime(events[i])
+		if err != nil {
+			continue
+		}
+		if !occurredAt.UTC().Before(sinceStart) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasTimelineOrderBoundaryBeforeCommit(events []timelineItem, eventIndex int, labeledIndex int, since time.Time, labeledBy string) bool {
