@@ -1806,6 +1806,15 @@ func TestModelActionSummaryDescribesProposedActions(t *testing.T) {
 			Title:       "Question already answered",
 			StateChange: sharedtypes.StateChangeNone,
 		},
+		{
+			RepoID:       "acme/widgets",
+			Number:       9,
+			Kind:         sharedtypes.ItemKindIssue,
+			Title:        "panic in parser",
+			StateChange:  sharedtypes.StateChangeFixRequired,
+			DraftComment: "I can reproduce this and will put up a fix.",
+			FixPrompt:    "Fix the parser panic.",
+		},
 	})
 	m.width = 100
 
@@ -1821,6 +1830,13 @@ func TestModelActionSummaryDescribesProposedActions(t *testing.T) {
 	view = stripANSI(m.View())
 	if !strings.Contains(view, "Will: mark triaged") {
 		t.Fatalf("View() missing 'Will: mark triaged' for empty proposal:\n%s", view)
+	}
+
+	// Move to third entry which posts context and queues a fix.
+	m.cursor = 2
+	view = stripANSI(m.View())
+	if !strings.Contains(view, "Will: comment + fix") {
+		t.Fatalf("View() missing 'Will: comment + fix' for fix-required proposal:\n%s", view)
 	}
 }
 

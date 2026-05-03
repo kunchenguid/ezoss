@@ -2426,6 +2426,10 @@ func actionVerbs(entry Entry) []string {
 		verbs = append(verbs, "merge")
 	case sharedtypes.StateChangeRequestChanges:
 		verbs = append(verbs, "request changes")
+	case sharedtypes.StateChangeFixRequired:
+		if strings.TrimSpace(entry.FixPrompt) != "" {
+			verbs = append(verbs, "fix")
+		}
 	}
 	return verbs
 }
