@@ -1125,6 +1125,26 @@ func TestHasActivityAfterLabelDetectsDifferentActorActivity(t *testing.T) {
 	}
 }
 
+func TestHasActivityAfterLabelSinceIgnoresEarlierActivity(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"commented","created_at":"2026-05-03T19:14:03Z","actor":{"login":"alice"}},
+		{"event":"commented","created_at":"2026-05-03T19:22:03Z","actor":{"login":"kunchenguid"}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, time.May, 3, 19, 20, 0, 0, time.UTC)
+	got, err := client.HasActivityAfterLabelSince(context.Background(), "acme/widgets", 47, "ezoss/triaged", since)
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabelSince returned error: %v", err)
+	}
+	if got {
+		t.Fatal("HasActivityAfterLabelSince = true, want false")
+	}
+}
+
 func TestHasActivityAfterLabelUsesEventSpecificTimestamps(t *testing.T) {
 	t.Parallel()
 

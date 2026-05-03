@@ -535,6 +535,10 @@ func (c *Client) SearchAuthoredOpenIssues(ctx context.Context) ([]Item, error) {
 }
 
 func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number int, label string) (bool, error) {
+	return c.HasActivityAfterLabelSince(ctx, repo, number, label, time.Time{})
+}
+
+func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, number int, label string, since time.Time) (bool, error) {
 	stdout, err := c.runner.Run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline", "--paginate")
 	if err != nil {
 		return false, fmt.Errorf("gh api repos/%s/issues/%d/timeline: %w", repo, number, classifyError(err))
@@ -563,6 +567,10 @@ func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number 
 		return false, nil
 	}
 
+	activityAfter := labeledAt
+	if since.UTC().After(activityAfter) {
+		activityAfter = since.UTC()
+	}
 	for _, event := range events {
 		if !isPostLabelActivityEvent(event.Event) {
 			continue
@@ -571,7 +579,7 @@ func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number 
 		if err != nil {
 			return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
 		}
-		if !createdAt.After(labeledAt) {
+		if !createdAt.After(activityAfter) {
 			continue
 		}
 		actor := loginOf(event.Actor)

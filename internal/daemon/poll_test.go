@@ -1339,6 +1339,89 @@ func TestPollOnceDoesNotRetriageAfterApprovedSelfActivityWhileLabelRemains(t *te
 	}
 }
 
+func TestPollOnceDoesNotRetriageOldContributorActivityAfterLaterSelfUpdate(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	triagedAt := time.Date(2026, time.May, 3, 19, 7, 15, 0, time.UTC)
+	activityAt := triagedAt.Add(7 * time.Minute)
+	approvedAt := activityAt.Add(15 * time.Minute)
+	botUpdateAt := approvedAt.Add(9 * time.Minute)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:                 "acme/widgets#42",
+		RepoID:             "acme/widgets",
+		Kind:               sharedtypes.ItemKindPR,
+		Number:             42,
+		Title:              "feat: improve bridge startup",
+		Author:             "alice",
+		State:              sharedtypes.ItemStateOpen,
+		GHTriaged:          true,
+		WaitingOn:          sharedtypes.WaitingOnMaintainer,
+		LastEventAt:        &activityAt,
+		LastSelfActivityAt: &approvedAt,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{
+		itemsByRepo: map[string][]ghclient.Item{"acme/widgets": nil},
+		triagedItemsByRepo: map[string][]ghclient.Item{
+			"acme/widgets": {
+				{
+					Repo:      "acme/widgets",
+					Kind:      sharedtypes.ItemKindPR,
+					Number:    42,
+					Title:     "feat: improve bridge startup",
+					Author:    "alice",
+					State:     sharedtypes.ItemStateOpen,
+					Labels:    []string{triagedLabel},
+					URL:       "https://github.com/acme/widgets/pull/42",
+					UpdatedAt: botUpdateAt,
+				},
+			},
+		},
+		activityAfterLabelByKey: map[string]bool{
+			"acme/widgets#42": true,
+		},
+		activityAfterLabelSinceByKey: map[string]bool{
+			"acme/widgets#42": false,
+		},
+	}
+	runner := &stubRecommendationRunner{result: &TriageResult{
+		Agent: sharedtypes.AgentClaude,
+		Model: "sonnet",
+		Recommendation: &triage.Recommendation{Options: []triage.RecommendationOption{{
+			StateChange: sharedtypes.StateChangeNone,
+			Rationale:   "This should not be requeued after approval.",
+			Confidence:  sharedtypes.ConfidenceHigh,
+		}}},
+	}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client, Triage: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	if len(client.activityAfterLabelSinceCalls) != 1 {
+		t.Fatalf("bounded post-label activity calls = %#v, want one", client.activityAfterLabelSinceCalls)
+	}
+	if got := client.activityAfterLabelSinceCalls[0].since; !got.Equal(approvedAt) {
+		t.Fatalf("post-label activity since = %v, want %v", got, approvedAt)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("triage runner calls = %d, want 0 for old activity before self update", len(runner.calls))
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || !item.GHTriaged {
+		t.Fatalf("GHTriaged after old activity = %#v, want true", item)
+	}
+}
+
 func TestPollOnceKeepsRetriagedRecommendationWhenTriagedLabelRemains(t *testing.T) {
 	t.Parallel()
 
@@ -2071,16 +2154,18 @@ func TestPollOnceLogsStaleAutoRecommendation(t *testing.T) {
 }
 
 type stubTriageClient struct {
-	itemsByRepo             map[string][]ghclient.Item
-	triagedItemsByRepo      map[string][]ghclient.Item
-	itemByKey               map[string]ghclient.Item
-	errByRepo               map[string]error
-	triagedErrByRepo        map[string]error
-	calls                   []string
-	triagedCalls            []string
-	triagedSinceByCall      []time.Time
-	activityAfterLabelByKey map[string]bool
-	activityAfterLabelCalls []string
+	itemsByRepo                  map[string][]ghclient.Item
+	triagedItemsByRepo           map[string][]ghclient.Item
+	itemByKey                    map[string]ghclient.Item
+	errByRepo                    map[string]error
+	triagedErrByRepo             map[string]error
+	calls                        []string
+	triagedCalls                 []string
+	triagedSinceByCall           []time.Time
+	activityAfterLabelByKey      map[string]bool
+	activityAfterLabelCalls      []string
+	activityAfterLabelSinceByKey map[string]bool
+	activityAfterLabelSinceCalls []activityAfterLabelSinceCall
 
 	authoredPRs    []ghclient.Item
 	authoredIssues []ghclient.Item
@@ -2111,6 +2196,11 @@ func (s *stubTriageClient) SearchAuthoredOpenIssues(_ context.Context) ([]ghclie
 		return nil, s.authoredErr
 	}
 	return append([]ghclient.Item(nil), s.authoredIssues...), nil
+}
+
+type activityAfterLabelSinceCall struct {
+	key   string
+	since time.Time
 }
 
 type stubRecommendationRunner struct {
@@ -2159,6 +2249,12 @@ func (s *stubTriageClient) HasActivityAfterLabel(_ context.Context, repo string,
 	key := itemID(repo, number)
 	s.activityAfterLabelCalls = append(s.activityAfterLabelCalls, key)
 	return s.activityAfterLabelByKey[key], nil
+}
+
+func (s *stubTriageClient) HasActivityAfterLabelSince(_ context.Context, repo string, number int, _ string, since time.Time) (bool, error) {
+	key := itemID(repo, number)
+	s.activityAfterLabelSinceCalls = append(s.activityAfterLabelSinceCalls, activityAfterLabelSinceCall{key: key, since: since})
+	return s.activityAfterLabelSinceByKey[key], nil
 }
 
 func (s *stubTriageClient) GetItem(_ context.Context, repo string, _ sharedtypes.ItemKind, number int) (ghclient.Item, error) {

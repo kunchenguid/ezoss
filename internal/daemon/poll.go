@@ -53,6 +53,10 @@ type labelActivityChecker interface {
 	HasActivityAfterLabel(ctx context.Context, repo string, number int, label string) (bool, error)
 }
 
+type labelActivitySinceChecker interface {
+	HasActivityAfterLabelSince(ctx context.Context, repo string, number int, label string, since time.Time) (bool, error)
+}
+
 type triageRunner interface {
 	Triage(ctx context.Context, req TriageRequest) (*TriageResult, error)
 }
@@ -310,22 +314,23 @@ func reconcileMissingActiveRecommendations(ctx context.Context, poller Poller, r
 			return fmt.Errorf("check post-triage activity for item %d: %w", cached.Number, err)
 		}
 		itemRecord := db.Item{
-			ID:           cached.ID,
-			RepoID:       repoID,
-			Kind:         current.Kind,
-			Role:         cached.Role,
-			Number:       current.Number,
-			Title:        current.Title,
-			Author:       current.Author,
-			State:        current.State,
-			IsDraft:      current.IsDraft,
-			GHTriaged:    ghTriaged,
-			WaitingOn:    cached.WaitingOn,
-			LastEventAt:  timePtr(current.UpdatedAt.UTC()),
-			StaleSince:   cached.StaleSince,
-			HeadRepo:     cached.HeadRepo,
-			HeadRef:      cached.HeadRef,
-			HeadCloneURL: cached.HeadCloneURL,
+			ID:                 cached.ID,
+			RepoID:             repoID,
+			Kind:               current.Kind,
+			Role:               cached.Role,
+			Number:             current.Number,
+			Title:              current.Title,
+			Author:             current.Author,
+			State:              current.State,
+			IsDraft:            current.IsDraft,
+			GHTriaged:          ghTriaged,
+			WaitingOn:          cached.WaitingOn,
+			LastEventAt:        timePtr(current.UpdatedAt.UTC()),
+			LastSelfActivityAt: cached.LastSelfActivityAt,
+			StaleSince:         cached.StaleSince,
+			HeadRepo:           cached.HeadRepo,
+			HeadRef:            cached.HeadRef,
+			HeadCloneURL:       cached.HeadCloneURL,
 		}
 		if current.State != sharedtypes.ItemStateOpen {
 			itemRecord.StaleSince = nil
@@ -814,7 +819,7 @@ func reconciledGHTriaged(ctx context.Context, checker labelActivityChecker, cach
 	if checker == nil {
 		return ghTriaged, nil
 	}
-	hasActivity, err := checker.HasActivityAfterLabel(ctx, cached.RepoID, cached.Number, triagedLabel)
+	hasActivity, err := hasActivityAfterLabel(ctx, checker, cached, cached.RepoID, cached.Number)
 	if err != nil {
 		return false, err
 	}
@@ -822,6 +827,15 @@ func reconciledGHTriaged(ctx context.Context, checker labelActivityChecker, cach
 		return false, nil
 	}
 	return ghTriaged, nil
+}
+
+func hasActivityAfterLabel(ctx context.Context, checker labelActivityChecker, cached *db.Item, repoID string, number int) (bool, error) {
+	if cached != nil && cached.LastSelfActivityAt != nil {
+		if sinceChecker, ok := checker.(labelActivitySinceChecker); ok {
+			return sinceChecker.HasActivityAfterLabelSince(ctx, repoID, number, triagedLabel, cached.LastSelfActivityAt.UTC())
+		}
+	}
+	return checker.HasActivityAfterLabel(ctx, repoID, number, triagedLabel)
 }
 
 func shouldCheckPostLabelActivity(cached *db.Item, item ghclient.Item) bool {
@@ -866,7 +880,7 @@ func refreshTriagedItems(ctx context.Context, poller Poller, repoID string, poll
 
 		ghTriaged := hasLabel(item.Labels, triagedLabel)
 		if ghTriaged && item.State == sharedtypes.ItemStateOpen && activityChecker != nil && shouldCheckPostLabelActivity(cached, item) {
-			hasActivity, err := activityChecker.HasActivityAfterLabel(ctx, repoID, item.Number, triagedLabel)
+			hasActivity, err := hasActivityAfterLabel(ctx, activityChecker, cached, repoID, item.Number)
 			if err != nil {
 				return fmt.Errorf("check post-triage activity for item %d: %w", item.Number, err)
 			}
