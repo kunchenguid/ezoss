@@ -103,6 +103,17 @@ type ghLabel struct {
 	Name string `json:"name"`
 }
 
+type timelineItem struct {
+	Event     string         `json:"event"`
+	CreatedAt string         `json:"created_at"`
+	Actor     *ghLogin       `json:"actor"`
+	Label     *timelineLabel `json:"label"`
+}
+
+type timelineLabel struct {
+	Name string `json:"name"`
+}
+
 func New(runner Runner) *Client {
 	if runner == nil {
 		runner = commandRunner{}
@@ -513,6 +524,71 @@ func (c *Client) SearchAuthoredOpenIssues(ctx context.Context) ([]Item, error) {
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number int, label string) (bool, error) {
+	stdout, err := c.runner.Run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline", "--paginate")
+	if err != nil {
+		return false, fmt.Errorf("gh api repos/%s/issues/%d/timeline: %w", repo, number, classifyError(err))
+	}
+	var events []timelineItem
+	if err := json.Unmarshal(stdout, &events); err != nil {
+		return false, fmt.Errorf("decode issue timeline %s#%d: %w", repo, number, err)
+	}
+
+	var labeledAt time.Time
+	var labeledBy string
+	for _, event := range events {
+		if event.Event != "labeled" || event.Label == nil || event.Label.Name != label {
+			continue
+		}
+		createdAt, err := time.Parse(time.RFC3339, event.CreatedAt)
+		if err != nil {
+			return false, fmt.Errorf("parse labeled event time %s#%d: %w", repo, number, err)
+		}
+		if createdAt.After(labeledAt) {
+			labeledAt = createdAt
+			labeledBy = loginOf(event.Actor)
+		}
+	}
+	if labeledAt.IsZero() {
+		return false, nil
+	}
+
+	for _, event := range events {
+		if !isPostLabelActivityEvent(event.Event) {
+			continue
+		}
+		createdAt, err := time.Parse(time.RFC3339, event.CreatedAt)
+		if err != nil {
+			return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
+		}
+		if !createdAt.After(labeledAt) {
+			continue
+		}
+		actor := loginOf(event.Actor)
+		if actor != "" && actor == labeledBy {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func loginOf(actor *ghLogin) string {
+	if actor == nil {
+		return ""
+	}
+	return strings.TrimSpace(actor.Login)
+}
+
+func isPostLabelActivityEvent(event string) bool {
+	switch event {
+	case "commented", "committed", "reviewed":
+		return true
+	default:
+		return false
+	}
 }
 
 func repoFromEntry(entry listItem) string {

@@ -49,6 +49,10 @@ type itemGetter interface {
 	GetItem(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int) (ghclient.Item, error)
 }
 
+type labelActivityChecker interface {
+	HasActivityAfterLabel(ctx context.Context, repo string, number int, label string) (bool, error)
+}
+
 type triageRunner interface {
 	Triage(ctx context.Context, req TriageRequest) (*TriageResult, error)
 }
@@ -816,11 +820,23 @@ func refreshTriagedItems(ctx context.Context, poller Poller, repoID string, poll
 	if err != nil {
 		return fmt.Errorf("list triaged: %w", err)
 	}
+	activityChecker, _ := poller.GitHub.(labelActivityChecker)
 
 	for _, item := range items {
 		cached, err := poller.DB.GetItem(itemID(repoID, item.Number))
 		if err != nil {
 			return fmt.Errorf("get item %d: %w", item.Number, err)
+		}
+
+		ghTriaged := hasLabel(item.Labels, triagedLabel)
+		if ghTriaged && item.State == sharedtypes.ItemStateOpen && activityChecker != nil {
+			hasActivity, err := activityChecker.HasActivityAfterLabel(ctx, repoID, item.Number, triagedLabel)
+			if err != nil {
+				return fmt.Errorf("check post-triage activity for item %d: %w", item.Number, err)
+			}
+			if hasActivity {
+				ghTriaged = false
+			}
 		}
 
 		itemRecord := db.Item{
@@ -832,7 +848,7 @@ func refreshTriagedItems(ctx context.Context, poller Poller, repoID string, poll
 			Author:      item.Author,
 			State:       item.State,
 			IsDraft:     item.IsDraft,
-			GHTriaged:   hasLabel(item.Labels, triagedLabel),
+			GHTriaged:   ghTriaged,
 			WaitingOn:   sharedtypes.WaitingOnNone,
 			LastEventAt: timePtr(item.UpdatedAt.UTC()),
 		}

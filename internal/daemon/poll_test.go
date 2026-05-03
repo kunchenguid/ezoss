@@ -1110,6 +1110,82 @@ func TestPollOnceRefreshesTriagedContributorItemBeforeStaleCheck(t *testing.T) {
 	}
 }
 
+func TestPollOnceRetriagesTriagedItemAfterActivityFollowingTriagedLabel(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	triagedAt := time.Date(2026, time.May, 3, 19, 7, 15, 0, time.UTC)
+	activityAt := triagedAt.Add(7 * time.Minute)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:          "acme/widgets#42",
+		RepoID:      "acme/widgets",
+		Kind:        sharedtypes.ItemKindPR,
+		Number:      42,
+		Title:       "feat: improve bridge startup",
+		Author:      "alice",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   true,
+		WaitingOn:   sharedtypes.WaitingOnMaintainer,
+		LastEventAt: &triagedAt,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	client := &stubTriageClient{
+		itemsByRepo: map[string][]ghclient.Item{"acme/widgets": nil},
+		triagedItemsByRepo: map[string][]ghclient.Item{
+			"acme/widgets": {
+				{
+					Repo:      "acme/widgets",
+					Kind:      sharedtypes.ItemKindPR,
+					Number:    42,
+					Title:     "feat: improve bridge startup",
+					Author:    "alice",
+					State:     sharedtypes.ItemStateOpen,
+					Labels:    []string{triagedLabel},
+					URL:       "https://github.com/acme/widgets/pull/42",
+					UpdatedAt: activityAt,
+				},
+			},
+		},
+		activityAfterLabelByKey: map[string]bool{
+			"acme/widgets#42": true,
+		},
+	}
+	runner := &stubRecommendationRunner{result: &TriageResult{
+		Agent: sharedtypes.AgentClaude,
+		Model: "sonnet",
+		Recommendation: &triage.Recommendation{Options: []triage.RecommendationOption{{
+			StateChange:  sharedtypes.StateChangeNone,
+			Rationale:    "Contributor updated the PR after triage.",
+			DraftComment: "Thanks, I will take another look.",
+			Confidence:   sharedtypes.ConfidenceHigh,
+			WaitingOn:    sharedtypes.WaitingOnMaintainer,
+		}}},
+	}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client, Triage: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("triage runner calls = %d, want 1", len(runner.calls))
+	}
+	if runner.calls[0].Item.Number != 42 {
+		t.Fatalf("triaged item number = %d, want 42", runner.calls[0].Item.Number)
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || item.GHTriaged {
+		t.Fatalf("GHTriaged after post-label activity = %#v, want false", item)
+	}
+}
+
 func TestPollOnceSupersedesStaleRecommendationAfterFreshContributorActivity(t *testing.T) {
 	t.Parallel()
 
@@ -1665,14 +1741,16 @@ func TestPollOnceLogsStaleAutoRecommendation(t *testing.T) {
 }
 
 type stubTriageClient struct {
-	itemsByRepo        map[string][]ghclient.Item
-	triagedItemsByRepo map[string][]ghclient.Item
-	itemByKey          map[string]ghclient.Item
-	errByRepo          map[string]error
-	triagedErrByRepo   map[string]error
-	calls              []string
-	triagedCalls       []string
-	triagedSinceByCall []time.Time
+	itemsByRepo             map[string][]ghclient.Item
+	triagedItemsByRepo      map[string][]ghclient.Item
+	itemByKey               map[string]ghclient.Item
+	errByRepo               map[string]error
+	triagedErrByRepo        map[string]error
+	calls                   []string
+	triagedCalls            []string
+	triagedSinceByCall      []time.Time
+	activityAfterLabelByKey map[string]bool
+	activityAfterLabelCalls []string
 
 	authoredPRs    []ghclient.Item
 	authoredIssues []ghclient.Item
@@ -1745,6 +1823,12 @@ func (s *stubTriageClient) ListTriaged(_ context.Context, repo string, sinceUpda
 		return nil, err
 	}
 	return append([]ghclient.Item(nil), s.triagedItemsByRepo[repo]...), nil
+}
+
+func (s *stubTriageClient) HasActivityAfterLabel(_ context.Context, repo string, number int, _ string) (bool, error) {
+	key := itemID(repo, number)
+	s.activityAfterLabelCalls = append(s.activityAfterLabelCalls, key)
+	return s.activityAfterLabelByKey[key], nil
 }
 
 func (s *stubTriageClient) GetItem(_ context.Context, repo string, _ sharedtypes.ItemKind, number int) (ghclient.Item, error) {
