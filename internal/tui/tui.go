@@ -1399,7 +1399,7 @@ func (m Model) renderHelp() string {
 		"1-9                jump directly to that recommendation option",
 		"a                  approve active option (post comment, apply state change, sync labels)",
 		"c                  copy active option's coding-agent prompt",
-		"f                  queue a coding-agent fix job for active option",
+		"f                  queue or replace a cancellable coding-agent fix job",
 		"e                  edit active option's draft, action, or labels",
 		"m                  mark triaged without approving",
 		"o                  open the current item's GitHub page in a browser",
