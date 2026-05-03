@@ -428,6 +428,32 @@ func TestClaimNextQueuedFixJobAndUpdateStatus(t *testing.T) {
 	}
 }
 
+func TestClaimQueuedFixJobRejectsSupersededJob(t *testing.T) {
+	database := openTestDB(t)
+	job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if _, err := database.SupersedeFixJobIfCancellable(job.ID); err != nil {
+		t.Fatalf("SupersedeFixJobIfCancellable() error = %v", err)
+	}
+
+	claimed, err := claimQueuedFixJob(database.sql, job.ID, nowUnix())
+	if err != nil {
+		t.Fatalf("claimQueuedFixJob() error = %v", err)
+	}
+	if claimed {
+		t.Fatalf("claimQueuedFixJob() = true, want false for superseded job")
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != FixJobStatusCancelled || got.Phase != FixJobPhaseQueued {
+		t.Fatalf("job = %#v, want still cancelled/queued", got)
+	}
+}
+
 func TestLatestFixJobForItemBreaksCreatedAtTiesByID(t *testing.T) {
 	database := openTestDB(t)
 	first, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})

@@ -171,8 +171,15 @@ func (d *DB) ClaimNextQueuedFixJob() (*FixJob, error) {
 		return nil, fmt.Errorf("claim fix job: select: %w", err)
 	}
 	now := nowUnix()
-	if _, err := tx.Exec(`UPDATE fix_jobs SET status = ?, phase = ?, started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status = ?`, FixJobStatusRunning, FixJobPhasePreparingWorktree, now, now, id, FixJobStatusQueued); err != nil {
+	claimed, err := claimQueuedFixJob(tx, id, now)
+	if err != nil {
 		return nil, fmt.Errorf("claim fix job: update: %w", err)
+	}
+	if !claimed {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("claim fix job: commit: %w", err)
+		}
+		return nil, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("claim fix job: commit: %w", err)
@@ -338,6 +345,26 @@ func (d *DB) CompleteWaitingFixJobWithPR(id, url string) (bool, error) {
 
 type fixJobExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func claimQueuedFixJob(exec fixJobExecer, id string, now int64) (bool, error) {
+	result, err := exec.Exec(
+		`UPDATE fix_jobs SET status = ?, phase = ?, started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status = ?`,
+		FixJobStatusRunning,
+		FixJobPhasePreparingWorktree,
+		now,
+		now,
+		id,
+		FixJobStatusQueued,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return rows > 0, nil
 }
 
 func supersedeFixJobIfCancellable(exec fixJobExecer, id string, now int64) (bool, error) {
