@@ -1765,6 +1765,20 @@ func uniqueStrings(values []string) []string {
 	return unique
 }
 
+func withoutString(values []string, remove string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == remove {
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	return filtered
+}
+
 var managedWaitingOnLabels = []string{
 	"ezoss/awaiting-contributor",
 	"ezoss/awaiting-maintainer",
@@ -1963,6 +1977,10 @@ func setInboxItemTriaged(database *db.DB, entry tui.Entry, triaged bool) error {
 		return nil
 	}
 	item.GHTriaged = triaged
+	if triaged {
+		now := time.Now().UTC()
+		item.LastSelfActivityAt = &now
+	}
 	if err := database.UpsertItem(*item); err != nil {
 		return fmt.Errorf("update item %s: %w", item.ID, err)
 	}
@@ -3427,6 +3445,10 @@ func newManualTriagePoller(ctx context.Context, root string, database *db.DB, re
 	existing, err := database.GetItem(fmt.Sprintf("%s#%d", repoID, number))
 	if err != nil {
 		return daemon.Poller{}, fmt.Errorf("load existing item: %w", err)
+	}
+	if existing != nil && !existing.GHTriaged {
+		item.Labels = withoutString(item.Labels, ezossTriagedLabel)
+		poller.GitHub = singleItemLister{item: item}
 	}
 	poller.PreserveExistingItemRole = existing != nil && existing.Role == sharedtypes.RoleContributor
 	return poller, nil

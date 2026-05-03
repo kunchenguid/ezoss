@@ -755,6 +755,9 @@ func TestDismissInboxEntriesMarksRecommendationDismissedAndTriaged(t *testing.T)
 	if item == nil || !item.GHTriaged {
 		t.Fatalf("item after dismiss = %#v, want gh_triaged=true", item)
 	}
+	if item.LastSelfActivityAt == nil {
+		t.Fatalf("item after dismiss = %#v, want last self activity", item)
+	}
 	if len(editor.entries) != 1 {
 		t.Fatalf("label edits = %d, want 1", len(editor.entries))
 	}
@@ -2149,6 +2152,116 @@ func TestRerunInboxEntriesSupersedesRecommendationAndReturnsRefreshedEntry(t *te
 	}
 	if active[0].ID != entries[0].RecommendationID {
 		t.Fatalf("active recommendation id = %q, want %q", active[0].ID, entries[0].RecommendationID)
+	}
+}
+
+func TestRerunInboxEntriesRetriagesItemWhenTriagedLabelRemains(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewGitHubClient := newGitHubClient
+	originalNewAgent := newAgent
+	originalPrepareInvestigationCheckout := prepareInvestigationCheckout
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newGitHubClient = originalNewGitHubClient
+		newAgent = originalNewAgent
+		prepareInvestigationCheckout = originalPrepareInvestigationCheckout
+	})
+	stubAgentLookPath(t, map[string]string{"codex": "/usr/local/bin/codex"})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	prepareInvestigationCheckout = func(_ context.Context, _ string, _ string) (string, error) {
+		return t.TempDir(), nil
+	}
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{Agent: sharedtypes.AgentCodex}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	newGitHubClient = func() itemFetcher {
+		return stubItemFetcher{item: ghclient.Item{
+			Repo:      "acme/widgets",
+			Kind:      sharedtypes.ItemKindPR,
+			Number:    42,
+			Title:     "feat: improve bridge startup",
+			Author:    "alice",
+			State:     sharedtypes.ItemStateOpen,
+			Labels:    []string{ezossTriagedLabel},
+			URL:       "https://github.com/acme/widgets/pull/42",
+			UpdatedAt: time.Unix(1713511200, 0).UTC(),
+		}}
+	}
+	newAgent = func(name sharedtypes.AgentName, _ string) (triageAgent, error) {
+		if name != sharedtypes.AgentCodex {
+			t.Fatalf("newAgent() name = %q, want %q", name, sharedtypes.AgentCodex)
+		}
+		return stubTriageAgent{result: &agent.Result{
+			Output: mustJSONTUI(t, triage.Recommendation{Options: []triage.RecommendationOption{{
+				StateChange:  sharedtypes.StateChangeNone,
+				Rationale:    "The rerun checked the new PR activity.",
+				WaitingOn:    sharedtypes.WaitingOnMaintainer,
+				DraftComment: "This still needs maintainer review.",
+				Confidence:   sharedtypes.ConfidenceHigh,
+			}}}),
+			Usage: agent.TokenUsage{InputTokens: 10, OutputTokens: 5},
+		}}, nil
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:        "acme/widgets#42",
+		RepoID:    "acme/widgets",
+		Kind:      sharedtypes.ItemKindPR,
+		Number:    42,
+		Title:     "feat: improve bridge startup",
+		State:     sharedtypes.ItemStateOpen,
+		GHTriaged: false,
+		WaitingOn: sharedtypes.WaitingOnMaintainer,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	oldRec, err := database.InsertRecommendation(db.NewRecommendation{ItemID: "acme/widgets#42", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{
+		Rationale:   "Contributor updated the PR after triage.",
+		StateChange: sharedtypes.StateChangeNone,
+		Confidence:  sharedtypes.ConfidenceMedium,
+	}}})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	entries, err := rerunInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: oldRec.ID,
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindPR,
+		Role:             sharedtypes.RoleMaintainer,
+	}}, "check the latest PR activity")
+	if err != nil {
+		t.Fatalf("rerunInboxEntries() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(rerun entries) = %d, want 1", len(entries))
+	}
+	if entries[0].RecommendationID == oldRec.ID {
+		t.Fatalf("rerun RecommendationID = %q, want new recommendation", entries[0].RecommendationID)
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || item.GHTriaged {
+		t.Fatalf("item after rerun = %#v, want locally untriaged", item)
 	}
 }
 
