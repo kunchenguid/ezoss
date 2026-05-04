@@ -1603,7 +1603,13 @@ func approveInboxEntries(ctx context.Context, entries []tui.Entry) error {
 		if err != nil {
 			return err
 		}
+		if err := validateApprovedFixJobRequest(database, entry, item); err != nil {
+			return err
+		}
 		finalLabels, removeLabels := approvalLabelEdits(entry, item, cfg.SyncLabels)
+		if err := queueApprovedFixJob(ctx, database, cfg, entry); err != nil {
+			return err
+		}
 		if err := executeApproval(ctx, executor, entry, finalLabels, removeLabels, cfg.MergeMethod); err != nil {
 			if persistErr := persistFailedApprovalAttempt(database, entry, finalLabels, time.Now(), err); persistErr != nil {
 				return fmt.Errorf("%v (also failed to record approval attempt: %w)", err, persistErr)
@@ -1619,6 +1625,51 @@ func approveInboxEntries(ctx context.Context, entries []tui.Entry) error {
 		}
 	}
 	return nil
+}
+
+func validateApprovedFixJobRequest(database *db.DB, entry tui.Entry, item *db.Item) error {
+	if !shouldQueueFixOnApprove(entry) {
+		return nil
+	}
+	if _, err := resolveOptionID(database, entry); err != nil {
+		return err
+	}
+	if item != nil && item.Role == sharedtypes.RoleContributor && item.Kind != sharedtypes.ItemKindPR {
+		return fmt.Errorf("approve %s#%d: contributor issue fixes are not supported", entry.RepoID, entry.Number)
+	}
+	return nil
+}
+
+func queueApprovedFixJob(ctx context.Context, database *db.DB, cfg *config.GlobalConfig, entry tui.Entry) error {
+	if !shouldQueueFixOnApprove(entry) {
+		return nil
+	}
+	optionID, err := resolveOptionID(database, entry)
+	if err != nil {
+		return err
+	}
+	p, err := newPaths()
+	if err != nil {
+		return fmt.Errorf("resolve paths: %w", err)
+	}
+	client, err := dialDaemonIPC(p.IPCPath())
+	if err == nil {
+		defer client.Close()
+		var result ipc.FixStartResult
+		if err := client.Call(ipc.MethodFixStart, ipc.FixStartParams{RecommendationID: entry.RecommendationID, OptionID: optionID}, &result); err != nil {
+			return fmt.Errorf("queue fix for %s#%d: %w", entry.RepoID, entry.Number, err)
+		}
+		return nil
+	}
+	_, err = createFixJobFromIPC(ctx, database, cfg, ipc.FixStartParams{RecommendationID: entry.RecommendationID, OptionID: optionID})
+	if err != nil {
+		return fmt.Errorf("queue fix for %s#%d: %w", entry.RepoID, entry.Number, err)
+	}
+	return nil
+}
+
+func shouldQueueFixOnApprove(entry tui.Entry) bool {
+	return entry.StateChange == sharedtypes.StateChangeFixRequired && strings.TrimSpace(entry.FixPrompt) != ""
 }
 
 func persistApprovedEntry(database *db.DB, entry tui.Entry, finalLabels []string, actedAt time.Time) error {

@@ -1397,7 +1397,7 @@ func (m Model) renderHelp() string {
 		"down / up          scroll overflowing card",
 		"tab / shift+tab    cycle between alternate recommendations (when present)",
 		"1-9                jump directly to that recommendation option",
-		"a                  approve active option (post comment, apply state change, sync labels)",
+		"a                  approve active option (queues fix_required jobs first)",
 		"c                  copy active option's coding-agent prompt",
 		"f                  queue or replace a cancellable coding-agent fix job",
 		"e                  edit active option's draft, action, or labels",
@@ -2426,6 +2426,10 @@ func actionVerbs(entry Entry) []string {
 		verbs = append(verbs, "merge")
 	case sharedtypes.StateChangeRequestChanges:
 		verbs = append(verbs, "request changes")
+	case sharedtypes.StateChangeFixRequired:
+		if strings.TrimSpace(entry.FixPrompt) != "" {
+			verbs = append(verbs, "fix")
+		}
 	}
 	return verbs
 }
