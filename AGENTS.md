@@ -134,7 +134,7 @@ Durations parse Go `time.Duration` plus the suffix `d` for days (e.g. `30d`).
 
 ### Versioning
 
-Build version is injected via `-ldflags` into `internal/buildinfo.Version` (defaults to `dev`). `UMAMI_WEBSITE_ID` is a build-time constant for optional Umami telemetry; users can override at runtime via `EZOSS_UMAMI_WEBSITE_ID`. Releases run through `release-please` (config in `.release-please-config.json`); **do not hand-edit `CHANGELOG.md` or the release manifest**.
+Build version is injected via `-ldflags` into `internal/buildinfo.Version` (defaults to `dev`). `UMAMI_WEBSITE_ID` is a build-time constant for optional Umami telemetry; users can override at runtime via `EZOSS_UMAMI_WEBSITE_ID`, set `EZOSS_UMAMI_WEBSITE_ID=` to disable a baked-in ID, and set `EZOSS_UMAMI_HOST` to override the Umami host. Releases run through `release-please` (config in `.release-please-config.json`); **do not hand-edit `CHANGELOG.md` or the release manifest**.
 
 ## Conventions specific to this codebase
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -42,7 +43,17 @@ func resetDefaultSink(t *testing.T) {
 }
 
 func TestDefaultUsesBuildTimeWebsiteIDWhenEnvUnset(t *testing.T) {
-	t.Setenv(umamiWebsiteIDEnv, "")
+	prevEnv, hadEnv := os.LookupEnv(umamiWebsiteIDEnv)
+	if err := os.Unsetenv(umamiWebsiteIDEnv); err != nil {
+		t.Fatalf("unset %s: %v", umamiWebsiteIDEnv, err)
+	}
+	t.Cleanup(func() {
+		if hadEnv {
+			_ = os.Setenv(umamiWebsiteIDEnv, prevEnv)
+			return
+		}
+		_ = os.Unsetenv(umamiWebsiteIDEnv)
+	})
 	prevBuildID := buildinfo.TelemetryWebsiteID
 	buildinfo.TelemetryWebsiteID = "build-injected-id"
 	t.Cleanup(func() { buildinfo.TelemetryWebsiteID = prevBuildID })
@@ -55,6 +66,18 @@ func TestDefaultUsesBuildTimeWebsiteIDWhenEnvUnset(t *testing.T) {
 	}
 	if client.websiteID != "build-injected-id" {
 		t.Fatalf("websiteID = %q, want %q", client.websiteID, "build-injected-id")
+	}
+}
+
+func TestDefaultReturnsNoopWhenEnvVarExplicitlyEmpty(t *testing.T) {
+	t.Setenv(umamiWebsiteIDEnv, "")
+	prevBuildID := buildinfo.TelemetryWebsiteID
+	buildinfo.TelemetryWebsiteID = "build-injected-id"
+	t.Cleanup(func() { buildinfo.TelemetryWebsiteID = prevBuildID })
+	resetDefaultSink(t)
+
+	if _, ok := Default().(noopSink); !ok {
+		t.Fatalf("Default() type = %T, want noopSink", Default())
 	}
 }
 

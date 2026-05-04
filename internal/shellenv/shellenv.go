@@ -164,6 +164,7 @@ func defaultShellCommandOutput(name string, args ...string) ([]byte, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, name, args...)
+	detachFromTerminal(cmd)
 	return cmd.Output()
 }
 

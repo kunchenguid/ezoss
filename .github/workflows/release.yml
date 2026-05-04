@@ -236,6 +236,8 @@ jobs:
           trap - EXIT
 
       - name: Build release archives
+        env:
+          UMAMI_WEBSITE_ID: ${{ vars.UMAMI_WEBSITE_ID }}
         run: make dist VERSION=${{ needs.release-please.outputs.tag_name }}
 
       - name: Verify dist artifacts

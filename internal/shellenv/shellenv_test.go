@@ -90,14 +90,29 @@ func TestDefaultShellCommandOutputTimesOut(t *testing.T) {
 	}()
 
 	shellCommandTimeout = 20 * time.Millisecond
+	t.Setenv("EZOSS_SHELLENV_TIMEOUT_HELPER", "1")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	start := time.Now()
-	_, err := defaultShellCommandOutput("/bin/sh", "-c", "sleep 1")
+	_, err = defaultShellCommandOutput(exe, "-test.run=^TestDefaultShellCommandOutputTimeoutHelper$", "--")
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
 	if elapsed := time.Since(start); elapsed >= 500*time.Millisecond {
 		t.Fatalf("command ran too long: %v", elapsed)
 	}
+}
+
+func TestDefaultShellCommandOutputTimeoutHelper(t *testing.T) {
+	if os.Getenv("EZOSS_SHELLENV_TIMEOUT_HELPER") != "1" {
+		return
+	}
+
+	time.Sleep(time.Second)
+	os.Exit(0)
 }
 
 func containsEnvEntry(env []string, want string) bool {
