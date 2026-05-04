@@ -149,6 +149,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 - **Checkouts are managed** - live triage clones/fetches repos under `~/.ezoss/investigations`, runs the agent there, and discards scratch edits before future runs.
 - **Contributor mode is automatic** - by default, the daemon searches for open issues and PRs authored by you in repos you do not maintain, marks them with a `contrib` badge in the inbox, and uses contributor-safe actions instead of maintainer actions.
 - **Fixes use isolated worktrees** - `fix_required` options can queue daemon-backed jobs under `~/.ezoss/fixes`, run the selected coding agent, commit changes, and either create maintainer draft PRs according to `fixes.pr_create` or prepare contributor PR branch updates according to `fixes.contrib_push`.
+  Re-queueing a fix for the same item replaces a queued or waiting-for-PR job; if a fix is already preparing, running, committing, or pushing, retry after that job advances or finishes.
 - **Polling is deliberate** - v1 avoids webhook complexity; maintainer items re-triage when the GitHub label disappears or post-label comments, reviews, or commits appear, and contributor items re-triage from local self-activity tracking.
 - **Approval is explicit** - comments, labels, closes, merges, maintainer fix PRs, and contributor PR branch updates only happen after you approve an inbox action, queue a fix job, or run `ezoss fix`.
 - **PR review is gated when needed** - unsolicited PRs can surface as `state_change: none` with a draft comment asking whether the approach is wanted before the tool drafts code review feedback.
@@ -159,7 +160,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | ------- | ------------ | ------------------------------------------------------------------------- |
 | `a`     | Approve      | Execute the selected GitHub action; maintainer items sync labels, contributor items are marked handled locally |
 | `c`     | Copy prompt  | Copy the active option's coding-agent fix prompt when one exists          |
-| `f`     | Fix          | Queue a daemon-backed coding-agent fix job when a fix prompt exists        |
+| `f`     | Fix          | Queue or replace a daemon-backed coding-agent fix job when a fix prompt exists |
 | `F`     | Filter       | Cycle role filter through all, maintainer, and contributor items           |
 | `e`     | Edit         | Open the draft in your editor before approval                             |
 | `m`     | Mark triaged | Stamp `ezoss/triaged` for maintainer items, or mark contributor items handled locally |
@@ -177,7 +178,7 @@ Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistak
 | `ezoss status`                 | Open the realtime status TUI; in non-interactive output, print rich text status               |
 | `ezoss status --short`         | Print a one-line summary of pending recommendations, configured repos, and contributor state  |
 | `ezoss list`                   | Print pending recommendations in a text format, including contributor markers                 |
-| `ezoss fix <repo>#<number>`    | Run the active fix prompt in an isolated worktree; maintainer PRs and contributor pushes follow config |
+| `ezoss fix <repo>#<number>`    | Run the active fix prompt directly in an isolated worktree; maintainer PRs and contributor pushes follow config |
 | `ezoss triage <repo>#<number>` | Manually triage one issue or PR                                                               |
 | `ezoss update`                 | Download and install the latest released binary for the current platform                      |
 | `ezoss daemon start`           | Start the background poller                                                                   |

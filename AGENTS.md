@@ -69,8 +69,10 @@ All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` 
    Phase reported as `"agents"`.
    A per-item timeout (default 30m, `Poller.PerItemTriageTimeout`) prevents one stuck subprocess from wedging the daemon.
 
-Fix work comes from `fix.start` in the TUI path or from `ezoss fix <owner/repo#number>` in the CLI path.
-`cliFixRunner` prepares an isolated worktree under `~/.ezoss/fixes`, resolves repo/global agent config, runs the selected agent with the option's `fix_prompt`, and commits produced changes.
+Daemon-backed fix work comes from `fix.start` in the TUI path.
+`CreateFixJob` cancels and replaces an existing queued or `waiting_for_pr` job for the same item, but returns `ErrFixJobInFlight` while the existing job is preparing a worktree, running the agent, committing, or pushing.
+PR detection must complete waiting jobs with `CompleteWaitingFixJobWithPR` so a detected URL cannot resurrect a job that was superseded while detection was in flight.
+The direct `ezoss fix <owner/repo#number>` CLI path uses `cliFixRunner`, which prepares an isolated worktree under `~/.ezoss/fixes`, resolves repo/global agent config, runs the selected agent with the option's `fix_prompt`, and commits produced changes.
 Maintainer fixes create a draft PR or leave the branch in the worktree according to `fixes.pr_create`; contributor PR fixes check out the existing head branch and either push to it or leave the worktree for manual review according to `fixes.contrib_push`.
 
 User-provided TUI rerun instructions are threaded through `Poller.RerunInstructions`, appended to the agent prompt as private context, and stored on the refreshed `recommendations` row. Guided reruns use `InsertRecommendationReplacingActiveBefore` so an older in-flight triage result cannot supersede a newer active recommendation.
@@ -113,7 +115,7 @@ The label is the public source of truth: removing it on GitHub re-queues the ite
 It pins `lipgloss.SetColorProfile(termenv.ANSI)` for portable styling.
 The TUI subscribes to the daemon over IPC and reacts to recommendation and fix-job events; it can also operate against the DB directly (used in tests and when no daemon is running).
 Layout is inbox list on top, details pane below, action bar.
-The `f` action queues a fix job for the active option when a fix prompt exists.
+The `f` action queues or replaces a cancellable fix job for the active option when a fix prompt exists.
 The `F` action cycles the inbox role filter through all, maintainer, and contributor items; contributor entries show a `contrib` badge.
 
 ### Configuration

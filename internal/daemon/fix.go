@@ -101,8 +101,12 @@ func detectWaitingFixPRs(ctx context.Context, poller Poller) (bool, error) {
 		if strings.TrimSpace(url) == "" {
 			continue
 		}
-		if err := poller.DB.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusSucceeded, Phase: db.FixJobPhasePROpened, PRURL: url, Message: "PR opened"}); err != nil {
+		completed, err := poller.DB.CompleteWaitingFixJobWithPR(job.ID, url)
+		if err != nil {
 			return true, err
+		}
+		if !completed {
+			continue
 		}
 		didWork = true
 	}

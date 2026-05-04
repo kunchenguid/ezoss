@@ -2,12 +2,19 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
 )
+
+// ErrFixJobInFlight is returned by CreateFixJob when an existing fix job for
+// the same item is mid-agent (preparing the worktree, running the agent,
+// committing, or pushing). The caller is expected to surface this so the user
+// can retry once the in-flight job either reaches waiting_for_pr or finishes.
+var ErrFixJobInFlight = errors.New("fix job already in flight for this item")
 
 func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 	if strings.TrimSpace(input.ItemID) == "" {
@@ -54,7 +61,21 @@ func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 		return nil, err
 	}
 	if existing != nil {
-		return existing, nil
+		// Reject when the existing job is mid-agent: the agent subprocess is
+		// in flight inside runFixStage and we cannot externally cancel it.
+		// Once it reaches waiting_for_pr (or terminates) the new fix can be
+		// queued.
+		if !canSupersedeFixJob(existing) {
+			return nil, fmt.Errorf("%w: %s/%s", ErrFixJobInFlight, existing.Status, existing.Phase)
+		}
+		now := nowUnix()
+		superseded, err := supersedeFixJobIfCancellable(tx, existing.ID, now)
+		if err != nil {
+			return nil, fmt.Errorf("supersede fix job: %w", err)
+		}
+		if !superseded {
+			return nil, fmt.Errorf("%w: %s/%s", ErrFixJobInFlight, existing.Status, existing.Phase)
+		}
 	}
 
 	now := nowUnix()
@@ -150,8 +171,15 @@ func (d *DB) ClaimNextQueuedFixJob() (*FixJob, error) {
 		return nil, fmt.Errorf("claim fix job: select: %w", err)
 	}
 	now := nowUnix()
-	if _, err := tx.Exec(`UPDATE fix_jobs SET status = ?, phase = ?, started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status = ?`, FixJobStatusRunning, FixJobPhasePreparingWorktree, now, now, id, FixJobStatusQueued); err != nil {
+	claimed, err := claimQueuedFixJob(tx, id, now)
+	if err != nil {
 		return nil, fmt.Errorf("claim fix job: update: %w", err)
+	}
+	if !claimed {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("claim fix job: commit: %w", err)
+		}
+		return nil, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("claim fix job: commit: %w", err)
@@ -274,6 +302,114 @@ func (d *DB) UpdateFixJob(id string, update FixJobUpdate) error {
 		return fmt.Errorf("update fix job: %w", err)
 	}
 	return nil
+}
+
+func (d *DB) SupersedeFixJobIfCancellable(id string) (bool, error) {
+	superseded, err := supersedeFixJobIfCancellable(d.sql, id, nowUnix())
+	if err != nil {
+		return false, fmt.Errorf("supersede fix job: %w", err)
+	}
+	return superseded, nil
+}
+
+func (d *DB) CompleteWaitingFixJobWithPR(id, url string) (bool, error) {
+	now := nowUnix()
+	result, err := d.sql.Exec(
+		`UPDATE fix_jobs SET
+		 status = ?,
+		 phase = ?,
+		 pr_url = ?,
+		 message = ?,
+		 updated_at = ?,
+		 completed_at = COALESCE(completed_at, ?)
+		 WHERE id = ? AND status = ? AND phase = ?`,
+		FixJobStatusSucceeded,
+		FixJobPhasePROpened,
+		url,
+		"PR opened",
+		now,
+		now,
+		id,
+		FixJobStatusRunning,
+		FixJobPhaseWaitingForPR,
+	)
+	if err != nil {
+		return false, fmt.Errorf("complete waiting fix job with PR: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("complete waiting fix job with PR: rows affected: %w", err)
+	}
+	return rows > 0, nil
+}
+
+type fixJobExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func claimQueuedFixJob(exec fixJobExecer, id string, now int64) (bool, error) {
+	result, err := exec.Exec(
+		`UPDATE fix_jobs SET status = ?, phase = ?, started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status = ?`,
+		FixJobStatusRunning,
+		FixJobPhasePreparingWorktree,
+		now,
+		now,
+		id,
+		FixJobStatusQueued,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return rows > 0, nil
+}
+
+func supersedeFixJobIfCancellable(exec fixJobExecer, id string, now int64) (bool, error) {
+	result, err := exec.Exec(
+		`UPDATE fix_jobs SET
+		 status = ?,
+		 message = ?,
+		 updated_at = ?,
+		 completed_at = COALESCE(completed_at, ?)
+		 WHERE id = ?
+		   AND (status = ? OR (status = ? AND phase = ?))`,
+		FixJobStatusCancelled,
+		"superseded by newer fix request",
+		now,
+		now,
+		id,
+		FixJobStatusQueued,
+		FixJobStatusRunning,
+		FixJobPhaseWaitingForPR,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return rows > 0, nil
+}
+
+// canSupersedeFixJob reports whether an existing active fix job can be safely
+// cancelled to make room for a new one. Queued jobs haven't been claimed yet,
+// and waiting_for_pr jobs are past the agent run; both can be cancelled
+// without abandoning a live agent subprocess.
+func canSupersedeFixJob(job *FixJob) bool {
+	if job == nil {
+		return true
+	}
+	if job.Status == FixJobStatusQueued {
+		return true
+	}
+	if job.Status == FixJobStatusRunning && job.Phase == FixJobPhaseWaitingForPR {
+		return true
+	}
+	return false
 }
 
 func scanOptionalFixJob(rows *sql.Rows) (*FixJob, error) {

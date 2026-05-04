@@ -286,6 +286,54 @@ func TestPollOnceRunsFixJobWithTimeout(t *testing.T) {
 	}
 }
 
+func TestPollOnceLeavesCancelledJobAfterDetectRace(t *testing.T) {
+	database := openDaemonTestDB(t)
+	job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "no-mistakes"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusRunning, Phase: db.FixJobPhaseWaitingForPR, Branch: "ezoss/fix-42"}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+	runner := &cancellingDetectFixRunner{database: database, jobID: job.ID, detectedPR: "https://github.com/acme/widgets/pull/99"}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: emptyTriageLister{}, Fix: runner}, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != db.FixJobStatusCancelled {
+		t.Fatalf("job status = %q, want cancelled (detected URL must not clobber supersede)", got.Status)
+	}
+	if got.PRURL != "" {
+		t.Fatalf("job PR URL = %q, want empty (URL must be discarded after cancellation)", got.PRURL)
+	}
+}
+
+// cancellingDetectFixRunner simulates a supersede that lands while DetectPR
+// is mid-network-call: the job is marked cancelled before DetectPR returns.
+type cancellingDetectFixRunner struct {
+	database   *db.DB
+	jobID      string
+	detectedPR string
+}
+
+func (c *cancellingDetectFixRunner) RunFix(context.Context, db.FixJob, func(db.FixJobUpdate) error) (*FixResult, error) {
+	return nil, errors.New("RunFix should not be called")
+}
+
+func (c *cancellingDetectFixRunner) DetectPR(context.Context, db.FixJob) (string, error) {
+	if err := c.database.UpdateFixJob(c.jobID, db.FixJobUpdate{Status: db.FixJobStatusCancelled, Message: "superseded by newer fix request"}); err != nil {
+		return "", err
+	}
+	return c.detectedPR, nil
+}
+
 type stubFixRunner struct {
 	result         *FixResult
 	err            error

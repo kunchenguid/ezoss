@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -48,10 +49,10 @@ func TestOpenCreatesSchema(t *testing.T) {
 	}
 }
 
-func TestCreateFixJobReturnsExistingActiveJob(t *testing.T) {
+func TestCreateFixJobSupersedesQueuedJob(t *testing.T) {
 	database := openTestDB(t)
 
-	job, err := database.CreateFixJob(NewFixJob{
+	first, err := database.CreateFixJob(NewFixJob{
 		ItemID:           "acme/widgets#42",
 		RecommendationID: "rec-1",
 		OptionID:         "opt-1",
@@ -63,32 +64,211 @@ func TestCreateFixJobReturnsExistingActiveJob(t *testing.T) {
 		PRCreate:         "no-mistakes",
 	})
 	if err != nil {
-		t.Fatalf("CreateFixJob() error = %v", err)
-	}
-	if job.Status != FixJobStatusQueued || job.Phase != FixJobPhaseQueued {
-		t.Fatalf("job status/phase = %q/%q, want queued/queued", job.Status, job.Phase)
+		t.Fatalf("CreateFixJob() first error = %v", err)
 	}
 
-	again, err := database.CreateFixJob(NewFixJob{
+	second, err := database.CreateFixJob(NewFixJob{
 		ItemID:           "acme/widgets#42",
-		RecommendationID: "rec-1",
-		OptionID:         "opt-1",
+		RecommendationID: "rec-2",
+		OptionID:         "opt-2",
 		RepoID:           "acme/widgets",
 		ItemNumber:       42,
 		ItemKind:         sharedtypes.ItemKindIssue,
 		Title:            "panic in parser",
-		FixPrompt:        "Fix the parser panic.",
+		FixPrompt:        "Try a different fix.",
 		PRCreate:         "no-mistakes",
 	})
 	if err != nil {
-		t.Fatalf("CreateFixJob() second error = %v", err)
+		t.Fatalf("CreateFixJob() supersede error = %v", err)
 	}
-	if again.ID != job.ID {
-		t.Fatalf("second job ID = %q, want existing active job %q", again.ID, job.ID)
+	if second.ID == first.ID {
+		t.Fatalf("supersede returned the same job ID %q, want a fresh job", second.ID)
+	}
+	if second.Status != FixJobStatusQueued || second.Phase != FixJobPhaseQueued {
+		t.Fatalf("supersede job status/phase = %q/%q, want queued/queued", second.Status, second.Phase)
+	}
+	if second.RecommendationID != "rec-2" || second.OptionID != "opt-2" || second.FixPrompt != "Try a different fix." {
+		t.Fatalf("supersede job did not pick up new params: %#v", second)
+	}
+
+	gotFirst, err := database.GetFixJob(first.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob(first) error = %v", err)
+	}
+	if gotFirst.Status != FixJobStatusCancelled {
+		t.Fatalf("first job status = %q, want cancelled", gotFirst.Status)
+	}
+	if gotFirst.CompletedAt == nil {
+		t.Fatalf("first job CompletedAt is nil, want set on cancellation")
 	}
 }
 
-func TestCreateFixJobAllowsOnlyOneConcurrentActiveJob(t *testing.T) {
+func TestCreateFixJobSupersedesWaitingForPRJob(t *testing.T) {
+	database := openTestDB(t)
+
+	first, err := database.CreateFixJob(NewFixJob{
+		ItemID:           "acme/widgets#42",
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		ItemNumber:       42,
+		ItemKind:         sharedtypes.ItemKindIssue,
+		FixPrompt:        "Fix it.",
+		PRCreate:         "no-mistakes",
+	})
+	if err != nil {
+		t.Fatalf("CreateFixJob() first error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(first.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseWaitingForPR, Branch: "ezoss/fix-42"}); err != nil {
+		t.Fatalf("UpdateFixJob() waiting error = %v", err)
+	}
+
+	second, err := database.CreateFixJob(NewFixJob{
+		ItemID:           "acme/widgets#42",
+		RecommendationID: "rec-2",
+		RepoID:           "acme/widgets",
+		ItemNumber:       42,
+		ItemKind:         sharedtypes.ItemKindIssue,
+		FixPrompt:        "Try again.",
+		PRCreate:         "no-mistakes",
+	})
+	if err != nil {
+		t.Fatalf("CreateFixJob() supersede waiting error = %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("supersede returned the same job ID %q, want a fresh job", second.ID)
+	}
+
+	gotFirst, err := database.GetFixJob(first.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob(first) error = %v", err)
+	}
+	if gotFirst.Status != FixJobStatusCancelled {
+		t.Fatalf("first job status = %q, want cancelled", gotFirst.Status)
+	}
+}
+
+func TestCreateFixJobRejectsMidAgentJob(t *testing.T) {
+	midAgentPhases := []FixJobPhase{
+		FixJobPhasePreparingWorktree,
+		FixJobPhaseRunningAgent,
+		FixJobPhaseCommitting,
+		FixJobPhasePushing,
+	}
+	for _, phase := range midAgentPhases {
+		t.Run(string(phase), func(t *testing.T) {
+			database := openTestDB(t)
+
+			first, err := database.CreateFixJob(NewFixJob{
+				ItemID:           "acme/widgets#42",
+				RecommendationID: "rec-1",
+				RepoID:           "acme/widgets",
+				ItemNumber:       42,
+				ItemKind:         sharedtypes.ItemKindIssue,
+				FixPrompt:        "Fix it.",
+				PRCreate:         "gh",
+			})
+			if err != nil {
+				t.Fatalf("CreateFixJob() first error = %v", err)
+			}
+			if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+				t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+			}
+			if err := database.UpdateFixJob(first.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: phase}); err != nil {
+				t.Fatalf("UpdateFixJob() %s error = %v", phase, err)
+			}
+
+			second, err := database.CreateFixJob(NewFixJob{
+				ItemID:           "acme/widgets#42",
+				RecommendationID: "rec-2",
+				RepoID:           "acme/widgets",
+				ItemNumber:       42,
+				ItemKind:         sharedtypes.ItemKindIssue,
+				FixPrompt:        "Different fix.",
+				PRCreate:         "gh",
+			})
+			if !errors.Is(err, ErrFixJobInFlight) {
+				t.Fatalf("CreateFixJob() during %s error = %v, want ErrFixJobInFlight", phase, err)
+			}
+			if second != nil {
+				t.Fatalf("CreateFixJob() during %s returned job %#v, want nil", phase, second)
+			}
+
+			gotFirst, err := database.GetFixJob(first.ID)
+			if err != nil {
+				t.Fatalf("GetFixJob(first) error = %v", err)
+			}
+			if gotFirst.Status != FixJobStatusRunning || gotFirst.Phase != phase {
+				t.Fatalf("first job = %q/%q, want running/%s (untouched)", gotFirst.Status, gotFirst.Phase, phase)
+			}
+		})
+	}
+}
+
+func TestSupersedeFixJobIfCancellableRejectsAdvancedJob(t *testing.T) {
+	database := openTestDB(t)
+	job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseRunningAgent}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+
+	superseded, err := database.SupersedeFixJobIfCancellable(job.ID)
+	if err != nil {
+		t.Fatalf("SupersedeFixJobIfCancellable() error = %v", err)
+	}
+	if superseded {
+		t.Fatalf("SupersedeFixJobIfCancellable() = true, want false for mid-agent job")
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != FixJobStatusRunning || got.Phase != FixJobPhaseRunningAgent {
+		t.Fatalf("job = %#v, want still running/running_agent", got)
+	}
+}
+
+func TestCompleteWaitingFixJobWithPRRejectsSupersededJob(t *testing.T) {
+	database := openTestDB(t)
+	job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "no-mistakes"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if _, err := database.ClaimNextQueuedFixJob(); err != nil {
+		t.Fatalf("ClaimNextQueuedFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, FixJobUpdate{Status: FixJobStatusRunning, Phase: FixJobPhaseWaitingForPR}); err != nil {
+		t.Fatalf("UpdateFixJob() waiting error = %v", err)
+	}
+	if _, err := database.SupersedeFixJobIfCancellable(job.ID); err != nil {
+		t.Fatalf("SupersedeFixJobIfCancellable() error = %v", err)
+	}
+
+	completed, err := database.CompleteWaitingFixJobWithPR(job.ID, "https://github.com/acme/widgets/pull/99")
+	if err != nil {
+		t.Fatalf("CompleteWaitingFixJobWithPR() error = %v", err)
+	}
+	if completed {
+		t.Fatalf("CompleteWaitingFixJobWithPR() = true, want false for superseded job")
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != FixJobStatusCancelled || got.PRURL != "" {
+		t.Fatalf("job = %#v, want cancelled without PR URL", got)
+	}
+}
+
+func TestCreateFixJobConcurrentSupersedeLeavesOneActive(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
 	database, err := Open(dbPath)
 	if err != nil {
@@ -101,42 +281,46 @@ func TestCreateFixJobAllowsOnlyOneConcurrentActiveJob(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	errCh := make(chan error, workers)
-	ids := make(chan string, workers)
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
-			job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
-			if err != nil {
+			if _, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"}); err != nil {
 				errCh <- err
-				return
 			}
-			ids <- job.ID
 		}()
 	}
 	close(start)
 	wg.Wait()
 	close(errCh)
-	close(ids)
 	for err := range errCh {
 		if err != nil {
 			t.Fatalf("CreateFixJob() concurrent error = %v", err)
 		}
 	}
-	seen := map[string]struct{}{}
-	for id := range ids {
-		seen[id] = struct{}{}
+	active, err := database.ListFixJobsByStatus(FixJobStatusQueued, FixJobStatusRunning)
+	if err != nil {
+		t.Fatalf("ListFixJobsByStatus() error = %v", err)
 	}
-	if len(seen) != 1 {
-		t.Fatalf("concurrent CreateFixJob() returned %d active jobs, want 1", len(seen))
+	if len(active) != 1 {
+		t.Fatalf("active jobs = %d, want exactly 1 after supersede races", len(active))
 	}
-	jobs, err := database.ListFixJobs()
+	all, err := database.ListFixJobs()
 	if err != nil {
 		t.Fatalf("ListFixJobs() error = %v", err)
 	}
-	if len(jobs) != 1 {
-		t.Fatalf("ListFixJobs() returned %d jobs, want 1", len(jobs))
+	if len(all) != workers {
+		t.Fatalf("total jobs = %d, want %d (one per supersede attempt)", len(all), workers)
+	}
+	cancelled := 0
+	for _, j := range all {
+		if j.Status == FixJobStatusCancelled {
+			cancelled++
+		}
+	}
+	if cancelled != workers-1 {
+		t.Fatalf("cancelled jobs = %d, want %d", cancelled, workers-1)
 	}
 }
 
@@ -241,6 +425,32 @@ func TestClaimNextQueuedFixJobAndUpdateStatus(t *testing.T) {
 	}
 	if got.Status != FixJobStatusSucceeded || got.Phase != FixJobPhasePROpened || got.PRURL == "" || got.CompletedAt == nil {
 		t.Fatalf("updated job = %#v, want succeeded with PR URL and completed_at", got)
+	}
+}
+
+func TestClaimQueuedFixJobRejectsSupersededJob(t *testing.T) {
+	database := openTestDB(t)
+	job, err := database.CreateFixJob(NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if _, err := database.SupersedeFixJobIfCancellable(job.ID); err != nil {
+		t.Fatalf("SupersedeFixJobIfCancellable() error = %v", err)
+	}
+
+	claimed, err := claimQueuedFixJob(database.sql, job.ID, nowUnix())
+	if err != nil {
+		t.Fatalf("claimQueuedFixJob() error = %v", err)
+	}
+	if claimed {
+		t.Fatalf("claimQueuedFixJob() = true, want false for superseded job")
+	}
+	got, err := database.GetFixJob(job.ID)
+	if err != nil {
+		t.Fatalf("GetFixJob() error = %v", err)
+	}
+	if got.Status != FixJobStatusCancelled || got.Phase != FixJobPhaseQueued {
+		t.Fatalf("job = %#v, want still cancelled/queued", got)
 	}
 }
 
