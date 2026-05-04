@@ -3895,6 +3895,96 @@ func TestApproveInboxEntriesQueuesFixRequiredRecommendationThroughDaemonWhenAvai
 	}
 }
 
+func TestApproveInboxEntriesDoesNotApplyApprovalWhenFixQueueFails(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewApprovalExecutor := newApprovalExecutor
+	originalDialDaemonIPC := dialDaemonIPC
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newApprovalExecutor = originalNewApprovalExecutor
+		dialDaemonIPC = originalDialDaemonIPC
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	executor := &stubApprovalExecutor{}
+	newApprovalExecutor = func() approvalExecutor {
+		return executor
+	}
+	dialDaemonIPC = func(string) (daemonIPCClient, error) {
+		return stubDaemonIPCClient{call: func(string, interface{}, interface{}) error {
+			return errors.New("daemon refused fix job")
+		}}, nil
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue,
+		Number: 42, Title: "panic in parser", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#42",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			DraftComment: "I can reproduce this and will put up a fix.",
+			StateChange:  sharedtypes.StateChangeFixRequired,
+			FixPrompt:    "Fix https://github.com/acme/widgets/issues/42 by adding a regression test.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	err = approveInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: rec.ID,
+		OptionID:         rec.Options[0].ID,
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		DraftComment:     "I can reproduce this and will put up a fix.",
+		StateChange:      sharedtypes.StateChangeFixRequired,
+		FixPrompt:        "Fix https://github.com/acme/widgets/issues/42 by adding a regression test.",
+	}})
+	if err == nil {
+		t.Fatal("approveInboxEntries() error = nil, want fix queue failure")
+	}
+	if !strings.Contains(err.Error(), "daemon refused fix job") {
+		t.Fatalf("approveInboxEntries() error = %v, want daemon refusal", err)
+	}
+	if len(executor.comments) != 0 || len(executor.labels) != 0 {
+		t.Fatalf("approval side effects = comments:%#v labels:%#v, want none", executor.comments, executor.labels)
+	}
+	active, err := database.ListActiveRecommendations()
+	if err != nil {
+		t.Fatalf("ListActiveRecommendations() error = %v", err)
+	}
+	if len(active) != 1 || active[0].ID != rec.ID {
+		t.Fatalf("active recommendations = %#v, want original recommendation active", active)
+	}
+	j, err := database.ListFixJobs()
+	if err != nil {
+		t.Fatalf("ListFixJobs() error = %v", err)
+	}
+	if len(j) != 0 {
+		t.Fatalf("fix jobs = %#v, want none", j)
+	}
+}
+
 func TestApproveInboxEntriesExecutesNoneRecommendationAndMarksTriaged(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths

@@ -1607,6 +1607,9 @@ func approveInboxEntries(ctx context.Context, entries []tui.Entry) error {
 			return err
 		}
 		finalLabels, removeLabels := approvalLabelEdits(entry, item, cfg.SyncLabels)
+		if err := queueApprovedFixJob(ctx, database, cfg, entry); err != nil {
+			return err
+		}
 		if err := executeApproval(ctx, executor, entry, finalLabels, removeLabels, cfg.MergeMethod); err != nil {
 			if persistErr := persistFailedApprovalAttempt(database, entry, finalLabels, time.Now(), err); persistErr != nil {
 				return fmt.Errorf("%v (also failed to record approval attempt: %w)", err, persistErr)
@@ -1615,9 +1618,6 @@ func approveInboxEntries(ctx context.Context, entries []tui.Entry) error {
 		}
 		actedAt := time.Now()
 		if err := persistApprovedEntry(database, entry, finalLabels, actedAt); err != nil {
-			return err
-		}
-		if err := queueApprovedFixJob(ctx, database, cfg, entry); err != nil {
 			return err
 		}
 		if err := markInboxItemTriaged(database, entry); err != nil {
