@@ -65,6 +65,24 @@ func TestReleaseWorkflowUsesReleasePleaseAndPublishesTaggedArchives(t *testing.T
 	}
 }
 
+func TestReleaseWorkflowInjectsTelemetryWebsiteIDIntoPublishedArchives(t *testing.T) {
+	workflowPath := filepath.Join("..", "..", ".github", "workflows", "release.yml")
+	data, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
+	}
+
+	text := string(data)
+	checks := []string{
+		"- name: Build release archives\n        env:\n          UMAMI_WEBSITE_ID: ${{ vars.UMAMI_WEBSITE_ID }}\n        run: make dist VERSION=${{ needs.release-please.outputs.tag_name }}",
+	}
+	for _, want := range checks {
+		if !strings.Contains(text, want) {
+			t.Fatalf("release workflow missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestReleaseWorkflowKeepsExpectedTriggerAndConcurrency(t *testing.T) {
 	workflowPath := filepath.Join("..", "..", ".github", "workflows", "release.yml")
 	data, err := os.ReadFile(workflowPath)
