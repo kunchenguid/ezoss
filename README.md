@@ -103,6 +103,10 @@ Opening items from the inbox needs a platform browser command: `open` on macOS, 
 
 Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistakes`.
 
+Release builds may include optional Umami CLI telemetry.
+Telemetry sends command events with the ezoss version and OS/architecture, and stays disabled when no Umami website ID is configured.
+Set `EZOSS_UMAMI_WEBSITE_ID=` to disable a release build's baked-in website ID, or set `EZOSS_UMAMI_HOST` to use a different Umami host.
+
 ## How It Works
 
 ```
