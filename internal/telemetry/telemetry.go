@@ -124,11 +124,9 @@ func Default() Sink {
 		return defaultSink
 	}
 
-	// Precedence: env var (runtime override) > build-time injected default.
-	// The build-time fallback lets release binaries ship with a default
-	// destination while still letting users redirect or disable via env.
-	websiteID := strings.TrimSpace(os.Getenv(umamiWebsiteIDEnv))
-	if websiteID == "" {
+	websiteID, ok := os.LookupEnv(umamiWebsiteIDEnv)
+	websiteID = strings.TrimSpace(websiteID)
+	if !ok {
 		websiteID = strings.TrimSpace(buildinfo.TelemetryWebsiteID)
 	}
 	if websiteID == "" {
