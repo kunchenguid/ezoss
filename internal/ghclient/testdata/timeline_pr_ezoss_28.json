@@ -1,0 +1,567 @@
+[
+  {
+    "sha": "eeb491f4074d255813696ebd6e0d0868f6167c7a",
+    "node_id": "C_kwDOSL5n69oAKGVlYjQ5MWY0MDc0ZDI1NTgxMzY5NmViZDZlMGQwODY4ZjYxNjdjN2E",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/eeb491f4074d255813696ebd6e0d0868f6167c7a",
+    "html_url": "https://github.com/kunchenguid/ezoss/commit/eeb491f4074d255813696ebd6e0d0868f6167c7a",
+    "author": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-03T23:28:49Z"
+    },
+    "committer": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T01:30:26Z"
+    },
+    "tree": {
+      "sha": "d67ad14959d3653abacb371657c78952a5e3b8df",
+      "url": "https://api.github.com/repos/kunchenguid/ezoss/git/trees/d67ad14959d3653abacb371657c78952a5e3b8df"
+    },
+    "message": "<scrubbed message>",
+    "parents": [
+      {
+        "sha": "7c04180fadfebeb1b9a59917898a6f40597b8640",
+        "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/7c04180fadfebeb1b9a59917898a6f40597b8640",
+        "html_url": "https://github.com/kunchenguid/ezoss/commit/7c04180fadfebeb1b9a59917898a6f40597b8640"
+      }
+    ],
+    "verification": {
+      "verified": false,
+      "reason": "unsigned",
+      "signature": null,
+      "payload": null,
+      "verified_at": null
+    },
+    "event": "committed"
+  },
+  {
+    "sha": "dff904e30f0b3fbc08feab23587f8541b02385d8",
+    "node_id": "C_kwDOSL5n69oAKGRmZjkwNGUzMGYwYjNmYmMwOGZlYWIyMzU4N2Y4NTQxYjAyMzg1ZDg",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/dff904e30f0b3fbc08feab23587f8541b02385d8",
+    "html_url": "https://github.com/kunchenguid/ezoss/commit/dff904e30f0b3fbc08feab23587f8541b02385d8",
+    "author": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-03T23:37:49Z"
+    },
+    "committer": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T01:30:26Z"
+    },
+    "tree": {
+      "sha": "f0dc37482a17fcd9e5eeab648dedb5dfeedfef82",
+      "url": "https://api.github.com/repos/kunchenguid/ezoss/git/trees/f0dc37482a17fcd9e5eeab648dedb5dfeedfef82"
+    },
+    "message": "<scrubbed message>",
+    "parents": [
+      {
+        "sha": "eeb491f4074d255813696ebd6e0d0868f6167c7a",
+        "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/eeb491f4074d255813696ebd6e0d0868f6167c7a",
+        "html_url": "https://github.com/kunchenguid/ezoss/commit/eeb491f4074d255813696ebd6e0d0868f6167c7a"
+      }
+    ],
+    "verification": {
+      "verified": false,
+      "reason": "unsigned",
+      "signature": null,
+      "payload": null,
+      "verified_at": null
+    },
+    "event": "committed"
+  },
+  {
+    "sha": "060fc0408979debfedb96fb56f5cfbc919b03fe8",
+    "node_id": "C_kwDOSL5n69oAKDA2MGZjMDQwODk3OWRlYmZlZGI5NmZiNTZmNWNmYmM5MTliMDNmZTg",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/060fc0408979debfedb96fb56f5cfbc919b03fe8",
+    "html_url": "https://github.com/kunchenguid/ezoss/commit/060fc0408979debfedb96fb56f5cfbc919b03fe8",
+    "author": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T00:50:25Z"
+    },
+    "committer": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T01:30:26Z"
+    },
+    "tree": {
+      "sha": "974dab312d2df7e480c2e2dbfeaf7bc9733c5b55",
+      "url": "https://api.github.com/repos/kunchenguid/ezoss/git/trees/974dab312d2df7e480c2e2dbfeaf7bc9733c5b55"
+    },
+    "message": "<scrubbed message>",
+    "parents": [
+      {
+        "sha": "dff904e30f0b3fbc08feab23587f8541b02385d8",
+        "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/dff904e30f0b3fbc08feab23587f8541b02385d8",
+        "html_url": "https://github.com/kunchenguid/ezoss/commit/dff904e30f0b3fbc08feab23587f8541b02385d8"
+      }
+    ],
+    "verification": {
+      "verified": false,
+      "reason": "unsigned",
+      "signature": null,
+      "payload": null,
+      "verified_at": null
+    },
+    "event": "committed"
+  },
+  {
+    "sha": "2858bc16958f80c05763530623c7ad22578c775a",
+    "node_id": "C_kwDOSL5n69oAKDI4NThiYzE2OTU4ZjgwYzA1NzYzNTMwNjIzYzdhZDIyNTc4Yzc3NWE",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/2858bc16958f80c05763530623c7ad22578c775a",
+    "html_url": "https://github.com/kunchenguid/ezoss/commit/2858bc16958f80c05763530623c7ad22578c775a",
+    "author": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T01:25:59Z"
+    },
+    "committer": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T01:33:07Z"
+    },
+    "tree": {
+      "sha": "691ef837605dede2122bfa90ad437c5a817bb9ef",
+      "url": "https://api.github.com/repos/kunchenguid/ezoss/git/trees/691ef837605dede2122bfa90ad437c5a817bb9ef"
+    },
+    "message": "<scrubbed message>",
+    "parents": [
+      {
+        "sha": "060fc0408979debfedb96fb56f5cfbc919b03fe8",
+        "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/060fc0408979debfedb96fb56f5cfbc919b03fe8",
+        "html_url": "https://github.com/kunchenguid/ezoss/commit/060fc0408979debfedb96fb56f5cfbc919b03fe8"
+      }
+    ],
+    "verification": {
+      "verified": false,
+      "reason": "unsigned",
+      "signature": null,
+      "payload": null,
+      "verified_at": null
+    },
+    "event": "committed"
+  },
+  {
+    "sha": "61b418d73c67424f049b40c1dfecb668a5cdb6d1",
+    "node_id": "C_kwDOSL5n69oAKDYxYjQxOGQ3M2M2NzQyNGYwNDliNDBjMWRmZWNiNjY4YTVjZGI2ZDE",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/61b418d73c67424f049b40c1dfecb668a5cdb6d1",
+    "html_url": "https://github.com/kunchenguid/ezoss/commit/61b418d73c67424f049b40c1dfecb668a5cdb6d1",
+    "author": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T01:27:24Z"
+    },
+    "committer": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T01:33:07Z"
+    },
+    "tree": {
+      "sha": "dddea224c8e8d669f783836ee6bf5aa1bf25f71c",
+      "url": "https://api.github.com/repos/kunchenguid/ezoss/git/trees/dddea224c8e8d669f783836ee6bf5aa1bf25f71c"
+    },
+    "message": "<scrubbed message>",
+    "parents": [
+      {
+        "sha": "2858bc16958f80c05763530623c7ad22578c775a",
+        "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/2858bc16958f80c05763530623c7ad22578c775a",
+        "html_url": "https://github.com/kunchenguid/ezoss/commit/2858bc16958f80c05763530623c7ad22578c775a"
+      }
+    ],
+    "verification": {
+      "verified": false,
+      "reason": "unsigned",
+      "signature": null,
+      "payload": null,
+      "verified_at": null
+    },
+    "event": "committed"
+  },
+  {
+    "sha": "82cdb5acac98a2102ee23d71ee8b41d21d68c02f",
+    "node_id": "C_kwDOSL5n69oAKDgyY2RiNWFjYWM5OGEyMTAyZWUyM2Q3MWVlOGI0MWQyMWQ2OGMwMmY",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/82cdb5acac98a2102ee23d71ee8b41d21d68c02f",
+    "html_url": "https://github.com/kunchenguid/ezoss/commit/82cdb5acac98a2102ee23d71ee8b41d21d68c02f",
+    "author": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T01:28:49Z"
+    },
+    "committer": {
+      "name": "kunchenguid",
+      "email": "kun@kunchenguid.com",
+      "date": "2026-05-04T01:33:07Z"
+    },
+    "tree": {
+      "sha": "fac73bbf2a9a399cb86db23c355603265f4b185e",
+      "url": "https://api.github.com/repos/kunchenguid/ezoss/git/trees/fac73bbf2a9a399cb86db23c355603265f4b185e"
+    },
+    "message": "<scrubbed message>",
+    "parents": [
+      {
+        "sha": "61b418d73c67424f049b40c1dfecb668a5cdb6d1",
+        "url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits/61b418d73c67424f049b40c1dfecb668a5cdb6d1",
+        "html_url": "https://github.com/kunchenguid/ezoss/commit/61b418d73c67424f049b40c1dfecb668a5cdb6d1"
+      }
+    ],
+    "verification": {
+      "verified": false,
+      "reason": "unsigned",
+      "signature": null,
+      "payload": null,
+      "verified_at": null
+    },
+    "event": "committed"
+  },
+  {
+    "id": 25115429763,
+    "node_id": "HRFPE_lADOSL5n688AAAABBK7y9M8AAAAF2P8Lgw",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/issues/events/25115429763",
+    "actor": {
+      "login": "kunchenguid",
+      "id": 3233006,
+      "node_id": "MDQ6VXNlcjMyMzMwMDY=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3233006?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/kunchenguid",
+      "html_url": "https://github.com/kunchenguid",
+      "followers_url": "https://api.github.com/users/kunchenguid/followers",
+      "following_url": "https://api.github.com/users/kunchenguid/following{/other_user}",
+      "gists_url": "https://api.github.com/users/kunchenguid/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/kunchenguid/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/kunchenguid/subscriptions",
+      "organizations_url": "https://api.github.com/users/kunchenguid/orgs",
+      "repos_url": "https://api.github.com/users/kunchenguid/repos",
+      "events_url": "https://api.github.com/users/kunchenguid/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/kunchenguid/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "event": "head_ref_force_pushed",
+    "commit_id": "82cdb5acac98a2102ee23d71ee8b41d21d68c02f",
+    "commit_url": "https://api.github.com/repos/kunchenguid/ezoss/commits/82cdb5acac98a2102ee23d71ee8b41d21d68c02f",
+    "created_at": "2026-05-04T01:33:27Z",
+    "performed_via_github_app": null
+  },
+  {
+    "id": 25115944481,
+    "node_id": "ME_lADOSL5n688AAAABBK7y9M8AAAAF2QbmIQ",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/issues/events/25115944481",
+    "actor": {
+      "login": "kunchenguid",
+      "id": 3233006,
+      "node_id": "MDQ6VXNlcjMyMzMwMDY=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3233006?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/kunchenguid",
+      "html_url": "https://github.com/kunchenguid",
+      "followers_url": "https://api.github.com/users/kunchenguid/followers",
+      "following_url": "https://api.github.com/users/kunchenguid/following{/other_user}",
+      "gists_url": "https://api.github.com/users/kunchenguid/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/kunchenguid/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/kunchenguid/subscriptions",
+      "organizations_url": "https://api.github.com/users/kunchenguid/orgs",
+      "repos_url": "https://api.github.com/users/kunchenguid/repos",
+      "events_url": "https://api.github.com/users/kunchenguid/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/kunchenguid/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "event": "merged",
+    "commit_id": "876217bd1a62a4d26179697e23d1afb9b77f3353",
+    "commit_url": "https://api.github.com/repos/kunchenguid/ezoss/commits/876217bd1a62a4d26179697e23d1afb9b77f3353",
+    "created_at": "2026-05-04T02:14:36Z",
+    "performed_via_github_app": null
+  },
+  {
+    "id": 25115944496,
+    "node_id": "CE_lADOSL5n688AAAABBK7y9M8AAAAF2QbmMA",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/issues/events/25115944496",
+    "actor": {
+      "login": "kunchenguid",
+      "id": 3233006,
+      "node_id": "MDQ6VXNlcjMyMzMwMDY=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3233006?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/kunchenguid",
+      "html_url": "https://github.com/kunchenguid",
+      "followers_url": "https://api.github.com/users/kunchenguid/followers",
+      "following_url": "https://api.github.com/users/kunchenguid/following{/other_user}",
+      "gists_url": "https://api.github.com/users/kunchenguid/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/kunchenguid/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/kunchenguid/subscriptions",
+      "organizations_url": "https://api.github.com/users/kunchenguid/orgs",
+      "repos_url": "https://api.github.com/users/kunchenguid/repos",
+      "events_url": "https://api.github.com/users/kunchenguid/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/kunchenguid/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "event": "closed",
+    "commit_id": null,
+    "commit_url": null,
+    "created_at": "2026-05-04T02:14:36Z",
+    "state_reason": null,
+    "performed_via_github_app": null
+  },
+  {
+    "id": 25115944919,
+    "node_id": "HRDE_lADOSL5n688AAAABBK7y9M8AAAAF2Qbn1w",
+    "url": "https://api.github.com/repos/kunchenguid/ezoss/issues/events/25115944919",
+    "actor": {
+      "login": "kunchenguid",
+      "id": 3233006,
+      "node_id": "MDQ6VXNlcjMyMzMwMDY=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3233006?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/kunchenguid",
+      "html_url": "https://github.com/kunchenguid",
+      "followers_url": "https://api.github.com/users/kunchenguid/followers",
+      "following_url": "https://api.github.com/users/kunchenguid/following{/other_user}",
+      "gists_url": "https://api.github.com/users/kunchenguid/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/kunchenguid/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/kunchenguid/subscriptions",
+      "organizations_url": "https://api.github.com/users/kunchenguid/orgs",
+      "repos_url": "https://api.github.com/users/kunchenguid/repos",
+      "events_url": "https://api.github.com/users/kunchenguid/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/kunchenguid/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "event": "head_ref_deleted",
+    "commit_id": null,
+    "commit_url": null,
+    "created_at": "2026-05-04T02:14:38Z",
+    "performed_via_github_app": null
+  },
+  {
+    "actor": {
+      "login": "github-actions[bot]",
+      "id": 41898282,
+      "node_id": "MDM6Qm90NDE4OTgyODI=",
+      "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+      "html_url": "https://github.com/apps/github-actions",
+      "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "created_at": "2026-05-04T02:14:51Z",
+    "updated_at": "2026-05-04T02:14:51Z",
+    "source": {
+      "type": "issue",
+      "issue": {
+        "url": "https://api.github.com/repos/kunchenguid/ezoss/issues/19",
+        "repository_url": "https://api.github.com/repos/kunchenguid/ezoss",
+        "labels_url": "https://api.github.com/repos/kunchenguid/ezoss/issues/19/labels{/name}",
+        "comments_url": "https://api.github.com/repos/kunchenguid/ezoss/issues/19/comments",
+        "events_url": "https://api.github.com/repos/kunchenguid/ezoss/issues/19/events",
+        "html_url": "https://github.com/kunchenguid/ezoss/pull/19",
+        "id": 4353781180,
+        "node_id": "PR_kwDOSL5n687W4T_J",
+        "number": 19,
+        "title": "chore(main): release ezoss 0.3.0",
+        "user": {
+          "login": "github-actions[bot]",
+          "id": 41898282,
+          "node_id": "MDM6Qm90NDE4OTgyODI=",
+          "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+          "html_url": "https://github.com/apps/github-actions",
+          "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+          "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following{/other_user}",
+          "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+          "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+          "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+          "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+          "type": "Bot",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "labels": [
+          {
+            "id": 10823304062,
+            "node_id": "LA_kwDOSL5n688AAAAChR6Dfg",
+            "url": "https://api.github.com/repos/kunchenguid/ezoss/labels/autorelease:%20tagged",
+            "name": "autorelease: tagged",
+            "color": "ededed",
+            "default": false,
+            "description": null
+          }
+        ],
+        "state": "closed",
+        "locked": false,
+        "assignees": [],
+        "milestone": null,
+        "comments": 1,
+        "created_at": "2026-04-29T21:28:20Z",
+        "updated_at": "2026-05-05T05:32:52Z",
+        "closed_at": "2026-05-05T05:32:39Z",
+        "assignee": null,
+        "author_association": "CONTRIBUTOR",
+        "active_lock_reason": null,
+        "draft": false,
+        "repository": {
+          "id": 1220437995,
+          "node_id": "R_kgDOSL5n6w",
+          "name": "ezoss",
+          "full_name": "kunchenguid/ezoss",
+          "private": false,
+          "owner": {
+            "login": "kunchenguid",
+            "id": 3233006,
+            "node_id": "MDQ6VXNlcjMyMzMwMDY=",
+            "avatar_url": "https://avatars.githubusercontent.com/u/3233006?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/kunchenguid",
+            "html_url": "https://github.com/kunchenguid",
+            "followers_url": "https://api.github.com/users/kunchenguid/followers",
+            "following_url": "https://api.github.com/users/kunchenguid/following{/other_user}",
+            "gists_url": "https://api.github.com/users/kunchenguid/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/kunchenguid/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/kunchenguid/subscriptions",
+            "organizations_url": "https://api.github.com/users/kunchenguid/orgs",
+            "repos_url": "https://api.github.com/users/kunchenguid/repos",
+            "events_url": "https://api.github.com/users/kunchenguid/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/kunchenguid/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          },
+          "html_url": "https://github.com/kunchenguid/ezoss",
+          "description": null,
+          "fork": false,
+          "url": "https://api.github.com/repos/kunchenguid/ezoss",
+          "forks_url": "https://api.github.com/repos/kunchenguid/ezoss/forks",
+          "keys_url": "https://api.github.com/repos/kunchenguid/ezoss/keys{/key_id}",
+          "collaborators_url": "https://api.github.com/repos/kunchenguid/ezoss/collaborators{/collaborator}",
+          "teams_url": "https://api.github.com/repos/kunchenguid/ezoss/teams",
+          "hooks_url": "https://api.github.com/repos/kunchenguid/ezoss/hooks",
+          "issue_events_url": "https://api.github.com/repos/kunchenguid/ezoss/issues/events{/number}",
+          "events_url": "https://api.github.com/repos/kunchenguid/ezoss/events",
+          "assignees_url": "https://api.github.com/repos/kunchenguid/ezoss/assignees{/user}",
+          "branches_url": "https://api.github.com/repos/kunchenguid/ezoss/branches{/branch}",
+          "tags_url": "https://api.github.com/repos/kunchenguid/ezoss/tags",
+          "blobs_url": "https://api.github.com/repos/kunchenguid/ezoss/git/blobs{/sha}",
+          "git_tags_url": "https://api.github.com/repos/kunchenguid/ezoss/git/tags{/sha}",
+          "git_refs_url": "https://api.github.com/repos/kunchenguid/ezoss/git/refs{/sha}",
+          "trees_url": "https://api.github.com/repos/kunchenguid/ezoss/git/trees{/sha}",
+          "statuses_url": "https://api.github.com/repos/kunchenguid/ezoss/statuses/{sha}",
+          "languages_url": "https://api.github.com/repos/kunchenguid/ezoss/languages",
+          "stargazers_url": "https://api.github.com/repos/kunchenguid/ezoss/stargazers",
+          "contributors_url": "https://api.github.com/repos/kunchenguid/ezoss/contributors",
+          "subscribers_url": "https://api.github.com/repos/kunchenguid/ezoss/subscribers",
+          "subscription_url": "https://api.github.com/repos/kunchenguid/ezoss/subscription",
+          "commits_url": "https://api.github.com/repos/kunchenguid/ezoss/commits{/sha}",
+          "git_commits_url": "https://api.github.com/repos/kunchenguid/ezoss/git/commits{/sha}",
+          "comments_url": "https://api.github.com/repos/kunchenguid/ezoss/comments{/number}",
+          "issue_comment_url": "https://api.github.com/repos/kunchenguid/ezoss/issues/comments{/number}",
+          "contents_url": "https://api.github.com/repos/kunchenguid/ezoss/contents/{+path}",
+          "compare_url": "https://api.github.com/repos/kunchenguid/ezoss/compare/{base}...{head}",
+          "merges_url": "https://api.github.com/repos/kunchenguid/ezoss/merges",
+          "archive_url": "https://api.github.com/repos/kunchenguid/ezoss/{archive_format}{/ref}",
+          "downloads_url": "https://api.github.com/repos/kunchenguid/ezoss/downloads",
+          "issues_url": "https://api.github.com/repos/kunchenguid/ezoss/issues{/number}",
+          "pulls_url": "https://api.github.com/repos/kunchenguid/ezoss/pulls{/number}",
+          "milestones_url": "https://api.github.com/repos/kunchenguid/ezoss/milestones{/number}",
+          "notifications_url": "https://api.github.com/repos/kunchenguid/ezoss/notifications{?since,all,participating}",
+          "labels_url": "https://api.github.com/repos/kunchenguid/ezoss/labels{/name}",
+          "releases_url": "https://api.github.com/repos/kunchenguid/ezoss/releases{/id}",
+          "deployments_url": "https://api.github.com/repos/kunchenguid/ezoss/deployments",
+          "created_at": "2026-04-24T22:42:49Z",
+          "updated_at": "2026-05-05T05:32:43Z",
+          "pushed_at": "2026-05-05T05:32:50Z",
+          "git_url": "git://github.com/kunchenguid/ezoss.git",
+          "ssh_url": "git@github.com:kunchenguid/ezoss.git",
+          "clone_url": "https://github.com/kunchenguid/ezoss.git",
+          "svn_url": "https://github.com/kunchenguid/ezoss",
+          "homepage": null,
+          "size": 1800,
+          "stargazers_count": 3,
+          "watchers_count": 3,
+          "language": "Go",
+          "has_issues": true,
+          "has_projects": false,
+          "has_downloads": true,
+          "has_wiki": false,
+          "has_pages": false,
+          "has_discussions": false,
+          "forks_count": 0,
+          "mirror_url": null,
+          "archived": false,
+          "disabled": false,
+          "open_issues_count": 1,
+          "license": {
+            "key": "mit",
+            "name": "MIT License",
+            "spdx_id": "MIT",
+            "url": "https://api.github.com/licenses/mit",
+            "node_id": "MDc6TGljZW5zZTEz"
+          },
+          "allow_forking": true,
+          "is_template": false,
+          "web_commit_signoff_required": false,
+          "has_pull_requests": true,
+          "pull_request_creation_policy": "all",
+          "topics": [],
+          "visibility": "public",
+          "forks": 0,
+          "open_issues": 1,
+          "watchers": 3,
+          "default_branch": "main",
+          "permissions": {
+            "admin": true,
+            "maintain": true,
+            "push": true,
+            "triage": true,
+            "pull": true
+          }
+        },
+        "pull_request": {
+          "url": "https://api.github.com/repos/kunchenguid/ezoss/pulls/19",
+          "html_url": "https://github.com/kunchenguid/ezoss/pull/19",
+          "diff_url": "https://github.com/kunchenguid/ezoss/pull/19.diff",
+          "patch_url": "https://github.com/kunchenguid/ezoss/pull/19.patch",
+          "merged_at": "2026-05-05T05:32:39Z"
+        },
+        "body": ":robot: I have created a release *beep* *boop*\n---\n\n\n## [0.3.0](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.2.2...ezoss-v0.3.0) (2026-05-04)\n\n\n### Features\n\n* add coding agent fix jobs ([#20](https://github.com/kunchenguid/ezoss/issues/20)) ([557f3ad](https://github.com/kunchenguid/ezoss/commit/557f3adf7eb93830e96fa6da540d1e4a37a33b05))\n* add contributor mode ([#25](https://github.com/kunchenguid/ezoss/issues/25)) ([686129b](https://github.com/kunchenguid/ezoss/commit/686129bcf1b69e7c3d55ae33dfad884b734726f8))\n* **cli:** queue approved fixes on approval ([#28](https://github.com/kunchenguid/ezoss/issues/28)) ([876217b](https://github.com/kunchenguid/ezoss/commit/876217bd1a62a4d26179697e23d1afb9b77f3353))\n* **tui:** add guided rerun instructions ([#18](https://github.com/kunchenguid/ezoss/issues/18)) ([aadbe69](https://github.com/kunchenguid/ezoss/commit/aadbe69486e0f48f2f87ba3928dae68b5c2074b1))\n* **tui:** open inbox items in browser ([#22](https://github.com/kunchenguid/ezoss/issues/22)) ([7e29dd3](https://github.com/kunchenguid/ezoss/commit/7e29dd3350f0feb56072e7e4809c0f62be00cf6a))\n\n\n### Bug Fixes\n\n* **daemon:** requeue triaged items after new activity ([#26](https://github.com/kunchenguid/ezoss/issues/26)) ([ebbacde](https://github.com/kunchenguid/ezoss/commit/ebbacde11d665380e8c0c372084f989d9d86e19b))\n* **db:** supersede cancellable fix jobs ([#27](https://github.com/kunchenguid/ezoss/issues/27)) ([7c04180](https://github.com/kunchenguid/ezoss/commit/7c04180fadfebeb1b9a59917898a6f40597b8640))\n* **shellenv:** detach shell probes from terminal ([#29](https://github.com/kunchenguid/ezoss/issues/29)) ([8f0b4dc](https://github.com/kunchenguid/ezoss/commit/8f0b4dcdd79e4b0f65241746458672cba26ea43b))\n* **tui:** extend selected row highlight fill ([#24](https://github.com/kunchenguid/ezoss/issues/24)) ([4a52272](https://github.com/kunchenguid/ezoss/commit/4a5227260db0cc64f7bbe7984685ed98b8ceaf50))\n* **tui:** keep selection stable after actions ([#21](https://github.com/kunchenguid/ezoss/issues/21)) ([b15eee1](https://github.com/kunchenguid/ezoss/commit/b15eee13787db8dbe3aedd69652c73390d79958b))\n\n---\nThis PR was generated with [Release Please](https://github.com/googleapis/release-please). See [documentation](https://github.com/googleapis/release-please#release-please).",
+        "reactions": {
+          "url": "https://api.github.com/repos/kunchenguid/ezoss/issues/19/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "timeline_url": "https://api.github.com/repos/kunchenguid/ezoss/issues/19/timeline",
+        "performed_via_github_app": null,
+        "state_reason": null
+      }
+    },
+    "event": "cross-referenced"
+  }
+]
