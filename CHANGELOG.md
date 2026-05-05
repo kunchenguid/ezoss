@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.2.2...ezoss-v0.3.0) (2026-05-04)
+
+
+### Features
+
+* add coding agent fix jobs ([#20](https://github.com/kunchenguid/ezoss/issues/20)) ([557f3ad](https://github.com/kunchenguid/ezoss/commit/557f3adf7eb93830e96fa6da540d1e4a37a33b05))
+* add contributor mode ([#25](https://github.com/kunchenguid/ezoss/issues/25)) ([686129b](https://github.com/kunchenguid/ezoss/commit/686129bcf1b69e7c3d55ae33dfad884b734726f8))
+* **cli:** queue approved fixes on approval ([#28](https://github.com/kunchenguid/ezoss/issues/28)) ([876217b](https://github.com/kunchenguid/ezoss/commit/876217bd1a62a4d26179697e23d1afb9b77f3353))
+* **tui:** add guided rerun instructions ([#18](https://github.com/kunchenguid/ezoss/issues/18)) ([aadbe69](https://github.com/kunchenguid/ezoss/commit/aadbe69486e0f48f2f87ba3928dae68b5c2074b1))
+* **tui:** open inbox items in browser ([#22](https://github.com/kunchenguid/ezoss/issues/22)) ([7e29dd3](https://github.com/kunchenguid/ezoss/commit/7e29dd3350f0feb56072e7e4809c0f62be00cf6a))
+
+
+### Bug Fixes
+
+* **daemon:** requeue triaged items after new activity ([#26](https://github.com/kunchenguid/ezoss/issues/26)) ([ebbacde](https://github.com/kunchenguid/ezoss/commit/ebbacde11d665380e8c0c372084f989d9d86e19b))
+* **db:** supersede cancellable fix jobs ([#27](https://github.com/kunchenguid/ezoss/issues/27)) ([7c04180](https://github.com/kunchenguid/ezoss/commit/7c04180fadfebeb1b9a59917898a6f40597b8640))
+* **shellenv:** detach shell probes from terminal ([#29](https://github.com/kunchenguid/ezoss/issues/29)) ([8f0b4dc](https://github.com/kunchenguid/ezoss/commit/8f0b4dcdd79e4b0f65241746458672cba26ea43b))
+* **tui:** extend selected row highlight fill ([#24](https://github.com/kunchenguid/ezoss/issues/24)) ([4a52272](https://github.com/kunchenguid/ezoss/commit/4a5227260db0cc64f7bbe7984685ed98b8ceaf50))
+* **tui:** keep selection stable after actions ([#21](https://github.com/kunchenguid/ezoss/issues/21)) ([b15eee1](https://github.com/kunchenguid/ezoss/commit/b15eee13787db8dbe3aedd69652c73390d79958b))
+
 ## [0.2.2](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.2.1...ezoss-v0.2.2) (2026-04-29)
 
 
