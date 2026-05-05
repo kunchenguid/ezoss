@@ -92,7 +92,6 @@ type ghRepository struct {
 
 type ghLogin struct {
 	Login string `json:"login"`
-	ID    string `json:"id"`
 }
 
 type ghAuthor struct {

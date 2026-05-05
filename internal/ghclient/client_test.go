@@ -1099,6 +1099,24 @@ func TestSearchAuthoredOpenIssuesReturnsAuthoredIssues(t *testing.T) {
 	}
 }
 
+func TestHasActivityAfterLabelHandlesNumericActorID(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid","id":12345},"label":{"name":"ezoss/triaged"}},
+		{"event":"commented","created_at":"2026-05-03T19:14:03Z","actor":{"login":"alice","id":67890}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 109, "ezoss/triaged")
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabel = false, want true")
+	}
+}
+
 func TestHasActivityAfterLabelDetectsDifferentActorActivity(t *testing.T) {
 	t.Parallel()
 
