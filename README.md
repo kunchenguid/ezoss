@@ -268,6 +268,8 @@ Daemon logs are written to `~/.ezoss/logs/daemon.log`. Set `EZOSS_LOG_LEVEL` to 
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the required PR workflow and contributor rules.
+
 ```sh
 make build      # Build ./bin/ezoss
 make demo       # Regenerate demo.gif with VHS and ffmpeg
