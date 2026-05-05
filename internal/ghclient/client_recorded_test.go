@@ -453,10 +453,10 @@ type cliLabelSnapshot struct {
 }
 
 type cliRepositorySnapshot struct {
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	NameWithOwner string           `json:"nameWithOwner"`
-	URL           string           `json:"url"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	NameWithOwner string            `json:"nameWithOwner"`
+	URL           string            `json:"url"`
 	Owner         *cliOwnerSnapshot `json:"owner"`
 }
 
