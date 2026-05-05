@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.3.0...ezoss-v0.3.1) (2026-05-05)
+
+
+### Bug Fixes
+
+* **ghclient:** ignore numeric actor ids ([#31](https://github.com/kunchenguid/ezoss/issues/31)) ([7d72cd2](https://github.com/kunchenguid/ezoss/commit/7d72cd2ccb1eb62a967736f0b2800123ba263a83))
+
 ## [0.3.0](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.2.2...ezoss-v0.3.0) (2026-05-04)
 
 
