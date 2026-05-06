@@ -183,6 +183,7 @@ Set `EZOSS_UMAMI_WEBSITE_ID=` to disable a release build's baked-in website ID, 
 | `ezoss status --short`         | Print a one-line summary of pending recommendations, configured repos, and contributor state  |
 | `ezoss list`                   | Print pending recommendations in a text format, including contributor markers                 |
 | `ezoss fix <repo>#<number>`    | Run the active fix prompt directly in an isolated worktree; maintainer PRs and contributor pushes follow config |
+| `ezoss fix attach <repo>#<number>` | Attach `no-mistakes` to the latest fix job waiting for PR detection                        |
 | `ezoss triage <repo>#<number>` | Manually triage one issue or PR                                                               |
 | `ezoss update`                 | Download and install the latest released binary for the current platform                      |
 | `ezoss daemon start`           | Start the background poller                                                                   |
