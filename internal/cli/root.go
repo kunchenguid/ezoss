@@ -106,6 +106,17 @@ var prepareContribWorktree = fixflow.PrepareContribWorktree
 var resolvePRCreator = prcreator.Resolve
 var createFixPR = prcreator.Create
 var runFixGitCommand = runGitCommand
+var runNoMistakesAttach = func(ctx context.Context, dir string, stdout, stderr io.Writer) error {
+	cmd := exec.CommandContext(ctx, "no-mistakes", "attach")
+	cmd.Dir = dir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("no-mistakes attach: %w", err)
+	}
+	return nil
+}
 var newDraftEditor = func() draftEditor {
 	return envDraftEditor{}
 }
@@ -412,7 +423,54 @@ func newFixCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&prCreate, "pr-create", "", "Maintainer PR creation mode override (auto, no-mistakes, gh, disabled)")
 	cmd.Flags().BoolVar(&prepareOnly, "prepare-only", false, "Only prepare the isolated worktree without running the coding agent")
+	cmd.AddCommand(newFixAttachCmd())
 	return cmd
+}
+
+func newFixAttachCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "attach <owner/repo#number>",
+		Short: "Attach no-mistakes to a waiting fix worktree",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoID, number, err := parseFixTarget(args[0])
+			if err != nil {
+				return err
+			}
+			p, err := newPaths()
+			if err != nil {
+				return fmt.Errorf("resolve paths: %w", err)
+			}
+			database, err := openDBWithRetry(p.DBPath())
+			if err != nil {
+				return explainDatabaseLock(err)
+			}
+			defer database.Close()
+
+			itemID := fmt.Sprintf("%s#%d", repoID, number)
+			job, err := database.LatestFixJobForItem(itemID)
+			if err != nil {
+				return err
+			}
+			if job == nil {
+				return fmt.Errorf("no fix job found for %s", itemID)
+			}
+			if job.Phase != db.FixJobPhaseWaitingForPR {
+				return fmt.Errorf("latest fix job for %s is %s/%s, not waiting_for_pr", itemID, job.Status, job.Phase)
+			}
+			worktree := strings.TrimSpace(job.WorktreePath)
+			if worktree == "" {
+				return fmt.Errorf("latest fix job for %s has no worktree path", itemID)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "attaching no-mistakes from %s\n", worktree)
+			if err := runNoMistakesAttach(cmd.Context(), worktree, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+				return err
+			}
+			telemetry.Track("command", telemetry.Fields{"command": "fix attach", "entrypoint": "fix"})
+			return nil
+		},
+	}
 }
 
 func parseFixTarget(value string) (string, int, error) {

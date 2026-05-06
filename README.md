@@ -183,6 +183,7 @@ Set `EZOSS_UMAMI_WEBSITE_ID=` to disable a release build's baked-in website ID, 
 | `ezoss status --short`         | Print a one-line summary of pending recommendations, configured repos, and contributor state  |
 | `ezoss list`                   | Print pending recommendations in a text format, including contributor markers                 |
 | `ezoss fix <repo>#<number>`    | Run the active fix prompt directly in an isolated worktree; maintainer PRs and contributor pushes follow config |
+| `ezoss fix attach <repo>#<number>` | Attach `no-mistakes` to the latest fix job waiting for PR detection                        |
 | `ezoss triage <repo>#<number>` | Manually triage one issue or PR                                                               |
 | `ezoss update`                 | Download and install the latest released binary for the current platform                      |
 | `ezoss daemon start`           | Start the background poller                                                                   |
@@ -219,7 +220,7 @@ Per-repo overrides live in `.ezoss.yaml` at the repo root and currently support 
 `fixes.pr_create` controls how fix PRs are created and supports `auto`, `no-mistakes`, `gh`, or `disabled`.
 `auto` prefers `no-mistakes` when both `no-mistakes` and `gh` are available, then uses `gh` when `no-mistakes` is unavailable or fails before PR detection.
 `no-mistakes` pushes to the no-mistakes remote and uses `gh` to detect the created PR.
-If daemon detection misses the PR, the inbox keeps the job in `waiting_for_pr` and shows `cd <worktree> && no-mistakes attach` for manual recovery.
+If daemon detection misses the PR, the inbox keeps the job in `waiting_for_pr` and shows `ezoss fix attach <owner/repo#number>` for manual recovery.
 `gh` pushes to origin and runs `gh pr create --draft`.
 `disabled` commits the fix branch in the worktree without opening a PR.
 
