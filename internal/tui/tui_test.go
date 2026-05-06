@@ -2514,6 +2514,46 @@ func TestRenderCardLongRegexDoesNotBleedIntoNeighbor(t *testing.T) {
 	}
 }
 
+func TestRenderCardPreservesMarkdownBlockNewlinesWhenWrapping(t *testing.T) {
+	fixPrompt := strings.Join([]string{
+		"## Issue",
+		"",
+		"https://github.com/acme/widgets/issues/43",
+		"",
+		"Bridge gets stuck after the attached target restarts, and the readiness check reports ready while calls still hang long enough to require wrapping.",
+		"",
+		"## Repro",
+		"",
+		"1. Start the app.",
+		"2. Restart the target.",
+	}, "\n")
+	m := NewModel([]Entry{{
+		RepoID:       "acme/widgets",
+		Number:       43,
+		Kind:         sharedtypes.ItemKindIssue,
+		Title:        "target restart",
+		Rationale:    "needs fix",
+		DraftComment: "triaged",
+		FixPrompt:    fixPrompt,
+		AgeLabel:     "1m",
+	}})
+
+	rendered := stripANSI(m.renderCard(72, 40))
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.Contains(line, "## Issue") && strings.Contains(line, "https://github.com") {
+			t.Fatalf("markdown heading and following URL should remain on separate lines, got:\n%s", rendered)
+		}
+		if strings.Contains(line, "## Repro") && strings.Contains(line, "1. Start") {
+			t.Fatalf("markdown heading and following list should remain on separate lines, got:\n%s", rendered)
+		}
+	}
+	for _, want := range []string{"## Issue", "https://github.com/acme/widgets/issues/43", "## Repro", "1. Start the app."} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered card missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestWaitForNotificationReturnsReloadMsg(t *testing.T) {
 	notify := make(chan struct{}, 1)
 	notify <- struct{}{}

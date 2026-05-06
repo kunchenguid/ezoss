@@ -2133,7 +2133,9 @@ func wrapLines(lines []string, width int) []string {
 	}
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		out = append(out, wrapLine(line, width)...)
+		for _, logicalLine := range strings.Split(line, "\n") {
+			out = append(out, wrapLine(logicalLine, width)...)
+		}
 	}
 	return out
 }
