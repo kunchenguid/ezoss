@@ -378,9 +378,12 @@ func TestModelViewShowsNoMistakesAttachCommandWhenWaitingForPR(t *testing.T) {
 	m.width = 120
 
 	details := stripANSI(m.renderDetails())
-	want := "attach: cd '/tmp/ezoss fix/widgets/42-run' && no-mistakes attach"
+	want := "attach: ezoss fix attach acme/widgets#42"
 	if !strings.Contains(details, want) {
 		t.Fatalf("renderDetails() missing no-mistakes attach command %q in:\n%s", want, details)
+	}
+	if strings.Contains(details, m.entries[0].FixWorktreePath) {
+		t.Fatalf("renderDetails() should not include long worktree path in attach command:\n%s", details)
 	}
 }
 

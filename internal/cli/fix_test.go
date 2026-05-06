@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,6 +29,65 @@ func TestParseFixTarget(t *testing.T) {
 	}
 	if repo != "acme/widgets" || number != 42 {
 		t.Fatalf("parseFixTarget() = %q, %d, want acme/widgets, 42", repo, number)
+	}
+}
+
+func TestFixAttachCommandRunsNoMistakesInWaitingWorktree(t *testing.T) {
+	root := t.TempDir()
+	originalNewPaths := newPaths
+	originalRunNoMistakesAttach := runNoMistakesAttach
+	originalApplyShellEnv := applyShellEnv
+	originalCloseTelemetry := closeTelemetry
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		runNoMistakesAttach = originalRunNoMistakesAttach
+		applyShellEnv = originalApplyShellEnv
+		closeTelemetry = originalCloseTelemetry
+	})
+
+	newPaths = func() (*paths.Paths, error) { return paths.WithRoot(root), nil }
+	applyShellEnv = func() error { return nil }
+	closeTelemetry = func() {}
+
+	database, err := db.Open(filepath.Join(root, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", Source: db.RepoSourceConfig}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Role: sharedtypes.RoleMaintainer, Number: 42, Title: "fix it", State: sharedtypes.ItemStateOpen}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, FixPrompt: "fix it", PRCreate: "no-mistakes"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	worktree := filepath.Join(root, "fixes", "acme__widgets", "42-run")
+	if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusRunning, Phase: db.FixJobPhaseWaitingForPR, WorktreePath: worktree}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+
+	var attachDir string
+	runNoMistakesAttach = func(ctx context.Context, dir string, stdout, stderr io.Writer) error {
+		attachDir = dir
+		return nil
+	}
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"fix", "attach", "acme/widgets#42"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if attachDir != worktree {
+		t.Fatalf("runNoMistakesAttach dir = %q, want %q", attachDir, worktree)
+	}
+	if !strings.Contains(buf.String(), "attaching no-mistakes from "+worktree) {
+		t.Fatalf("output missing attach directory in:\n%s", buf.String())
 	}
 }
 

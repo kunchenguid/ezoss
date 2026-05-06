@@ -1275,7 +1275,7 @@ func TestREADMEConfigurationExampleMatchesCurrentConfigSurface(t *testing.T) {
 		"merge_method` controls how approved PR merges execute and supports `merge`, `squash`, or `rebase`.",
 		"`fixes.pr_create` controls how fix PRs are created and supports `auto`, `no-mistakes`, `gh`, or `disabled`.",
 		"`auto` prefers `no-mistakes` when both `no-mistakes` and `gh` are available, then uses `gh` when `no-mistakes` is unavailable or fails before PR detection.",
-		"If daemon detection misses the PR, the inbox keeps the job in `waiting_for_pr` and shows `cd <worktree> && no-mistakes attach` for manual recovery.",
+		"If daemon detection misses the PR, the inbox keeps the job in `waiting_for_pr` and shows `ezoss fix attach <owner/repo#number>` for manual recovery.",
 		"merge_method: merge",
 		"fixes:",
 		"pr_create: auto",

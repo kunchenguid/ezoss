@@ -1683,17 +1683,10 @@ func renderFixJobStatus(entry Entry) string {
 }
 
 func renderNoMistakesAttachCommand(entry Entry) string {
-	if strings.TrimSpace(entry.FixPhase) != "waiting_for_pr" || strings.TrimSpace(entry.FixWorktreePath) == "" {
+	if strings.TrimSpace(entry.FixPhase) != "waiting_for_pr" || strings.TrimSpace(entry.FixWorktreePath) == "" || strings.TrimSpace(entry.RepoID) == "" || entry.Number <= 0 {
 		return ""
 	}
-	return "cd " + shellQuote(entry.FixWorktreePath) + " && no-mistakes attach"
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+	return fmt.Sprintf("ezoss fix attach %s#%d", strings.TrimSpace(entry.RepoID), entry.Number)
 }
 
 func fixPhaseLabel(phase string) string {
