@@ -2122,18 +2122,20 @@ func (m Model) renderDetailsBox(width, boxHeight int) string {
 	return renderBoxWithFooter(width, "Details", visible, hint)
 }
 
-// wrapLines word-wraps each input line to width, preserving any leading
-// whitespace as the continuation indent. Tokens longer than the width
-// (e.g., regex, URLs, long identifiers) are hard-broken at the boundary
-// because the alternative - letting them spill past the box edge - bleeds
-// into adjacent panels and breaks the layout.
+// wrapLines word-wraps each logical input line to width, preserving embedded
+// newlines and any leading whitespace as the continuation indent. Tokens
+// longer than the width (e.g., regex, URLs, long identifiers) are hard-broken
+// at the boundary because the alternative - letting them spill past the box
+// edge - bleeds into adjacent panels and breaks the layout.
 func wrapLines(lines []string, width int) []string {
 	if width <= 0 {
 		return lines
 	}
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		out = append(out, wrapLine(line, width)...)
+		for _, logicalLine := range strings.Split(line, "\n") {
+			out = append(out, wrapLine(logicalLine, width)...)
+		}
 	}
 	return out
 }
