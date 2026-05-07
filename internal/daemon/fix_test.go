@@ -71,8 +71,8 @@ func TestPollOnceMarksFixJobWaitingForPR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetFixJob() error = %v", err)
 	}
-	if got.Status != db.FixJobStatusRunning || got.Phase != db.FixJobPhaseWaitingForPR {
-		t.Fatalf("job after PollOnce = %#v, want running/waiting_for_pr", got)
+	if got.Status != db.FixJobStatusRunning || got.Phase != db.FixJobPhaseWaitingForPR || got.Message != "waiting for no-mistakes pipeline to finish" {
+		t.Fatalf("job after PollOnce = %#v, want running/waiting_for_pr with no-mistakes wait message", got)
 	}
 }
 
