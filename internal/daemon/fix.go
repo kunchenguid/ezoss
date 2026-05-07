@@ -59,7 +59,7 @@ func runFixStage(ctx context.Context, poller Poller) (bool, error) {
 	} else if result.WaitingForPR {
 		update.Status = db.FixJobStatusRunning
 		update.Phase = db.FixJobPhaseWaitingForPR
-		update.Message = "waiting for PR"
+		update.Message = "waiting for no-mistakes pipeline to finish"
 	} else if result.WaitingForManualReview {
 		update.Status = db.FixJobStatusRunning
 		update.Phase = db.FixJobPhaseWaitingForPR

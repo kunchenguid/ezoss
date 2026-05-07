@@ -378,9 +378,28 @@ func TestModelViewShowsNoMistakesAttachCommandWhenWaitingForPR(t *testing.T) {
 	m.width = 120
 
 	details := stripANSI(m.renderDetails())
-	want := "attach: ezoss fix attach acme/widgets#42"
-	if !strings.Contains(details, want) {
-		t.Fatalf("renderDetails() missing no-mistakes attach command %q in:\n%s", want, details)
+	if !strings.Contains(details, "Fix: waiting for no-mistakes pipeline to finish") {
+		t.Fatalf("renderDetails() missing waiting-for-pipeline label in:\n%s", details)
+	}
+	if strings.Contains(details, "Fix: waiting for PR") {
+		t.Fatalf("renderDetails() should override stale FixMessage when waiting_for_pr:\n%s", details)
+	}
+	if strings.Contains(details, "attach: ezoss fix attach") {
+		t.Fatalf("renderDetails() should not prefix attach command with \"attach: \":\n%s", details)
+	}
+	if !strings.Contains(details, "ezoss fix attach acme/widgets#42") {
+		t.Fatalf("renderDetails() missing attach command in:\n%s", details)
+	}
+	// Attach command must live on its own line so the user can copy/paste
+	// it without the prefix or surrounding meta text getting in the way.
+	statusIdx := strings.Index(details, "Fix: waiting for no-mistakes pipeline to finish")
+	attachIdx := strings.Index(details, "ezoss fix attach acme/widgets#42")
+	if statusIdx < 0 || attachIdx < 0 || attachIdx <= statusIdx {
+		t.Fatalf("expected Fix status line above the attach command in:\n%s", details)
+	}
+	between := details[statusIdx:attachIdx]
+	if !strings.Contains(between, "\n") {
+		t.Fatalf("attach command should be on its own line, got:\n%s", details)
 	}
 	if strings.Contains(details, m.entries[0].FixWorktreePath) {
 		t.Fatalf("renderDetails() should not include long worktree path in attach command:\n%s", details)

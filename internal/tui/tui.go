@@ -1675,9 +1675,13 @@ func renderFixJobStatus(entry Entry) string {
 	if strings.TrimSpace(entry.FixJobID) == "" {
 		return ""
 	}
+	phase := strings.TrimSpace(entry.FixPhase)
 	state := strings.TrimSpace(entry.FixMessage)
-	if state == "" {
-		state = fixPhaseLabel(entry.FixPhase)
+	// For waiting_for_pr we always derive the label from the phase so the
+	// new "waiting for no-mistakes pipeline to finish" copy applies even
+	// to fix jobs whose FixMessage was persisted under the old wording.
+	if state == "" || phase == "waiting_for_pr" {
+		state = fixPhaseLabel(phase)
 	}
 	if state == "" {
 		state = strings.TrimSpace(entry.FixStatus)
@@ -1686,13 +1690,24 @@ func renderFixJobStatus(entry Entry) string {
 	if strings.TrimSpace(entry.FixPRURL) != "" {
 		parts = append(parts, strings.TrimSpace(entry.FixPRURL))
 	}
-	if attach := renderNoMistakesAttachCommand(entry); attach != "" {
-		parts = append(parts, "attach: "+attach)
-	}
 	if strings.TrimSpace(entry.FixError) != "" {
 		parts = append(parts, "error: "+strings.TrimSpace(entry.FixError))
 	}
-	return metaStyle().Render(strings.Join(parts, " · "))
+	out := metaStyle().Render(strings.Join(parts, " · "))
+	if attach := renderNoMistakesAttachCommand(entry); attach != "" {
+		out += "\n" + renderAttachCommand(attach)
+	}
+	return out
+}
+
+// renderAttachCommand styles the no-mistakes attach command on its own
+// line with a saturated background so it stands out from surrounding
+// meta text and stays copy-paste friendly even on narrower terminals.
+func renderAttachCommand(cmd string) string {
+	return lipgloss.NewStyle().
+		Bold(true).
+		Background(lipgloss.Color(ansiBlue)).
+		Render(" " + cmd + " ")
 }
 
 func renderNoMistakesAttachCommand(entry Entry) string {
@@ -1713,7 +1728,7 @@ func fixPhaseLabel(phase string) string {
 	case "pushing":
 		return "pushing branch"
 	case "waiting_for_pr":
-		return "waiting for PR"
+		return "waiting for no-mistakes pipeline to finish"
 	case "pr_opened":
 		return "PR opened"
 	case "queued":
