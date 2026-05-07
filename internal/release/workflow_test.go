@@ -1403,7 +1403,7 @@ func TestREADMEInboxActionsAndRequirementsCoverShippedWorkflow(t *testing.T) {
 		"Copying fix prompts from the inbox also needs a platform clipboard command",
 		"Opening fix PRs needs `gh`; `fixes.pr_create: no-mistakes` also needs `no-mistakes`.",
 		"## Inbox Actions",
-		"| `a` | Approve | Execute the selected action; `fix_required` options queue their fix job first |",
+		"| `a` | Approve | Execute the selected action; `fix_required` options queue their fix job first, or continue if the same fix is already running |",
 		"| `c` | Copy prompt | Copy the active option's coding-agent fix prompt when one exists |",
 		"| `f` | Fix | Queue or replace a daemon-backed coding-agent fix job when a fix prompt exists |",
 		"| `e` | Edit | Open the draft in your editor before approval |",
