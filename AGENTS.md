@@ -74,7 +74,8 @@ Daemon-backed fix work comes from `fix.start` in the TUI path.
 Approving the same `fix_required` option whose fix job is already in flight is the exception: approval side effects continue and the TUI surfaces an info notice instead of failing the approval.
 PR detection must complete waiting jobs with `CompleteWaitingFixJobWithPR` so a detected URL cannot resurrect a job that was superseded while detection was in flight.
 The direct `ezoss fix <owner/repo#number>` CLI path uses `cliFixRunner`, which prepares an isolated worktree under `~/.ezoss/fixes`, resolves repo/global agent config, runs the selected agent with the option's `fix_prompt`, and commits produced changes.
-The recovery `ezoss fix attach <owner/repo#number>` path finds the latest `waiting_for_pr` job for that item and runs `no-mistakes attach` from the stored worktree.
+The recovery `ezoss fix attach <owner/repo#number>` path is for `waiting_for_pr` jobs that are waiting on a `no-mistakes` pipeline; it runs `no-mistakes attach` from the stored worktree, and the TUI shows this command only for those no-mistakes waits.
+Manual-review waits can also use `waiting_for_pr`, but they should keep their manual-review status and not surface the attach command.
 Maintainer fixes create a draft PR or leave the branch in the worktree according to `fixes.pr_create`; contributor PR fixes check out the existing head branch and either push to it or leave the worktree for manual review according to `fixes.contrib_push`.
 
 User-provided TUI rerun instructions are threaded through `Poller.RerunInstructions`, appended to the agent prompt as private context, and stored on the refreshed `recommendations` row. Guided reruns use `InsertRecommendationReplacingActiveBefore` so an older in-flight triage result cannot supersede a newer active recommendation.
