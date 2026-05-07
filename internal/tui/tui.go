@@ -1410,7 +1410,7 @@ func (m Model) renderHelp() string {
 		"down / up          scroll overflowing card",
 		"tab / shift+tab    cycle between alternate recommendations (when present)",
 		"1-9                jump directly to that recommendation option",
-		"a                  approve active option (queues fix_required jobs first)",
+		"a                  approve active option (queues fix_required jobs first, or continues same running fix)",
 		"c                  copy active option's coding-agent prompt",
 		"f                  queue or replace a cancellable coding-agent fix job",
 		"e                  edit active option's draft, action, or labels",
