@@ -1453,7 +1453,7 @@ func appendStatusLine(status string, update string) string {
 
 func inboxModelActions(notify <-chan struct{}) tui.ModelActions {
 	return tui.ModelActions{
-		Approve: func(selected []tui.Entry) error {
+		Approve: func(selected []tui.Entry) (string, error) {
 			return approveInboxEntries(context.Background(), selected)
 		},
 		Dismiss: func(selected []tui.Entry) error {
@@ -1637,52 +1637,57 @@ func rerunInboxEntries(ctx context.Context, entries []tui.Entry, instructions st
 	return refreshed, nil
 }
 
-func approveInboxEntries(ctx context.Context, entries []tui.Entry) error {
+func approveInboxEntries(ctx context.Context, entries []tui.Entry) (string, error) {
 	if len(entries) == 0 {
-		return nil
+		return "", nil
 	}
 	p, err := newPaths()
 	if err != nil {
-		return fmt.Errorf("resolve paths: %w", err)
+		return "", fmt.Errorf("resolve paths: %w", err)
 	}
 	database, err := openDB(p.DBPath())
 	if err != nil {
-		return fmt.Errorf("open db: %w", err)
+		return "", fmt.Errorf("open db: %w", err)
 	}
 	defer database.Close()
 	cfg, err := loadGlobalConfig(filepath.Join(p.Root(), "config.yaml"))
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return "", fmt.Errorf("load config: %w", err)
 	}
 
 	executor := newApprovalExecutor()
+	var notices []string
 	for _, entry := range entries {
 		item, err := inboxItem(database, entry)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if err := validateApprovedFixJobRequest(database, entry, item); err != nil {
-			return err
+			return "", err
 		}
 		finalLabels, removeLabels := approvalLabelEdits(entry, item, cfg.SyncLabels)
-		if err := queueApprovedFixJob(ctx, database, cfg, entry); err != nil {
-			return err
+		notice, err := queueApprovedFixJob(ctx, database, cfg, entry)
+		if err != nil {
+			return "", err
+		}
+		if notice != "" {
+			notices = append(notices, notice)
 		}
 		if err := executeApproval(ctx, executor, entry, finalLabels, removeLabels, cfg.MergeMethod); err != nil {
 			if persistErr := persistFailedApprovalAttempt(database, entry, finalLabels, time.Now(), err); persistErr != nil {
-				return fmt.Errorf("%v (also failed to record approval attempt: %w)", err, persistErr)
+				return "", fmt.Errorf("%v (also failed to record approval attempt: %w)", err, persistErr)
 			}
-			return err
+			return "", err
 		}
 		actedAt := time.Now()
 		if err := persistApprovedEntry(database, entry, finalLabels, actedAt); err != nil {
-			return err
+			return "", err
 		}
 		if err := markInboxItemTriaged(database, entry); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
+	return strings.Join(notices, "; "), nil
 }
 
 func validateApprovedFixJobRequest(database *db.DB, entry tui.Entry, item *db.Item) error {
@@ -1698,32 +1703,56 @@ func validateApprovedFixJobRequest(database *db.DB, entry tui.Entry, item *db.It
 	return nil
 }
 
-func queueApprovedFixJob(ctx context.Context, database *db.DB, cfg *config.GlobalConfig, entry tui.Entry) error {
+func queueApprovedFixJob(ctx context.Context, database *db.DB, cfg *config.GlobalConfig, entry tui.Entry) (string, error) {
 	if !shouldQueueFixOnApprove(entry) {
-		return nil
+		return "", nil
 	}
 	optionID, err := resolveOptionID(database, entry)
 	if err != nil {
-		return err
+		return "", err
 	}
 	p, err := newPaths()
 	if err != nil {
-		return fmt.Errorf("resolve paths: %w", err)
+		return "", fmt.Errorf("resolve paths: %w", err)
 	}
-	client, err := dialDaemonIPC(p.IPCPath())
-	if err == nil {
+	var queueErr error
+	if client, dialErr := dialDaemonIPC(p.IPCPath()); dialErr == nil {
 		defer client.Close()
 		var result ipc.FixStartResult
-		if err := client.Call(ipc.MethodFixStart, ipc.FixStartParams{RecommendationID: entry.RecommendationID, OptionID: optionID}, &result); err != nil {
-			return fmt.Errorf("queue fix for %s#%d: %w", entry.RepoID, entry.Number, err)
+		queueErr = client.Call(ipc.MethodFixStart, ipc.FixStartParams{RecommendationID: entry.RecommendationID, OptionID: optionID}, &result)
+	} else {
+		_, queueErr = createFixJobFromIPC(ctx, database, cfg, ipc.FixStartParams{RecommendationID: entry.RecommendationID, OptionID: optionID})
+	}
+	if queueErr == nil {
+		return "", nil
+	}
+	if isFixJobInFlightError(queueErr) {
+		// An existing in-flight fix job blocks queueing a new one. If it's
+		// running for the same option the user is approving, the user's
+		// intent (run this fix) is already being honored - swallow the error
+		// so approve can still post the comment, apply labels, and triage.
+		// For a different option we still propagate, since approving option
+		// B can't actually run B's fix while option A's agent holds the item.
+		itemID := fmt.Sprintf("%s#%d", entry.RepoID, entry.Number)
+		if active, lookupErr := database.ActiveFixJobForItem(itemID); lookupErr == nil && active != nil && active.OptionID == optionID {
+			return fmt.Sprintf("fix already in flight for %s#%d; comment posted", entry.RepoID, entry.Number), nil
 		}
-		return nil
 	}
-	_, err = createFixJobFromIPC(ctx, database, cfg, ipc.FixStartParams{RecommendationID: entry.RecommendationID, OptionID: optionID})
-	if err != nil {
-		return fmt.Errorf("queue fix for %s#%d: %w", entry.RepoID, entry.Number, err)
+	return "", fmt.Errorf("queue fix for %s#%d: %w", entry.RepoID, entry.Number, queueErr)
+}
+
+// isFixJobInFlightError recognizes db.ErrFixJobInFlight whether it propagated
+// directly (local CreateFixJob path) or was flattened into an *ipc.RPCError
+// with the daemon's error message (IPC path - the JSON-RPC dispatch wraps
+// every handler error as ErrInternal with err.Error() as the message).
+func isFixJobInFlightError(err error) bool {
+	if err == nil {
+		return false
 	}
-	return nil
+	if errors.Is(err, db.ErrFixJobInFlight) {
+		return true
+	}
+	return strings.Contains(err.Error(), db.ErrFixJobInFlight.Error())
 }
 
 func shouldQueueFixOnApprove(entry tui.Entry) bool {
