@@ -1677,10 +1677,7 @@ func renderFixJobStatus(entry Entry) string {
 	}
 	phase := strings.TrimSpace(entry.FixPhase)
 	state := strings.TrimSpace(entry.FixMessage)
-	// For waiting_for_pr we always derive the label from the phase so the
-	// new "waiting for no-mistakes pipeline to finish" copy applies even
-	// to fix jobs whose FixMessage was persisted under the old wording.
-	if state == "" || phase == "waiting_for_pr" {
+	if state == "" || isNoMistakesWaitingForPR(entry) && state == "waiting for PR" {
 		state = fixPhaseLabel(phase)
 	}
 	if state == "" {
@@ -1711,10 +1708,22 @@ func renderAttachCommand(cmd string) string {
 }
 
 func renderNoMistakesAttachCommand(entry Entry) string {
-	if strings.TrimSpace(entry.FixPhase) != "waiting_for_pr" || strings.TrimSpace(entry.FixWorktreePath) == "" || strings.TrimSpace(entry.RepoID) == "" || entry.Number <= 0 {
+	if !isNoMistakesWaitingForPR(entry) || strings.TrimSpace(entry.FixWorktreePath) == "" || strings.TrimSpace(entry.RepoID) == "" || entry.Number <= 0 {
 		return ""
 	}
 	return fmt.Sprintf("ezoss fix attach %s#%d", strings.TrimSpace(entry.RepoID), entry.Number)
+}
+
+func isNoMistakesWaitingForPR(entry Entry) bool {
+	if strings.TrimSpace(entry.FixPhase) != "waiting_for_pr" {
+		return false
+	}
+	switch strings.TrimSpace(entry.FixMessage) {
+	case "", "waiting for PR", "waiting for no-mistakes pipeline to finish":
+		return true
+	default:
+		return false
+	}
 }
 
 func fixPhaseLabel(phase string) string {

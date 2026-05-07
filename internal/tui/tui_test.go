@@ -406,6 +406,35 @@ func TestModelViewShowsNoMistakesAttachCommandWhenWaitingForPR(t *testing.T) {
 	}
 }
 
+func TestModelViewDoesNotShowNoMistakesAttachCommandForManualReview(t *testing.T) {
+	m := NewModel([]Entry{{
+		RepoID:          "acme/widgets",
+		Number:          42,
+		Kind:            sharedtypes.ItemKindIssue,
+		Title:           "Bug: triage queue stalls",
+		FixJobID:        "fix-1",
+		FixStatus:       "running",
+		FixPhase:        "waiting_for_pr",
+		FixMessage:      "waiting for manual review",
+		FixWorktreePath: "/tmp/ezoss fix/widgets/42-run",
+		Rationale:       "Need a fix.",
+		Confidence:      sharedtypes.ConfidenceMedium,
+		StateChange:     sharedtypes.StateChangeFixRequired,
+	}})
+	m.width = 120
+
+	details := stripANSI(m.renderDetails())
+	if !strings.Contains(details, "Fix: waiting for manual review") {
+		t.Fatalf("renderDetails() should preserve manual-review status in:\n%s", details)
+	}
+	if strings.Contains(details, "waiting for no-mistakes pipeline") {
+		t.Fatalf("renderDetails() should not show no-mistakes pipeline status for manual review:\n%s", details)
+	}
+	if strings.Contains(details, "ezoss fix attach acme/widgets#42") {
+		t.Fatalf("renderDetails() should not show attach command for manual review:\n%s", details)
+	}
+}
+
 func TestModelHelpExplainsSkipMarksTriaged(t *testing.T) {
 	m := NewModel(nil)
 	help := stripANSI(m.renderHelp())
