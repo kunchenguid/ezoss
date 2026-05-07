@@ -405,7 +405,9 @@ type fetchMsg struct {
 
 type spinnerTickMsg struct{}
 
-const spinnerInterval = 120 * time.Millisecond
+// Keep in sync with internal/tui spinnerTickPeriod so both spinners spin at
+// the same cadence.
+const spinnerInterval = 160 * time.Millisecond
 
 // fetchCmdForMode returns the bubbletea Cmd that fetches repos for the
 // given bulk mode. ModeOneAtATime is rejected as a programming error - it

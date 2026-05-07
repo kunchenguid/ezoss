@@ -942,7 +942,7 @@ func TestApproveInboxEntriesStillMarksTriagedWhenSyncDisabled(t *testing.T) {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           43,
@@ -1244,7 +1244,7 @@ func TestApproveInboxEntriesPersistsFailedApprovalAttempt(t *testing.T) {
 		}},
 	}
 	entry.SyncActive()
-	err = approveInboxEntries(context.Background(), []tui.Entry{entry})
+	_, err = approveInboxEntries(context.Background(), []tui.Entry{entry})
 	if err == nil {
 		t.Fatal("expected approveInboxEntries() to fail")
 	}
@@ -1707,7 +1707,7 @@ func TestApproveInboxEntriesRecordsEditedApprovalWhenDraftChanged(t *testing.T) 
 		StateChange:            sharedtypes.StateChangeNone,
 		OriginalStateChange:    sharedtypes.StateChangeNone,
 	}
-	if err := approveInboxEntries(context.Background(), []tui.Entry{entry}); err != nil {
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{entry}); err != nil {
 		t.Fatalf("approveInboxEntries() error = %v", err)
 	}
 
@@ -1829,7 +1829,7 @@ func TestApproveInboxEntriesTreatsEditedActionAsEditedApproval(t *testing.T) {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID:       rec.ID,
 		RepoID:                 "acme/widgets",
 		Number:                 11,
@@ -1935,7 +1935,7 @@ func TestApproveInboxEntriesExecutesCommentRecommendationAndMarksTriaged(t *test
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           42,
@@ -2523,7 +2523,7 @@ func TestApproveInboxEntriesExecutesCloseRecommendationAndMarksTriaged(t *testin
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           21,
@@ -2638,7 +2638,7 @@ func TestApproveInboxEntriesSyncsWaitingOnAndStaleLabelsFromConfig(t *testing.T)
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           22,
@@ -2736,7 +2736,7 @@ func TestApproveInboxEntriesRemovesOutdatedManagedStateLabels(t *testing.T) {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           24,
@@ -2820,7 +2820,7 @@ func TestApproveInboxEntriesAppliesApprovedOptionWaitingOn(t *testing.T) {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		OptionID:         rec.Options[0].ID,
 		RepoID:           "acme/widgets",
@@ -2916,7 +2916,7 @@ func TestApproveInboxEntriesDeduplicatesManagedLabels(t *testing.T) {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           25,
@@ -3028,7 +3028,7 @@ func TestApproveInboxEntriesExecutesRequestChangesRecommendationAndMarksTriaged(
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           9,
@@ -3132,7 +3132,7 @@ func TestApproveInboxEntriesExecutesRequestApprovalForReviewRecommendationAndMar
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           11,
@@ -3247,7 +3247,7 @@ func TestApproveInboxEntriesExecutesMergeRecommendationAndMarksTriaged(t *testin
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           10,
@@ -3367,7 +3367,7 @@ func TestApproveInboxEntriesAbortsMergeWhenLabelEditFails(t *testing.T) {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	err = approveInboxEntries(context.Background(), []tui.Entry{{
+	_, err = approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           10,
@@ -3474,7 +3474,7 @@ func TestApproveInboxEntriesAbortsCloseWhenLabelEditFails(t *testing.T) {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	err = approveInboxEntries(context.Background(), []tui.Entry{{
+	_, err = approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           21,
@@ -3544,7 +3544,7 @@ func TestApproveInboxEntriesContributorSkipsLabelEdits(t *testing.T) {
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "upstream/widgets",
 		Number:           12,
@@ -3745,7 +3745,7 @@ func TestApproveInboxEntriesQueuesFixRequiredRecommendationWithComment(t *testin
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		OptionID:         rec.Options[0].ID,
 		RepoID:           "acme/widgets",
@@ -3867,7 +3867,7 @@ func TestApproveInboxEntriesQueuesFixRequiredRecommendationThroughDaemonWhenAvai
 		}}, nil
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		OptionID:         rec.Options[0].ID,
 		RepoID:           "acme/widgets",
@@ -3950,7 +3950,7 @@ func TestApproveInboxEntriesDoesNotApplyApprovalWhenFixQueueFails(t *testing.T) 
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	err = approveInboxEntries(context.Background(), []tui.Entry{{
+	_, err = approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		OptionID:         rec.Options[0].ID,
 		RepoID:           "acme/widgets",
@@ -4042,7 +4042,7 @@ func TestApproveInboxEntriesExecutesNoneRecommendationAndMarksTriaged(t *testing
 		t.Fatalf("InsertRecommendation() error = %v", err)
 	}
 
-	if err := approveInboxEntries(context.Background(), []tui.Entry{{
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
 		RecommendationID: rec.ID,
 		RepoID:           "acme/widgets",
 		Number:           11,
@@ -4091,5 +4091,211 @@ func TestApproveInboxEntriesExecutesNoneRecommendationAndMarksTriaged(t *testing
 	}
 	if item == nil || !item.GHTriaged {
 		t.Fatalf("item after approve = %#v, want gh_triaged=true", item)
+	}
+}
+
+// TestApproveInboxEntriesSwallowsInFlightFixForSameOption verifies that when a
+// fix job is already running for the same option that the user is approving
+// (e.g. the user pressed `f` first to queue a fix, then approved while the
+// agent was mid-run), approve still posts the comment, applies labels, and
+// marks the item triaged instead of failing with ErrFixJobInFlight.
+func TestApproveInboxEntriesSwallowsInFlightFixForSameOption(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewApprovalExecutor := newApprovalExecutor
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newApprovalExecutor = originalNewApprovalExecutor
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	executor := &stubApprovalExecutor{}
+	newApprovalExecutor = func() approvalExecutor {
+		return executor
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue,
+		Number: 42, Title: "panic in parser", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#42",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			DraftComment: "I can reproduce this and will put up a fix.",
+			StateChange:  sharedtypes.StateChangeFixRequired,
+			FixPrompt:    "Add a regression test.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+	option := rec.Options[0]
+
+	preexisting, err := database.CreateFixJob(db.NewFixJob{
+		ItemID: "acme/widgets#42", RecommendationID: rec.ID, OptionID: option.ID,
+		RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue,
+		FixPrompt: "Add a regression test.", PRCreate: "gh",
+	})
+	if err != nil {
+		t.Fatalf("CreateFixJob() preexisting error = %v", err)
+	}
+	if err := database.UpdateFixJob(preexisting.ID, db.FixJobUpdate{
+		Status: db.FixJobStatusRunning, Phase: db.FixJobPhaseRunningAgent,
+	}); err != nil {
+		t.Fatalf("UpdateFixJob() to running error = %v", err)
+	}
+
+	if _, err := approveInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: rec.ID,
+		OptionID:         option.ID,
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		DraftComment:     "I can reproduce this and will put up a fix.",
+		StateChange:      sharedtypes.StateChangeFixRequired,
+		FixPrompt:        "Add a regression test.",
+	}}); err != nil {
+		t.Fatalf("approveInboxEntries() error = %v, want nil (fix already in flight should be swallowed)", err)
+	}
+
+	if len(executor.comments) != 1 || executor.comments[0].Body != "I can reproduce this and will put up a fix." {
+		t.Fatalf("comments = %#v, want exactly the draft comment posted", executor.comments)
+	}
+	jobs, err := database.ListFixJobs()
+	if err != nil {
+		t.Fatalf("ListFixJobs() error = %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != preexisting.ID {
+		t.Fatalf("fix jobs = %#v, want only the preexisting running job", jobs)
+	}
+	if jobs[0].Status != db.FixJobStatusRunning || jobs[0].Phase != db.FixJobPhaseRunningAgent {
+		t.Fatalf("preexisting job = %q/%q, want running/running_agent (untouched)", jobs[0].Status, jobs[0].Phase)
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || !item.GHTriaged {
+		t.Fatalf("item after approve = %#v, want gh_triaged=true", item)
+	}
+}
+
+// TestApproveInboxEntriesPropagatesInFlightFixForDifferentOption verifies that
+// when a fix job is mid-run for a *different* option than the one being
+// approved, approve still errors out: the user's intent (fix for option B)
+// can't be honored because option A's agent is locking the item.
+func TestApproveInboxEntriesPropagatesInFlightFixForDifferentOption(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalNewApprovalExecutor := newApprovalExecutor
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		newApprovalExecutor = originalNewApprovalExecutor
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	executor := &stubApprovalExecutor{}
+	newApprovalExecutor = func() approvalExecutor {
+		return executor
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue,
+		Number: 42, Title: "panic in parser", State: sharedtypes.ItemStateOpen,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#42",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{
+			{
+				DraftComment: "Option A: regression test.",
+				StateChange:  sharedtypes.StateChangeFixRequired,
+				FixPrompt:    "Add a regression test.",
+			},
+			{
+				DraftComment: "Option B: rewrite parser.",
+				StateChange:  sharedtypes.StateChangeFixRequired,
+				FixPrompt:    "Rewrite the parser.",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+	optionA := rec.Options[0]
+	optionB := rec.Options[1]
+
+	preexisting, err := database.CreateFixJob(db.NewFixJob{
+		ItemID: "acme/widgets#42", RecommendationID: rec.ID, OptionID: optionA.ID,
+		RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue,
+		FixPrompt: "Add a regression test.", PRCreate: "gh",
+	})
+	if err != nil {
+		t.Fatalf("CreateFixJob() preexisting error = %v", err)
+	}
+	if err := database.UpdateFixJob(preexisting.ID, db.FixJobUpdate{
+		Status: db.FixJobStatusRunning, Phase: db.FixJobPhaseRunningAgent,
+	}); err != nil {
+		t.Fatalf("UpdateFixJob() to running error = %v", err)
+	}
+
+	_, err = approveInboxEntries(context.Background(), []tui.Entry{{
+		RecommendationID: rec.ID,
+		OptionID:         optionB.ID,
+		RepoID:           "acme/widgets",
+		Number:           42,
+		Kind:             sharedtypes.ItemKindIssue,
+		DraftComment:     "Option B: rewrite parser.",
+		StateChange:      sharedtypes.StateChangeFixRequired,
+		FixPrompt:        "Rewrite the parser.",
+	}})
+	if err == nil {
+		t.Fatal("approveInboxEntries() error = nil, want in-flight error for different option")
+	}
+	if !errors.Is(err, db.ErrFixJobInFlight) && !strings.Contains(err.Error(), "fix job already in flight") {
+		t.Fatalf("approveInboxEntries() error = %v, want fix-in-flight error", err)
+	}
+	if len(executor.comments) != 0 || len(executor.labels) != 0 {
+		t.Fatalf("approval side effects = comments:%#v labels:%#v, want none", executor.comments, executor.labels)
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item != nil && item.GHTriaged {
+		t.Fatalf("item after failed approve = %#v, want gh_triaged=false", item)
 	}
 }

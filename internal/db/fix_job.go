@@ -12,8 +12,8 @@ import (
 
 // ErrFixJobInFlight is returned by CreateFixJob when an existing fix job for
 // the same item is mid-agent (preparing the worktree, running the agent,
-// committing, or pushing). The caller is expected to surface this so the user
-// can retry once the in-flight job either reaches waiting_for_pr or finishes.
+// committing, or pushing). Callers generally surface this so the user can retry
+// once the in-flight job either reaches waiting_for_pr or finishes.
 var ErrFixJobInFlight = errors.New("fix job already in flight for this item")
 
 func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {

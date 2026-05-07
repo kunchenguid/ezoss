@@ -479,7 +479,7 @@ func TestApproveAdvancesCursorToNextEntry(t *testing.T) {
 		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one"},
 		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two"},
 	}, ModelActions{
-		Approve: func([]Entry) error { return nil },
+		Approve: func([]Entry) (string, error) { return "", nil },
 	})
 	m.width = 100
 
@@ -516,7 +516,7 @@ func TestApproveOnLastEntryKeepsCursor(t *testing.T) {
 		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one"},
 		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two"},
 	}, ModelActions{
-		Approve: func([]Entry) error { return nil },
+		Approve: func([]Entry) (string, error) { return "", nil },
 	})
 	m.width = 100
 	m.cursor = 1
@@ -539,7 +539,7 @@ func TestSelectionStableWhenEarlierActionResolves(t *testing.T) {
 		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two"},
 		{RecommendationID: "rec-3", RepoID: "acme/widgets", Number: 3, Kind: sharedtypes.ItemKindIssue, Title: "three"},
 	}, ModelActions{
-		Approve: func([]Entry) error { return nil },
+		Approve: func([]Entry) (string, error) { return "", nil },
 	})
 	m.width = 100
 
@@ -890,11 +890,11 @@ func TestModelApproveRemovesCurrentEntry(t *testing.T) {
 		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange: sharedtypes.StateChangeNone},
 		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindPR, Title: "two", StateChange: sharedtypes.StateChangeMerge},
 	}, ModelActions{
-		Approve: func(entries []Entry) error {
+		Approve: func(entries []Entry) (string, error) {
 			for _, entry := range entries {
 				approved = append(approved, entry.RecommendationID)
 			}
-			return nil
+			return "", nil
 		},
 	})
 	m.width = 100
@@ -911,6 +911,28 @@ func TestModelApproveRemovesCurrentEntry(t *testing.T) {
 	}
 	if !strings.Contains(stripANSI(next.View()), "approved acme/widgets #1") {
 		t.Fatalf("View() missing approval status in:\n%s", next.View())
+	}
+}
+
+// TestModelApproveSurfacesNotice verifies that when the Approve callback
+// returns a non-empty notice (e.g. "fix already in flight; comment posted"),
+// the TUI renders it as an info log line alongside the approval result.
+func TestModelApproveSurfacesNotice(t *testing.T) {
+	m := NewModelWithActions([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", StateChange: sharedtypes.StateChangeFixRequired},
+	}, ModelActions{
+		Approve: func([]Entry) (string, error) {
+			return "fix already in flight for acme/widgets#1; comment posted", nil
+		},
+	})
+	m.width = 100
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	finishMsg := runActionCmd(t, cmd)
+	updated, _ = updated.(Model).Update(finishMsg)
+	view := stripANSI(updated.(Model).View())
+	if !strings.Contains(view, "fix already in flight") {
+		t.Fatalf("View() missing notice line in:\n%s", view)
 	}
 }
 
@@ -1113,7 +1135,7 @@ func TestModelEditUpdatesCurrentDraft(t *testing.T) {
 // can show "approving..." feedback.
 func TestModelApproveAsyncDefersUntilFinishMsg(t *testing.T) {
 	actions := ModelActions{
-		Approve: func([]Entry) error { return nil },
+		Approve: func([]Entry) (string, error) { return "", nil },
 	}
 	m := NewModelWithActions([]Entry{{
 		RecommendationID: "rec-1",
@@ -1141,7 +1163,7 @@ func TestModelApproveAsyncDefersUntilFinishMsg(t *testing.T) {
 // records a failure row in the log.
 func TestModelApproveFailureKeepsEntryAndLogsError(t *testing.T) {
 	actions := ModelActions{
-		Approve: func([]Entry) error { return nil },
+		Approve: func([]Entry) (string, error) { return "", nil },
 	}
 	m := NewModelWithActions([]Entry{{
 		RecommendationID: "rec-1",
@@ -1222,7 +1244,7 @@ func TestModelPendingActionBlocksConflictingKey(t *testing.T) {
 // on rec-2.
 func TestModelPendingActionDoesNotBlockOtherEntries(t *testing.T) {
 	actions := ModelActions{
-		Approve: func([]Entry) error { return nil },
+		Approve: func([]Entry) (string, error) { return "", nil },
 		Dismiss: func([]Entry) error { return nil },
 	}
 	m := NewModelWithActions([]Entry{
@@ -1380,7 +1402,7 @@ func TestModelQueueRailCursorHighlightUsesUninterruptedBackground(t *testing.T) 
 // The panel must wrap inside its width so the whole error stays visible.
 func TestModelLogPanelWrapsLongFailureMessage(t *testing.T) {
 	actions := ModelActions{
-		Approve: func([]Entry) error { return nil },
+		Approve: func([]Entry) (string, error) { return "", nil },
 	}
 	m := NewModelWithActions([]Entry{{
 		RecommendationID: "rec-1",

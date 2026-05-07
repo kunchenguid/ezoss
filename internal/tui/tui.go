@@ -171,7 +171,12 @@ func (e Entry) Edited() bool {
 }
 
 type ModelActions struct {
-	Approve func([]Entry) error
+	// Approve performs the approval side-effects (post comment, apply
+	// labels, mark triaged, queue any fix_required fix). The returned
+	// notice, when non-empty, is shown as an info log line - used to
+	// surface "fix already in flight; comment posted" when the user
+	// approves an option whose fix is already running.
+	Approve func([]Entry) (notice string, err error)
 	Dismiss func([]Entry) error
 	// Edit performs an in-process update of the entry. Suitable for test
 	// stubs and other synchronous edits that don't need raw terminal
@@ -210,7 +215,7 @@ type Model struct {
 	cardScroll int
 	width      int
 	height     int
-	approve    func([]Entry) error
+	approve    func([]Entry) (string, error)
 	dismiss    func([]Entry) error
 	edit       func(Entry) (Entry, error)
 	editExec   func(Entry) (*exec.Cmd, func(error) (Entry, error), error)
@@ -275,9 +280,11 @@ const (
 )
 
 const (
-	maxLogEntries     = 6
-	maxLogPanelLines  = 5
-	spinnerTickPeriod = 80 * time.Millisecond
+	maxLogEntries    = 6
+	maxLogPanelLines = 5
+	// Keep in sync with internal/wizard spinnerInterval so both spinners
+	// spin at the same cadence.
+	spinnerTickPeriod = 160 * time.Millisecond
 )
 
 // spinnerFrames is the braille rotation used while an action is in flight.
@@ -322,6 +329,7 @@ type actionFinishedMsg struct {
 	verb             string
 	recommendationID string
 	err              error
+	notice           string  // optional info-level message to surface alongside the success log line
 	updatedEntries   []Entry // non-nil for rerun; replaces the entry in-place on success
 }
 
@@ -620,10 +628,12 @@ func (m *Model) approveCurrent() tea.Cmd {
 		return nil
 	}
 	cmd := m.startAction(entry, "approve", func() tea.Msg {
+		notice, err := m.approve([]Entry{entry})
 		return actionFinishedMsg{
 			verb:             "approve",
 			recommendationID: entry.RecommendationID,
-			err:              m.approve([]Entry{entry}),
+			notice:           notice,
+			err:              err,
 		}
 	})
 	m.advanceCursorPastPending()
@@ -830,6 +840,9 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 		// finishLog already recorded the failure with the verb/repo/number;
 		// no need to duplicate it elsewhere.
 		return
+	}
+	if note := strings.TrimSpace(msg.notice); note != "" {
+		m.pushLog(logEntry{state: logStateInfo, note: note})
 	}
 
 	idx := -1
@@ -1397,7 +1410,7 @@ func (m Model) renderHelp() string {
 		"down / up          scroll overflowing card",
 		"tab / shift+tab    cycle between alternate recommendations (when present)",
 		"1-9                jump directly to that recommendation option",
-		"a                  approve active option (queues fix_required jobs first)",
+		"a                  approve active option (queues fix_required jobs first, or continues same running fix)",
 		"c                  copy active option's coding-agent prompt",
 		"f                  queue or replace a cancellable coding-agent fix job",
 		"e                  edit active option's draft, action, or labels",
