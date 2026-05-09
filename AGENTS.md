@@ -52,20 +52,22 @@ All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` 
 
 ### Triage pipeline (the core loop)
 
-`internal/daemon/poll.go` runs each cycle in three sequential stages:
+`internal/daemon/poll.go` runs each cycle in sequential stages:
 
 1. **Stage A.1 (maintainer sync):** for each configured repo, call the GitHub client (`internal/ghclient`, which shells out to `gh`) to list items missing `ezoss/triaged` and items recently re-triaged.
    Reconcile into the `items` table.
-   Refreshed open triaged items also check timeline activity after `ezoss/triaged`; comments, reviews, or commits can set local `gh_triaged=false` while the GitHub label remains.
+   Refreshed open triaged items also check timeline activity after `ezoss/triaged`; comments, reviews, commits, cross-references, or linked PR resolution timestamps can set local `gh_triaged=false` while the GitHub label remains.
    Maintainer self actions store `last_self_activity_at` so ezoss approvals and mark-triaged actions do not re-queue themselves.
    Items from configured repos are role `maintainer`.
-2. **Stage A.2 (contributor sweep):** when `contrib.enabled` is true, call `gh search prs/issues --author=@me`, skip configured repos, owned-but-unconfigured repos, and `contrib.ignore_repos`, then store the results as role `contributor` with repo source `contrib`.
+2. **Stage A.2 (activity probe):** when `activity_probe_interval` permits, walk locally-known open triaged maintainer items and check for non-self timeline activity after the latest recommendation timestamp.
+   The probe catches activity that did not advance `updated_at`, clears local `gh_triaged`, and supersedes active recommendations before agent triage.
+3. **Stage A.3 (contributor sweep):** when `contrib.enabled` is true, call `gh search prs/issues --author=@me`, skip configured repos, owned-but-unconfigured repos, and `contrib.ignore_repos`, then store the results as role `contributor` with repo source `contrib`.
    Contributor repos and items that disappear from a complete sweep are pruned.
    Phase reported as `"sync"`.
-3. **Stage B (fixes):** reclaim stale running fix jobs, detect PRs for jobs waiting on `no-mistakes`, then claim at most one queued fix job.
+4. **Stage B (fixes):** reclaim stale running fix jobs, detect PRs for jobs waiting on `no-mistakes`, then claim at most one queued fix job.
    If fix work happened, the cycle stops before agent triage so fix runs do not contend with new triage runs.
-4. **Stage C (agents):** for each item lacking a current recommendation, build a role-specific prompt via `internal/triage.PromptForRole`, hand it plus `triage.Schema()` to the resolved `agent.Agent`, parse the structured JSON output via `triage.Parse`, and write a `recommendations` row plus one row per option in `recommendation_options`.
-   Contributor repos touched by Stage A.2 are merged into the agent repo set for that cycle.
+5. **Stage C (agents):** for each item lacking a current recommendation, build a role-specific prompt via `internal/triage.PromptForRole`, hand it plus `triage.Schema()` to the resolved `agent.Agent`, parse the structured JSON output via `triage.Parse`, and write a `recommendations` row plus one row per option in `recommendation_options`.
+   Contributor repos touched by Stage A.3 are merged into the agent repo set for that cycle.
    Phase reported as `"agents"`.
    A per-item timeout (default 30m, `Poller.PerItemTriageTimeout`) prevents one stuck subprocess from wedging the daemon.
 
@@ -110,7 +112,8 @@ These drive contributor re-triage, pruning, and pushes to existing contributor P
 For maintainer items, `last_self_activity_at` records ezoss approvals and mark-triaged actions so post-label activity checks can ignore self-caused updates.
 
 `gh_triaged` on `items` is the local queue gate for maintainer items.
-The label is the public source of truth: removing it on GitHub re-queues the item for triage, and comments, reviews, or commits after `ezoss/triaged` can set local `gh_triaged=false` while the label remains.
+The label is the public source of truth: removing it on GitHub re-queues the item for triage, and post-label timeline activity can set local `gh_triaged=false` while the label remains.
+Timeline activity includes comments, reviews, commits, cross-references, and linked PR resolution timestamps after the latest recommendation watermark.
 
 ### TUI
 
@@ -130,6 +133,7 @@ Merge methods: `merge`, `squash`, `rebase`.
 Fix PR creation modes under `fixes.pr_create`: `auto`, `no-mistakes`, `gh`, `disabled`.
 Contributor push modes under `fixes.contrib_push`: `auto`, `no-mistakes`, `disabled`.
 Contributor mode defaults to enabled and is configured by `contrib.enabled` plus `contrib.ignore_repos`.
+`activity_probe_interval` defaults to `1h`, accepts the standard duration parser, can be set to `0` to disable, and controls deep activity probe timeline API usage.
 Durations parse Go `time.Duration` plus the suffix `d` for days (e.g. `30d`).
 
 ### Self-update
@@ -146,6 +150,6 @@ Build version is injected via `-ldflags` into `internal/buildinfo.Version` (defa
 - **`internal/cli/root.go` uses package-level function variables** (e.g. `runDoctor`, `openDB`, `newAgent`) as seams that tests swap out. When adding a new external dependency to a CLI command, follow the same pattern instead of calling the concrete function directly.
 - **Platform-specific files** use the `_unix.go` / `_windows.go` suffix convention (see `internal/daemon/process_*.go`, `internal/ipc/transport_*.go`, `internal/update/spawn_*.go`). Mirror that when adding new platform-conditional code.
 - **The `ezoss/triaged` label is sacred for maintainer items** - it is the only GitHub-visible signal of triage state for configured repos and is always managed by the daemon regardless of `sync_labels` config.
-  Post-label comments, reviews, or commits can still re-queue the item locally while the label remains.
+  Post-label comments, reviews, commits, cross-references, or linked PR resolution timestamps can still re-queue the item locally while the label remains.
   Contributor items do not manage upstream labels; their state comes from local role and sweep metadata.
 - Tests should not require `gh`, agent binaries, or network. Use the mock packages under `internal/agent/mock` and `internal/ghclient/mock`, the `--mock` daemon flag, or `paths.WithRoot` + a temp dir for filesystem isolation.
