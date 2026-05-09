@@ -605,6 +605,11 @@ func (c *Client) hasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		if event.Event == "labeled" {
 			continue
 		}
+		for _, candidate := range crossReferenceResolutionTimes(event) {
+			if !candidate.IsZero() && candidate.UTC().After(activityAfter) {
+				return true, nil
+			}
+		}
 		actor := timelineActorLogin(event)
 		if actor != "" && actor == labeledBy {
 			continue
@@ -638,15 +643,22 @@ func candidateActivityTimes(event timelineItem) []time.Time {
 		out = append(out, t)
 	}
 	if event.Event == "cross-referenced" && event.Source != nil && event.Source.Issue != nil {
-		issue := event.Source.Issue
-		if issue.PullRequest != nil {
-			if t := parseRFC3339OrZero(issue.PullRequest.MergedAt); !t.IsZero() {
-				out = append(out, t)
-			}
-		}
-		if t := parseRFC3339OrZero(issue.ClosedAt); !t.IsZero() {
-			out = append(out, t)
-		}
+		out = append(out, crossReferenceResolutionTimes(event)...)
+	}
+	return out
+}
+
+func crossReferenceResolutionTimes(event timelineItem) []time.Time {
+	if event.Event != "cross-referenced" || event.Source == nil || event.Source.Issue == nil || event.Source.Issue.PullRequest == nil {
+		return nil
+	}
+	issue := event.Source.Issue
+	var out []time.Time
+	if t := parseRFC3339OrZero(issue.PullRequest.MergedAt); !t.IsZero() {
+		out = append(out, t)
+	}
+	if t := parseRFC3339OrZero(issue.ClosedAt); !t.IsZero() {
+		out = append(out, t)
 	}
 	return out
 }

@@ -982,6 +982,9 @@ func probeActivityForRepo(ctx context.Context, poller Poller, checker labelActiv
 		if err := poller.DB.UpsertItem(cleared); err != nil {
 			return fmt.Errorf("clear gh_triaged for item %d: %w", item.Number, err)
 		}
+		if err := poller.DB.MarkActiveRecommendationsForItemSuperseded(item.ID, time.Now().UTC()); err != nil {
+			return fmt.Errorf("supersede active recommendations for item %d: %w", item.Number, err)
+		}
 		poller.log().Info("activity probe re-queued item",
 			"repo", repoID,
 			"number", item.Number,

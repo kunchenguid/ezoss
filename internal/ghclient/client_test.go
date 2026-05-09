@@ -1382,6 +1382,25 @@ func TestHasActivityAfterLabelDetectsLinkedPRMerge(t *testing.T) {
 	}
 }
 
+func TestHasActivityAfterLabelDetectsSelfAuthoredLinkedPRMerge(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-04-29T05:34:02Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"cross-referenced","created_at":"2026-04-30T03:02:55Z","actor":{"login":"kunchenguid"},"source":{"type":"issue","issue":{"state":"closed","closed_at":"2026-05-07T04:08:18Z","pull_request":{"merged_at":"2026-05-07T04:08:18Z"}}}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, time.May, 1, 0, 0, 0, 0, time.UTC)
+	got, err := client.HasActivityAfterLabelSince(context.Background(), "acme/widgets", 98, "ezoss/triaged", since)
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabelSince returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabelSince = false, want true for self-authored linked PR merge")
+	}
+}
+
 // TestHasActivityAfterLabelIgnoresLinkedPROpenWhenSinceIsLater verifies
 // that once the fingerprint watermark has advanced past the cross-ref
 // event and no further resolution has happened, we don't keep

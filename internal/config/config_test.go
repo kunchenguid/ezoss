@@ -228,6 +228,22 @@ func TestSaveGlobalDefaultsMissingStaleThresholdToDayBasedValue(t *testing.T) {
 	}
 }
 
+func TestSaveGlobalPreservesDisabledActivityProbeInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+
+	if err := SaveGlobal(path, &GlobalConfig{ActivityProbeInterval: 0}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	got, err := LoadGlobal(path)
+	if err != nil {
+		t.Fatalf("LoadGlobal() error = %v", err)
+	}
+	if got.ActivityProbeInterval != 0 {
+		t.Fatalf("ActivityProbeInterval = %v, want disabled zero", got.ActivityProbeInterval)
+	}
+}
+
 func TestSaveGlobalDefaultsMissingSyncLabelsToEnabled(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 

@@ -413,3 +413,11 @@ func (d *DB) MarkRecommendationSuperseded(id string, supersededAt time.Time) err
 	}
 	return nil
 }
+
+func (d *DB) MarkActiveRecommendationsForItemSuperseded(itemID string, supersededAt time.Time) error {
+	_, err := d.sql.Exec(`UPDATE recommendations SET superseded_at = ? WHERE item_id = ? AND superseded_at IS NULL`, supersededAt.Unix(), itemID)
+	if err != nil {
+		return fmt.Errorf("mark active recommendations superseded for item %s: %w", itemID, err)
+	}
+	return nil
+}

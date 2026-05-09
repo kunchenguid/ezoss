@@ -334,7 +334,7 @@ func SaveGlobal(path string, cfg *GlobalConfig) error {
 	if file.IgnoreOlderThan == "0s" || file.IgnoreOlderThan == "" {
 		file.IgnoreOlderThan = formatConfigDuration(defaultCfg.IgnoreOlderThan)
 	}
-	if file.ActivityProbeInterval == "0s" || file.ActivityProbeInterval == "" {
+	if file.ActivityProbeInterval == "" {
 		file.ActivityProbeInterval = formatConfigDuration(defaultCfg.ActivityProbeInterval)
 	}
 	if !cfg.SyncLabels.Triaged && file.SyncLabels == (syncLabelsFile{}) {

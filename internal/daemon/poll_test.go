@@ -1253,6 +1253,77 @@ func TestPollOnceProbesActivityAndReQueuesOnNonSelfEvent(t *testing.T) {
 	}
 }
 
+func TestPollOnceProbeSupersedesActiveRecommendationForRetriage(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	updatedAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	if err := database.UpsertItem(db.Item{
+		ID:          "acme/widgets#98",
+		RepoID:      "acme/widgets",
+		Kind:        sharedtypes.ItemKindIssue,
+		Number:      98,
+		Title:       "Proposal: orchestration skill",
+		Author:      "arcadia",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   true,
+		WaitingOn:   sharedtypes.WaitingOnContributor,
+		LastEventAt: &updatedAt,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#98",
+		Agent:  sharedtypes.AgentClaude,
+		Model:  "claude",
+		Options: []db.NewRecommendationOption{{
+			StateChange:  sharedtypes.StateChangeNone,
+			Rationale:    "Existing recommendation.",
+			DraftComment: "Waiting for contributor.",
+			Confidence:   sharedtypes.ConfidenceMedium,
+			WaitingOn:    sharedtypes.WaitingOnContributor,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	client := &stubTriageClient{
+		itemsByRepo:        map[string][]ghclient.Item{"acme/widgets": nil},
+		triagedItemsByRepo: map[string][]ghclient.Item{"acme/widgets": nil},
+		activityAfterLabelSinceByKey: map[string]bool{
+			"acme/widgets#98": true,
+		},
+	}
+	poller := Poller{
+		DB:                    database,
+		GitHub:                client,
+		ActivityProbeInterval: time.Hour,
+		ActivityProbeState:    NewActivityProbeState(),
+	}
+	if err := PollOnce(context.Background(), poller, []string{"acme/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	storedRec, err := database.GetRecommendation(rec.ID)
+	if err != nil {
+		t.Fatalf("GetRecommendation() error = %v", err)
+	}
+	if storedRec == nil || storedRec.SupersededAt == nil {
+		t.Fatalf("recommendation after probe = %#v, want superseded", storedRec)
+	}
+	items, err := database.ListItemsNeedingTriage()
+	if err != nil {
+		t.Fatalf("ListItemsNeedingTriage() error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "acme/widgets#98" {
+		t.Fatalf("ListItemsNeedingTriage() = %#v, want acme/widgets#98", items)
+	}
+}
+
 func TestPollOnceProbeRespectsThrottle(t *testing.T) {
 	t.Parallel()
 
