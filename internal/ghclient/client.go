@@ -112,6 +112,7 @@ type timelineItem struct {
 	Actor       *ghLogin                `json:"actor"`
 	User        *ghLogin                `json:"user"`
 	Label       *timelineLabel          `json:"label"`
+	Source      *timelineSource         `json:"source"`
 }
 
 type timelineCommitIdentity struct {
@@ -120,6 +121,25 @@ type timelineCommitIdentity struct {
 
 type timelineLabel struct {
 	Name string `json:"name"`
+}
+
+// timelineSource carries the linked issue/PR for cross-referenced events.
+// When the source is a PR, ClosedAt and (for merged PRs) MergedAt are the
+// resolution timestamps we want to treat as activity even though no new
+// timeline event is created on the referencing issue when those happen.
+type timelineSource struct {
+	Type  string               `json:"type"`
+	Issue *timelineSourceIssue `json:"issue"`
+}
+
+type timelineSourceIssue struct {
+	State       string                     `json:"state"`
+	ClosedAt    string                     `json:"closed_at"`
+	PullRequest *timelineSourcePullRequest `json:"pull_request"`
+}
+
+type timelineSourcePullRequest struct {
+	MergedAt string `json:"merged_at"`
 }
 
 func New(runner Runner) *Client {
@@ -582,29 +602,65 @@ func (c *Client) hasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		activityAfter = since.UTC()
 	}
 	for i, event := range events {
-		if !isPostLabelActivityEvent(event.Event) {
-			continue
-		}
-		createdAt, err := timelineEventTime(event)
-		if err != nil {
-			if !isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
-				return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
-			}
-		}
-		occurredAfter := !createdAt.IsZero() && createdAt.After(activityAfter)
-		if !occurredAfter && isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
-			occurredAfter = true
-		}
-		if !occurredAfter {
+		if event.Event == "labeled" {
 			continue
 		}
 		actor := timelineActorLogin(event)
 		if actor != "" && actor == labeledBy {
 			continue
 		}
-		return true, nil
+		for _, candidate := range candidateActivityTimes(event) {
+			if !candidate.IsZero() && candidate.UTC().After(activityAfter) {
+				return true, nil
+			}
+		}
+		// Commits without parseable created_at fall back to timeline
+		// order: GitHub's commit timestamps reflect the author/commit
+		// time, which can be earlier than when the commit was pushed
+		// and thus appeared on the issue's timeline. If a dated
+		// neighbour after the label corroborates the ordering, treat
+		// the commit as post-label activity.
+		if event.Event == "committed" && isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
+			return true, nil
+		}
 	}
 	return false, nil
+}
+
+// candidateActivityTimes returns every timestamp on an event that should
+// count as activity. For most events this is just created_at. Cross-
+// referenced events also expose the source PR's merged_at and closed_at
+// because those resolve the referencing issue without generating new
+// events on its own timeline.
+func candidateActivityTimes(event timelineItem) []time.Time {
+	var out []time.Time
+	if t, err := timelineEventTime(event); err == nil && !t.IsZero() {
+		out = append(out, t)
+	}
+	if event.Event == "cross-referenced" && event.Source != nil && event.Source.Issue != nil {
+		issue := event.Source.Issue
+		if issue.PullRequest != nil {
+			if t := parseRFC3339OrZero(issue.PullRequest.MergedAt); !t.IsZero() {
+				out = append(out, t)
+			}
+		}
+		if t := parseRFC3339OrZero(issue.ClosedAt); !t.IsZero() {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func parseRFC3339OrZero(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func decodeTimelineItems(stdout []byte) ([]timelineItem, error) {
@@ -706,15 +762,6 @@ func timelineActorLogin(event timelineItem) string {
 		return login
 	}
 	return loginOf(event.User)
-}
-
-func isPostLabelActivityEvent(event string) bool {
-	switch event {
-	case "commented", "committed", "reviewed":
-		return true
-	default:
-		return false
-	}
 }
 
 func repoFromEntry(entry listItem) string {

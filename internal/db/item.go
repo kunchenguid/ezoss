@@ -143,6 +143,29 @@ func (d *DB) ListTriagedItemsWaitingOnContributor(repoID string) ([]Item, error)
 	return scanItemRows(rows, "list triaged contributor items")
 }
 
+// ListMaintainerOpenTriagedItems returns all open maintainer-role items
+// in the given repo whose local triage gate is set. The deep activity
+// probe walks this list to detect post-triage timeline activity GitHub
+// does not surface via issue.updated_at (most importantly, "Refs"-style
+// PRs being merged) and that the bounded ListTriaged delta query
+// therefore misses.
+func (d *DB) ListMaintainerOpenTriagedItems(repoID string) ([]Item, error) {
+	rows, err := d.sql.Query(
+		`SELECT `+itemColumns+`
+		 FROM items
+		 WHERE repo_id = ? AND role = ? AND gh_triaged = 1 AND state = ?
+		 ORDER BY number ASC`,
+		repoID,
+		sharedtypes.RoleMaintainer,
+		sharedtypes.ItemStateOpen,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list maintainer open triaged items: %w", err)
+	}
+	defer rows.Close()
+	return scanItemRows(rows, "list maintainer open triaged items")
+}
+
 // ListContributorItemsForRepo returns all contributor-role items for the
 // given repo. Used by the contrib auto-prune step to decide whether the
 // repo should remain in the local DB.
