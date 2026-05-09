@@ -56,7 +56,7 @@ All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` 
 
 1. **Stage A.1 (maintainer sync):** for each configured repo, call the GitHub client (`internal/ghclient`, which shells out to `gh`) to list items missing `ezoss/triaged` and items recently re-triaged.
    Reconcile into the `items` table.
-   Refreshed open triaged items also check timeline activity after `ezoss/triaged`; comments, reviews, commits, or merged PR cross-references can set local `gh_triaged=false` while the GitHub label remains.
+   Refreshed open triaged items also check timeline activity after `ezoss/triaged`; comments, reviews, or commits can set local `gh_triaged=false` while the GitHub label remains.
    Maintainer self actions store `last_self_activity_at` so ezoss approvals and mark-triaged actions do not re-queue themselves.
    Items from configured repos are role `maintainer`.
 2. **Stage A.2 (contributor sweep):** when `contrib.enabled` is true, call `gh search prs/issues --author=@me`, skip configured repos, owned-but-unconfigured repos, and `contrib.ignore_repos`, then store the results as role `contributor` with repo source `contrib`.
@@ -110,7 +110,7 @@ These drive contributor re-triage, pruning, and pushes to existing contributor P
 For maintainer items, `last_self_activity_at` records ezoss approvals and mark-triaged actions so post-label activity checks can ignore self-caused updates.
 
 `gh_triaged` on `items` is the local queue gate for maintainer items.
-The label is the public source of truth: removing it on GitHub re-queues the item for triage, and comments, reviews, commits, or merged PR cross-references after `ezoss/triaged` can set local `gh_triaged=false` while the label remains.
+The label is the public source of truth: removing it on GitHub re-queues the item for triage, and comments, reviews, or commits after `ezoss/triaged` can set local `gh_triaged=false` while the label remains.
 
 ### TUI
 
@@ -146,6 +146,6 @@ Build version is injected via `-ldflags` into `internal/buildinfo.Version` (defa
 - **`internal/cli/root.go` uses package-level function variables** (e.g. `runDoctor`, `openDB`, `newAgent`) as seams that tests swap out. When adding a new external dependency to a CLI command, follow the same pattern instead of calling the concrete function directly.
 - **Platform-specific files** use the `_unix.go` / `_windows.go` suffix convention (see `internal/daemon/process_*.go`, `internal/ipc/transport_*.go`, `internal/update/spawn_*.go`). Mirror that when adding new platform-conditional code.
 - **The `ezoss/triaged` label is sacred for maintainer items** - it is the only GitHub-visible signal of triage state for configured repos and is always managed by the daemon regardless of `sync_labels` config.
-  Post-label comments, reviews, commits, or merged PR cross-references can still re-queue the item locally while the label remains.
+  Post-label comments, reviews, or commits can still re-queue the item locally while the label remains.
   Contributor items do not manage upstream labels; their state comes from local role and sweep metadata.
 - Tests should not require `gh`, agent binaries, or network. Use the mock packages under `internal/agent/mock` and `internal/ghclient/mock`, the `--mock` daemon flag, or `paths.WithRoot` + a temp dir for filesystem isolation.
