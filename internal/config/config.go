@@ -82,24 +82,31 @@ type GlobalConfig struct {
 	PollInterval    time.Duration
 	StaleThreshold  time.Duration
 	IgnoreOlderThan time.Duration
-	MergeMethod     string
-	Repos           []string
-	SyncLabels      SyncLabels
-	Fixes           FixesConfig
-	Contrib         ContribConfig
-	contribSet      bool
+	// ActivityProbeInterval throttles the deep activity probe that
+	// catches post-triage timeline activity GitHub does not surface
+	// via issue.updated_at - most importantly, "Refs"-style PRs being
+	// merged. The probe makes one timeline API call per open triaged
+	// item per repo when it fires, so keep it coarse.
+	ActivityProbeInterval time.Duration
+	MergeMethod           string
+	Repos                 []string
+	SyncLabels            SyncLabels
+	Fixes                 FixesConfig
+	Contrib               ContribConfig
+	contribSet            bool
 }
 
 type globalConfigRaw struct {
-	Agent           AgentName      `yaml:"agent"`
-	PollInterval    string         `yaml:"poll_interval"`
-	StaleThreshold  string         `yaml:"stale_threshold"`
-	IgnoreOlderThan string         `yaml:"ignore_older_than"`
-	MergeMethod     string         `yaml:"merge_method"`
-	Repos           []string       `yaml:"repos"`
-	SyncLabels      *syncLabelsRaw `yaml:"sync_labels"`
-	Fixes           *FixesConfig   `yaml:"fixes"`
-	Contrib         *contribRaw    `yaml:"contrib"`
+	Agent                 AgentName      `yaml:"agent"`
+	PollInterval          string         `yaml:"poll_interval"`
+	StaleThreshold        string         `yaml:"stale_threshold"`
+	IgnoreOlderThan       string         `yaml:"ignore_older_than"`
+	ActivityProbeInterval string         `yaml:"activity_probe_interval"`
+	MergeMethod           string         `yaml:"merge_method"`
+	Repos                 []string       `yaml:"repos"`
+	SyncLabels            *syncLabelsRaw `yaml:"sync_labels"`
+	Fixes                 *FixesConfig   `yaml:"fixes"`
+	Contrib               *contribRaw    `yaml:"contrib"`
 }
 
 // contribRaw mirrors ContribConfig but uses a pointer for Enabled so we
@@ -113,15 +120,16 @@ type contribRaw struct {
 }
 
 type globalConfigFile struct {
-	Agent           AgentName      `yaml:"agent"`
-	PollInterval    string         `yaml:"poll_interval"`
-	StaleThreshold  string         `yaml:"stale_threshold"`
-	IgnoreOlderThan string         `yaml:"ignore_older_than"`
-	MergeMethod     string         `yaml:"merge_method"`
-	Repos           []string       `yaml:"repos"`
-	Fixes           FixesConfig    `yaml:"fixes"`
-	Contrib         ContribConfig  `yaml:"contrib"`
-	SyncLabels      syncLabelsFile `yaml:"sync_labels"`
+	Agent                 AgentName      `yaml:"agent"`
+	PollInterval          string         `yaml:"poll_interval"`
+	StaleThreshold        string         `yaml:"stale_threshold"`
+	IgnoreOlderThan       string         `yaml:"ignore_older_than"`
+	ActivityProbeInterval string         `yaml:"activity_probe_interval"`
+	MergeMethod           string         `yaml:"merge_method"`
+	Repos                 []string       `yaml:"repos"`
+	Fixes                 FixesConfig    `yaml:"fixes"`
+	Contrib               ContribConfig  `yaml:"contrib"`
+	SyncLabels            syncLabelsFile `yaml:"sync_labels"`
 }
 
 type syncLabelsFile struct {
@@ -134,15 +142,16 @@ type RepoConfig struct {
 }
 
 type Config struct {
-	Agent           AgentName
-	PollInterval    time.Duration
-	StaleThreshold  time.Duration
-	IgnoreOlderThan time.Duration
-	MergeMethod     string
-	Repos           []string
-	SyncLabels      SyncLabels
-	Fixes           FixesConfig
-	Contrib         ContribConfig
+	Agent                 AgentName
+	PollInterval          time.Duration
+	StaleThreshold        time.Duration
+	IgnoreOlderThan       time.Duration
+	ActivityProbeInterval time.Duration
+	MergeMethod           string
+	Repos                 []string
+	SyncLabels            SyncLabels
+	Fixes                 FixesConfig
+	Contrib               ContribConfig
 }
 
 const defaultMergeMethod = "merge"
@@ -216,6 +225,13 @@ stale_threshold: 30d
 # Skip items whose last update is older than this. Set to 0 to disable.
 ignore_older_than: 365d
 
+# How often the deep activity probe scans each open triaged item's
+# timeline for post-triage activity that GitHub does not surface via
+# issue.updated_at - most importantly, "Refs"-style PRs being merged.
+# When the probe fires it makes one timeline API call per open triaged
+# item per repo, so keep it coarse. Set to 0 to disable.
+activity_probe_interval: 1h
+
 # Default PR merge method: merge, squash, or rebase
 merge_method: merge
 
@@ -253,14 +269,15 @@ func defaultSyncLabels() SyncLabels {
 
 func defaultGlobalConfig() *GlobalConfig {
 	return &GlobalConfig{
-		Agent:           AgentAuto,
-		PollInterval:    5 * time.Minute,
-		StaleThreshold:  30 * 24 * time.Hour,
-		IgnoreOlderThan: 365 * 24 * time.Hour,
-		MergeMethod:     defaultMergeMethod,
-		SyncLabels:      defaultSyncLabels(),
-		Fixes:           FixesConfig{PRCreate: PRCreateAuto, ContribPush: ContribPushNoMistakes},
-		Contrib:         ContribConfig{Enabled: true},
+		Agent:                 AgentAuto,
+		PollInterval:          5 * time.Minute,
+		StaleThreshold:        30 * 24 * time.Hour,
+		IgnoreOlderThan:       365 * 24 * time.Hour,
+		ActivityProbeInterval: time.Hour,
+		MergeMethod:           defaultMergeMethod,
+		SyncLabels:            defaultSyncLabels(),
+		Fixes:                 FixesConfig{PRCreate: PRCreateAuto, ContribPush: ContribPushNoMistakes},
+		Contrib:               ContribConfig{Enabled: true},
 	}
 }
 
@@ -292,13 +309,14 @@ func SaveGlobal(path string, cfg *GlobalConfig) error {
 	}
 
 	file := globalConfigFile{
-		Agent:           cfg.Agent,
-		PollInterval:    cfg.PollInterval.String(),
-		StaleThreshold:  formatConfigDuration(cfg.StaleThreshold),
-		IgnoreOlderThan: formatConfigDuration(cfg.IgnoreOlderThan),
-		MergeMethod:     cfg.MergeMethod,
-		Repos:           append([]string(nil), cfg.Repos...),
-		Fixes:           cfg.Fixes,
+		Agent:                 cfg.Agent,
+		PollInterval:          cfg.PollInterval.String(),
+		StaleThreshold:        formatConfigDuration(cfg.StaleThreshold),
+		IgnoreOlderThan:       formatConfigDuration(cfg.IgnoreOlderThan),
+		ActivityProbeInterval: formatConfigDuration(cfg.ActivityProbeInterval),
+		MergeMethod:           cfg.MergeMethod,
+		Repos:                 append([]string(nil), cfg.Repos...),
+		Fixes:                 cfg.Fixes,
 		SyncLabels: syncLabelsFile{
 			WaitingOn: cfg.SyncLabels.WaitingOn,
 			Stale:     cfg.SyncLabels.Stale,
@@ -315,6 +333,9 @@ func SaveGlobal(path string, cfg *GlobalConfig) error {
 	}
 	if file.IgnoreOlderThan == "0s" || file.IgnoreOlderThan == "" {
 		file.IgnoreOlderThan = formatConfigDuration(defaultCfg.IgnoreOlderThan)
+	}
+	if file.ActivityProbeInterval == "" {
+		file.ActivityProbeInterval = formatConfigDuration(defaultCfg.ActivityProbeInterval)
 	}
 	if !cfg.SyncLabels.Triaged && file.SyncLabels == (syncLabelsFile{}) {
 		file.SyncLabels = syncLabelsFile{WaitingOn: defaultCfg.SyncLabels.WaitingOn, Stale: defaultCfg.SyncLabels.Stale}
@@ -399,6 +420,13 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 		}
 		cfg.IgnoreOlderThan = d
 	}
+	if raw.ActivityProbeInterval != "" {
+		d, err := ParseDuration(raw.ActivityProbeInterval)
+		if err != nil {
+			return nil, fmt.Errorf("parse activity_probe_interval %q: %w", raw.ActivityProbeInterval, err)
+		}
+		cfg.ActivityProbeInterval = d
+	}
 	if raw.MergeMethod != "" {
 		mergeMethod, err := normalizeMergeMethod(raw.MergeMethod)
 		if err != nil {
@@ -467,14 +495,15 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 	}
 
 	cfg := &Config{
-		Agent:           global.Agent,
-		PollInterval:    global.PollInterval,
-		StaleThreshold:  global.StaleThreshold,
-		IgnoreOlderThan: global.IgnoreOlderThan,
-		MergeMethod:     global.MergeMethod,
-		Repos:           append([]string(nil), global.Repos...),
-		SyncLabels:      global.SyncLabels,
-		Fixes:           global.Fixes,
+		Agent:                 global.Agent,
+		PollInterval:          global.PollInterval,
+		StaleThreshold:        global.StaleThreshold,
+		IgnoreOlderThan:       global.IgnoreOlderThan,
+		ActivityProbeInterval: global.ActivityProbeInterval,
+		MergeMethod:           global.MergeMethod,
+		Repos:                 append([]string(nil), global.Repos...),
+		SyncLabels:            global.SyncLabels,
+		Fixes:                 global.Fixes,
 		Contrib: ContribConfig{
 			Enabled:     global.Contrib.Enabled,
 			IgnoreRepos: append([]string(nil), global.Contrib.IgnoreRepos...),

@@ -1020,28 +1020,33 @@ func newDaemonRunCmd() *cobra.Command {
 			}
 
 			syncState := daemon.NewSyncState(cfg.PollInterval)
+			activityProbeState := daemon.NewActivityProbeState()
 			poller := daemon.Poller{
-				DB:                 database,
-				GitHub:             newDaemonTriageLister(),
-				StaleThreshold:     cfg.StaleThreshold,
-				IgnoreOlderThan:    cfg.IgnoreOlderThan,
-				Hooks:              syncState.Hooks(),
-				Logger:             daemonLogger,
-				ContribEnabled:     cfg.Contrib.Enabled,
-				ContribIgnoreRepos: append([]string(nil), cfg.Contrib.IgnoreRepos...),
+				DB:                    database,
+				GitHub:                newDaemonTriageLister(),
+				StaleThreshold:        cfg.StaleThreshold,
+				IgnoreOlderThan:       cfg.IgnoreOlderThan,
+				ActivityProbeInterval: cfg.ActivityProbeInterval,
+				ActivityProbeState:    activityProbeState,
+				Hooks:                 syncState.Hooks(),
+				Logger:                daemonLogger,
+				ContribEnabled:        cfg.Contrib.Enabled,
+				ContribIgnoreRepos:    append([]string(nil), cfg.Contrib.IgnoreRepos...),
 			}
 			if useMock {
 				poller = daemon.Poller{
-					DB:                 database,
-					GitHub:             ghmock.New(),
-					Triage:             mockTriageRunner{},
-					AgentsInstructions: readAgentsInstructions(p.Root()),
-					StaleThreshold:     cfg.StaleThreshold,
-					IgnoreOlderThan:    cfg.IgnoreOlderThan,
-					Hooks:              syncState.Hooks(),
-					Logger:             daemonLogger,
-					ContribEnabled:     cfg.Contrib.Enabled,
-					ContribIgnoreRepos: append([]string(nil), cfg.Contrib.IgnoreRepos...),
+					DB:                    database,
+					GitHub:                ghmock.New(),
+					Triage:                mockTriageRunner{},
+					AgentsInstructions:    readAgentsInstructions(p.Root()),
+					StaleThreshold:        cfg.StaleThreshold,
+					IgnoreOlderThan:       cfg.IgnoreOlderThan,
+					ActivityProbeInterval: cfg.ActivityProbeInterval,
+					ActivityProbeState:    activityProbeState,
+					Hooks:                 syncState.Hooks(),
+					Logger:                daemonLogger,
+					ContribEnabled:        cfg.Contrib.Enabled,
+					ContribIgnoreRepos:    append([]string(nil), cfg.Contrib.IgnoreRepos...),
 				}
 			} else {
 				triageCfg, err := loadDaemonTriageConfig(p.Root(), cfg)

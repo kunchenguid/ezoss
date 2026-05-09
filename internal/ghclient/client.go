@@ -123,6 +123,10 @@ type timelineLabel struct {
 	Name string `json:"name"`
 }
 
+// timelineSource carries the linked issue/PR for cross-referenced events.
+// When the source is a PR, ClosedAt and (for merged PRs) MergedAt are the
+// resolution timestamps we want to treat as activity even though no new
+// timeline event is created on the referencing issue when those happen.
 type timelineSource struct {
 	Type  string               `json:"type"`
 	Issue *timelineSourceIssue `json:"issue"`
@@ -130,6 +134,7 @@ type timelineSource struct {
 
 type timelineSourceIssue struct {
 	State       string                     `json:"state"`
+	ClosedAt    string                     `json:"closed_at"`
 	PullRequest *timelineSourcePullRequest `json:"pull_request"`
 }
 
@@ -597,35 +602,77 @@ func (c *Client) hasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		activityAfter = since.UTC()
 	}
 	for i, event := range events {
-		if !isPostLabelActivityEvent(event) {
+		if event.Event == "labeled" {
 			continue
 		}
-		createdAt, err := timelineEventTime(event)
-		if err != nil {
-			if !isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
-				return false, fmt.Errorf("parse timeline event time %s#%d: %w", repo, number, err)
+		for _, candidate := range crossReferenceResolutionTimes(event) {
+			if !candidate.IsZero() && candidate.UTC().After(activityAfter) {
+				return true, nil
 			}
 		}
-		occurredAfter := !createdAt.IsZero() && createdAt.After(activityAfter)
-		if !occurredAfter && isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
-			occurredAfter = true
-		}
-		if !occurredAfter {
+		actor := timelineActorLogin(event)
+		if actor != "" && actor == labeledBy {
 			continue
 		}
-		// Cross-references skip the self-actor filter: the actor is the
-		// referencing PR's author, not the daemon's label-applying identity,
-		// and a maintainer's own "Refs #X" PR merging is exactly the case we
-		// want to surface for re-triage.
-		if event.Event != "cross-referenced" {
-			actor := timelineActorLogin(event)
-			if actor != "" && actor == labeledBy {
-				continue
+		for _, candidate := range candidateActivityTimes(event) {
+			if !candidate.IsZero() && candidate.UTC().After(activityAfter) {
+				return true, nil
 			}
 		}
-		return true, nil
+		// Commits without parseable created_at fall back to timeline
+		// order: GitHub's commit timestamps reflect the author/commit
+		// time, which can be earlier than when the commit was pushed
+		// and thus appeared on the issue's timeline. If a dated
+		// neighbour after the label corroborates the ordering, treat
+		// the commit as post-label activity.
+		if event.Event == "committed" && isCommitAfterLabelByTimelineOrder(events, event, i, labeledIndex, since, labeledAt, labeledBy, updatedAt) {
+			return true, nil
+		}
 	}
 	return false, nil
+}
+
+// candidateActivityTimes returns every timestamp on an event that should
+// count as activity. For most events this is just created_at. Cross-
+// referenced events also expose the source PR's merged_at and closed_at
+// because those resolve the referencing issue without generating new
+// events on its own timeline.
+func candidateActivityTimes(event timelineItem) []time.Time {
+	var out []time.Time
+	if t, err := timelineEventTime(event); err == nil && !t.IsZero() {
+		out = append(out, t)
+	}
+	if event.Event == "cross-referenced" && event.Source != nil && event.Source.Issue != nil {
+		out = append(out, crossReferenceResolutionTimes(event)...)
+	}
+	return out
+}
+
+func crossReferenceResolutionTimes(event timelineItem) []time.Time {
+	if event.Event != "cross-referenced" || event.Source == nil || event.Source.Issue == nil || event.Source.Issue.PullRequest == nil {
+		return nil
+	}
+	issue := event.Source.Issue
+	var out []time.Time
+	if t := parseRFC3339OrZero(issue.PullRequest.MergedAt); !t.IsZero() {
+		out = append(out, t)
+	}
+	if t := parseRFC3339OrZero(issue.ClosedAt); !t.IsZero() {
+		out = append(out, t)
+	}
+	return out
+}
+
+func parseRFC3339OrZero(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func decodeTimelineItems(stdout []byte) ([]timelineItem, error) {
@@ -661,23 +708,8 @@ func timelineEventTime(event timelineItem) (time.Time, error) {
 		if strings.TrimSpace(event.SubmittedAt) != "" {
 			value = event.SubmittedAt
 		}
-	case "cross-referenced":
-		// Cross-references fire when the source PR is opened, but the merge
-		// is the meaningful activity: it's the moment the issue might be
-		// resolved. isPostLabelActivityEvent only admits cross-references
-		// whose source PR is merged, so MergedAt is set.
-		if mergedAt := mergedAtForCrossReference(event); mergedAt != "" {
-			value = mergedAt
-		}
 	}
 	return time.Parse(time.RFC3339, value)
-}
-
-func mergedAtForCrossReference(event timelineItem) string {
-	if event.Source == nil || event.Source.Issue == nil || event.Source.Issue.PullRequest == nil {
-		return ""
-	}
-	return strings.TrimSpace(event.Source.Issue.PullRequest.MergedAt)
 }
 
 const timelineOrderBoundaryTolerance = 5 * time.Minute
@@ -742,21 +774,6 @@ func timelineActorLogin(event timelineItem) string {
 		return login
 	}
 	return loginOf(event.User)
-}
-
-func isPostLabelActivityEvent(event timelineItem) bool {
-	switch event.Event {
-	case "commented", "committed", "reviewed":
-		return true
-	case "cross-referenced":
-		// Only count merged PR cross-references. Open or closed-unmerged
-		// referencing PRs aren't a resolution signal, and issue-to-issue
-		// cross-references (no pull_request field) can't address the item
-		// either - they'd at most warrant a dedicated check of their own.
-		return mergedAtForCrossReference(event) != ""
-	default:
-		return false
-	}
 }
 
 func repoFromEntry(entry listItem) string {

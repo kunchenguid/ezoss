@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kunchenguid/ezoss/internal/db"
@@ -92,6 +93,41 @@ type TriageResult struct {
 	TokensOut      int
 }
 
+// ActivityProbeState holds the per-repo throttle for the deep activity
+// probe pass. It is process-local on purpose: the bounded ListTriaged
+// delta query is the durable backstop, so a daemon restart re-probing
+// every repo once is harmless and avoids a schema migration.
+type ActivityProbeState struct {
+	mu          sync.Mutex
+	lastProbeAt map[string]time.Time
+}
+
+func NewActivityProbeState() *ActivityProbeState {
+	return &ActivityProbeState{lastProbeAt: make(map[string]time.Time)}
+}
+
+func (s *ActivityProbeState) shouldProbe(repoID string, now time.Time, interval time.Duration) bool {
+	if s == nil || interval <= 0 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	last, ok := s.lastProbeAt[repoID]
+	if !ok {
+		return true
+	}
+	return now.Sub(last) >= interval
+}
+
+func (s *ActivityProbeState) markProbed(repoID string, at time.Time) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastProbeAt[repoID] = at
+}
+
 type Poller struct {
 	DB                 *db.DB
 	GitHub             triageLister
@@ -125,6 +161,16 @@ type Poller struct {
 	// upstreams the user does not want in their inbox.
 	ContribIgnoreRepos       []string
 	PreserveExistingItemRole bool
+	// ActivityProbeInterval throttles the deep activity probe that
+	// detects post-triage timeline activity GitHub does not surface
+	// via issue.updated_at - in particular, "Refs"-style PRs being
+	// merged. Zero disables the probe.
+	ActivityProbeInterval time.Duration
+	// ActivityProbeState is the per-repo throttle for the probe.
+	// Nil disables the probe even when ActivityProbeInterval > 0;
+	// the daemon constructs one in cli/root.go and tests opt in by
+	// passing NewActivityProbeState().
+	ActivityProbeState *ActivityProbeState
 }
 
 func (p Poller) log() *slog.Logger {
@@ -151,6 +197,9 @@ func PollOnce(ctx context.Context, poller Poller, repos []string) error {
 
 	var errs []error
 	if err := runSyncStage(ctx, poller, repos, polledAt); err != nil {
+		errs = append(errs, err)
+	}
+	if err := runActivityProbeStage(ctx, poller, repos, polledAt); err != nil {
 		errs = append(errs, err)
 	}
 	contribRepos, err := runContribSweep(ctx, poller, repos, polledAt)
@@ -857,6 +906,91 @@ func shouldCheckPostLabelActivity(cached *db.Item, item ghclient.Item) bool {
 		return false
 	}
 	return !cached.LastEventAt.UTC().Equal(item.UpdatedAt.UTC())
+}
+
+// runActivityProbeStage walks every locally-known open triaged
+// maintainer item per repo and runs the timeline activity check
+// unconditionally, throttled by Poller.ActivityProbeInterval.
+//
+// The bounded ListTriaged delta query in refreshTriagedItems uses
+// `updated:>=<last_refresh>` and therefore excludes items whose
+// GitHub updated_at has not advanced. Non-self timeline activity
+// that does not bump updated_at - notably "Refs"-style PRs being
+// merged - would otherwise never re-queue the issue. This stage is
+// the catch-all.
+//
+// The watermark is the latest recommendation timestamp for the item:
+// "what was the agent looking at the last time it ran here". Probe
+// asks ghclient "any non-self activity after the watermark?" If yes,
+// gh_triaged is cleared and Stage C re-triages.
+func runActivityProbeStage(ctx context.Context, poller Poller, repos []string, polledAt time.Time) error {
+	if poller.ActivityProbeInterval <= 0 || poller.ActivityProbeState == nil {
+		return nil
+	}
+	sinceChecker, ok := poller.GitHub.(labelActivitySinceChecker)
+	if !ok {
+		return nil
+	}
+
+	var errs []error
+	for _, repoID := range repos {
+		if !poller.ActivityProbeState.shouldProbe(repoID, polledAt, poller.ActivityProbeInterval) {
+			continue
+		}
+		if err := probeActivityForRepo(ctx, poller, sinceChecker, repoID); err != nil {
+			poller.log().Warn("activity probe failed", "repo", repoID, "err", err)
+			errs = append(errs, fmt.Errorf("probe activity %s: %w", repoID, err))
+			continue
+		}
+		poller.ActivityProbeState.markProbed(repoID, polledAt)
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func probeActivityForRepo(ctx context.Context, poller Poller, checker labelActivitySinceChecker, repoID string) error {
+	items, err := poller.DB.ListMaintainerOpenTriagedItems(repoID)
+	if err != nil {
+		return fmt.Errorf("list maintainer open triaged items: %w", err)
+	}
+	for _, item := range items {
+		watermark, err := poller.DB.LatestRecommendationCreatedAtForItem(item.ID)
+		if err != nil {
+			poller.log().Warn("activity probe watermark lookup failed",
+				"repo", repoID,
+				"number", item.Number,
+				"err", err,
+			)
+			continue
+		}
+		hasActivity, err := checker.HasActivityAfterLabelSince(ctx, repoID, item.Number, triagedLabel, watermark)
+		if err != nil {
+			poller.log().Warn("activity probe item failed",
+				"repo", repoID,
+				"number", item.Number,
+				"err", err,
+			)
+			continue
+		}
+		if !hasActivity {
+			continue
+		}
+		cleared := item
+		cleared.GHTriaged = false
+		if err := poller.DB.UpsertItem(cleared); err != nil {
+			return fmt.Errorf("clear gh_triaged for item %d: %w", item.Number, err)
+		}
+		if err := poller.DB.MarkActiveRecommendationsForItemSuperseded(item.ID, time.Now().UTC()); err != nil {
+			return fmt.Errorf("supersede active recommendations for item %d: %w", item.Number, err)
+		}
+		poller.log().Info("activity probe re-queued item",
+			"repo", repoID,
+			"number", item.Number,
+		)
+	}
+	return nil
 }
 
 func shouldRefreshTriagedItems(poller Poller, repoID string, polledAt time.Time) bool {

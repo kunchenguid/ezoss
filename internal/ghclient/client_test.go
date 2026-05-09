@@ -1333,25 +1333,12 @@ func TestHasActivityAfterLabelSinceUpdatedUsesCommitTimelineOrderWithoutSelfBoun
 	}
 }
 
-func TestHasActivityAfterLabelDetectsMergedCrossReferencedPR(t *testing.T) {
-	t.Parallel()
-
-	runner := &stubRunner{responses: []stubResponse{{stdout: `[
-		{"event":"labeled","created_at":"2026-04-29T05:34:02Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
-		{"event":"cross-referenced","created_at":"2026-04-30T03:02:55Z","actor":{"login":"arcadia"},"source":{"type":"issue","issue":{"state":"closed","pull_request":{"merged_at":"2026-05-07T04:08:18Z"}}}}
-	]`}}}
-	client := New(runner)
-
-	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 98, "ezoss/triaged")
-	if err != nil {
-		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
-	}
-	if !got {
-		t.Fatal("HasActivityAfterLabel = false, want true (merged referencing PR should re-queue)")
-	}
-}
-
-func TestHasActivityAfterLabelIgnoresOpenCrossReferencedPR(t *testing.T) {
+// TestHasActivityAfterLabelDetectsCrossReferencedPROpen verifies that
+// opening a PR that mentions the issue counts as activity even though
+// the cross-referenced event was previously filtered out by the
+// allowlist. This is the broad-detection guarantee: any non-self
+// timeline event after the label is activity.
+func TestHasActivityAfterLabelDetectsCrossReferencedPROpen(t *testing.T) {
 	t.Parallel()
 
 	runner := &stubRunner{responses: []stubResponse{{stdout: `[
@@ -1364,86 +1351,77 @@ func TestHasActivityAfterLabelIgnoresOpenCrossReferencedPR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
 	}
-	if got {
-		t.Fatal("HasActivityAfterLabel = true, want false (open referencing PR should not re-queue)")
+	if !got {
+		t.Fatal("HasActivityAfterLabel = false, want true (open referencing PR is non-self activity)")
 	}
 }
 
-func TestHasActivityAfterLabelIgnoresClosedUnmergedCrossReferencedPR(t *testing.T) {
+// TestHasActivityAfterLabelDetectsLinkedPRMerge covers the gnhf #98
+// scenario: a "Refs #X" PR is opened (cross-ref event) and later
+// merged. GitHub does not bump issue.updated_at on the merge, so the
+// only signal we have is the source PR's merged_at on the existing
+// cross-ref event. The fingerprint must read it.
+func TestHasActivityAfterLabelDetectsLinkedPRMerge(t *testing.T) {
 	t.Parallel()
 
 	runner := &stubRunner{responses: []stubResponse{{stdout: `[
 		{"event":"labeled","created_at":"2026-04-29T05:34:02Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
-		{"event":"cross-referenced","created_at":"2026-04-30T03:02:55Z","actor":{"login":"arcadia"},"source":{"type":"issue","issue":{"state":"closed","pull_request":{"merged_at":null}}}}
+		{"event":"cross-referenced","created_at":"2026-04-30T03:02:55Z","actor":{"login":"arcadia"},"source":{"type":"issue","issue":{"state":"closed","closed_at":"2026-05-07T04:08:18Z","pull_request":{"merged_at":"2026-05-07T04:08:18Z"}}}}
 	]`}}}
 	client := New(runner)
 
-	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 98, "ezoss/triaged")
+	// since past PR-open but before PR-merge - the only thing newer
+	// than `since` is the merged_at on the source PR.
+	since := time.Date(2026, time.May, 1, 0, 0, 0, 0, time.UTC)
+	got, err := client.HasActivityAfterLabelSince(context.Background(), "acme/widgets", 98, "ezoss/triaged", since)
 	if err != nil {
-		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
-	}
-	if got {
-		t.Fatal("HasActivityAfterLabel = true, want false (closed-but-unmerged referencing PR should not re-queue)")
-	}
-}
-
-func TestHasActivityAfterLabelIgnoresCrossReferencedIssueWithoutPR(t *testing.T) {
-	t.Parallel()
-
-	runner := &stubRunner{responses: []stubResponse{{stdout: `[
-		{"event":"labeled","created_at":"2026-04-29T05:34:02Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
-		{"event":"cross-referenced","created_at":"2026-04-30T03:02:55Z","actor":{"login":"arcadia"},"source":{"type":"issue","issue":{"state":"open"}}}
-	]`}}}
-	client := New(runner)
-
-	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 98, "ezoss/triaged")
-	if err != nil {
-		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
-	}
-	if got {
-		t.Fatal("HasActivityAfterLabel = true, want false (issue-to-issue cross-reference should not re-queue)")
-	}
-}
-
-func TestHasActivityAfterLabelDetectsMergedCrossReferencedPRBySameActor(t *testing.T) {
-	t.Parallel()
-
-	// A maintainer's own "Refs #X" PR merging is exactly the case we want to
-	// re-triage; the self-actor filter that suppresses comments/commits by the
-	// labeler should not apply to cross-references because the actor here is
-	// the source PR author rather than the daemon performing label-time work.
-	runner := &stubRunner{responses: []stubResponse{{stdout: `[
-		{"event":"labeled","created_at":"2026-04-29T05:34:02Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
-		{"event":"cross-referenced","created_at":"2026-04-30T03:02:55Z","actor":{"login":"kunchenguid"},"source":{"type":"issue","issue":{"state":"closed","pull_request":{"merged_at":"2026-05-07T04:08:18Z"}}}}
-	]`}}}
-	client := New(runner)
-
-	got, err := client.HasActivityAfterLabel(context.Background(), "acme/widgets", 98, "ezoss/triaged")
-	if err != nil {
-		t.Fatalf("HasActivityAfterLabel returned error: %v", err)
+		t.Fatalf("HasActivityAfterLabelSince returned error: %v", err)
 	}
 	if !got {
-		t.Fatal("HasActivityAfterLabel = false, want true (merged self-authored referencing PR should re-queue)")
+		t.Fatal("HasActivityAfterLabelSince = false, want true (linked PR merge after since must register)")
 	}
 }
 
-func TestHasActivityAfterLabelSinceComparesMergedAtForCrossReferenced(t *testing.T) {
+func TestHasActivityAfterLabelDetectsSelfAuthoredLinkedPRMerge(t *testing.T) {
 	t.Parallel()
 
-	// since is after merged_at - already accounted for, no re-queue.
 	runner := &stubRunner{responses: []stubResponse{{stdout: `[
 		{"event":"labeled","created_at":"2026-04-29T05:34:02Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
-		{"event":"cross-referenced","created_at":"2026-04-30T03:02:55Z","actor":{"login":"arcadia"},"source":{"type":"issue","issue":{"state":"closed","pull_request":{"merged_at":"2026-05-07T04:08:18Z"}}}}
+		{"event":"cross-referenced","created_at":"2026-04-30T03:02:55Z","actor":{"login":"kunchenguid"},"source":{"type":"issue","issue":{"state":"closed","closed_at":"2026-05-07T04:08:18Z","pull_request":{"merged_at":"2026-05-07T04:08:18Z"}}}}
 	]`}}}
 	client := New(runner)
 
-	since := time.Date(2026, time.May, 8, 0, 0, 0, 0, time.UTC)
+	since := time.Date(2026, time.May, 1, 0, 0, 0, 0, time.UTC)
+	got, err := client.HasActivityAfterLabelSince(context.Background(), "acme/widgets", 98, "ezoss/triaged", since)
+	if err != nil {
+		t.Fatalf("HasActivityAfterLabelSince returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("HasActivityAfterLabelSince = false, want true for self-authored linked PR merge")
+	}
+}
+
+// TestHasActivityAfterLabelIgnoresLinkedPROpenWhenSinceIsLater verifies
+// that once the fingerprint watermark has advanced past the cross-ref
+// event and no further resolution has happened, we don't keep
+// re-triggering on the same data.
+func TestHasActivityAfterLabelIgnoresLinkedPROpenWhenSinceIsLater(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"labeled","created_at":"2026-04-29T05:34:02Z","actor":{"login":"kunchenguid"},"label":{"name":"ezoss/triaged"}},
+		{"event":"cross-referenced","created_at":"2026-04-30T03:02:55Z","actor":{"login":"arcadia"},"source":{"type":"issue","issue":{"state":"open","pull_request":{"merged_at":null}}}}
+	]`}}}
+	client := New(runner)
+
+	// Watermark already past the cross-ref event; nothing newer.
+	since := time.Date(2026, time.May, 1, 0, 0, 0, 0, time.UTC)
 	got, err := client.HasActivityAfterLabelSince(context.Background(), "acme/widgets", 98, "ezoss/triaged", since)
 	if err != nil {
 		t.Fatalf("HasActivityAfterLabelSince returned error: %v", err)
 	}
 	if got {
-		t.Fatal("HasActivityAfterLabelSince = true, want false (merged_at older than since)")
+		t.Fatal("HasActivityAfterLabelSince = true, want false (no resolution since watermark)")
 	}
 }
 

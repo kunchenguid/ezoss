@@ -16,6 +16,30 @@ func (d *DB) CountActiveRecommendations() (int, error) {
 	return count, nil
 }
 
+// LatestRecommendationCreatedAtForItem returns the most recent
+// recommendation timestamp for the given item, or the zero time when
+// no recommendation exists. Includes superseded recommendations - the
+// caller wants the watermark of "when did the agent last evaluate
+// this item", regardless of whether the prior recommendation is still
+// active.
+func (d *DB) LatestRecommendationCreatedAtForItem(itemID string) (time.Time, error) {
+	var createdAt sql.NullInt64
+	err := d.sql.QueryRow(
+		`SELECT MAX(created_at) FROM recommendations WHERE item_id = ?`,
+		itemID,
+	).Scan(&createdAt)
+	if err == sql.ErrNoRows {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("latest recommendation created_at for item %s: %w", itemID, err)
+	}
+	if !createdAt.Valid {
+		return time.Time{}, nil
+	}
+	return time.Unix(createdAt.Int64, 0).UTC(), nil
+}
+
 func (d *DB) RecommendationTokenTotalsForItem(itemID string) (RecommendationTokenTotals, error) {
 	var totals RecommendationTokenTotals
 	err := d.sql.QueryRow(
@@ -386,6 +410,14 @@ func (d *DB) MarkRecommendationSuperseded(id string, supersededAt time.Time) err
 	_, err := d.sql.Exec(`UPDATE recommendations SET superseded_at = ? WHERE id = ?`, supersededAt.Unix(), id)
 	if err != nil {
 		return fmt.Errorf("mark recommendation superseded: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) MarkActiveRecommendationsForItemSuperseded(itemID string, supersededAt time.Time) error {
+	_, err := d.sql.Exec(`UPDATE recommendations SET superseded_at = ? WHERE item_id = ? AND superseded_at IS NULL`, supersededAt.Unix(), itemID)
+	if err != nil {
+		return fmt.Errorf("mark active recommendations superseded for item %s: %w", itemID, err)
 	}
 	return nil
 }
