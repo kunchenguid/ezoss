@@ -112,6 +112,7 @@ type timelineItem struct {
 	Actor       *ghLogin                `json:"actor"`
 	User        *ghLogin                `json:"user"`
 	Label       *timelineLabel          `json:"label"`
+	Source      *timelineSource         `json:"source"`
 }
 
 type timelineCommitIdentity struct {
@@ -120,6 +121,20 @@ type timelineCommitIdentity struct {
 
 type timelineLabel struct {
 	Name string `json:"name"`
+}
+
+type timelineSource struct {
+	Type  string               `json:"type"`
+	Issue *timelineSourceIssue `json:"issue"`
+}
+
+type timelineSourceIssue struct {
+	State       string                     `json:"state"`
+	PullRequest *timelineSourcePullRequest `json:"pull_request"`
+}
+
+type timelineSourcePullRequest struct {
+	MergedAt string `json:"merged_at"`
 }
 
 func New(runner Runner) *Client {
@@ -582,7 +597,7 @@ func (c *Client) hasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		activityAfter = since.UTC()
 	}
 	for i, event := range events {
-		if !isPostLabelActivityEvent(event.Event) {
+		if !isPostLabelActivityEvent(event) {
 			continue
 		}
 		createdAt, err := timelineEventTime(event)
@@ -598,9 +613,15 @@ func (c *Client) hasActivityAfterLabelSince(ctx context.Context, repo string, nu
 		if !occurredAfter {
 			continue
 		}
-		actor := timelineActorLogin(event)
-		if actor != "" && actor == labeledBy {
-			continue
+		// Cross-references skip the self-actor filter: the actor is the
+		// referencing PR's author, not the daemon's label-applying identity,
+		// and a maintainer's own "Refs #X" PR merging is exactly the case we
+		// want to surface for re-triage.
+		if event.Event != "cross-referenced" {
+			actor := timelineActorLogin(event)
+			if actor != "" && actor == labeledBy {
+				continue
+			}
 		}
 		return true, nil
 	}
@@ -640,8 +661,23 @@ func timelineEventTime(event timelineItem) (time.Time, error) {
 		if strings.TrimSpace(event.SubmittedAt) != "" {
 			value = event.SubmittedAt
 		}
+	case "cross-referenced":
+		// Cross-references fire when the source PR is opened, but the merge
+		// is the meaningful activity: it's the moment the issue might be
+		// resolved. isPostLabelActivityEvent only admits cross-references
+		// whose source PR is merged, so MergedAt is set.
+		if mergedAt := mergedAtForCrossReference(event); mergedAt != "" {
+			value = mergedAt
+		}
 	}
 	return time.Parse(time.RFC3339, value)
+}
+
+func mergedAtForCrossReference(event timelineItem) string {
+	if event.Source == nil || event.Source.Issue == nil || event.Source.Issue.PullRequest == nil {
+		return ""
+	}
+	return strings.TrimSpace(event.Source.Issue.PullRequest.MergedAt)
 }
 
 const timelineOrderBoundaryTolerance = 5 * time.Minute
@@ -708,10 +744,16 @@ func timelineActorLogin(event timelineItem) string {
 	return loginOf(event.User)
 }
 
-func isPostLabelActivityEvent(event string) bool {
-	switch event {
+func isPostLabelActivityEvent(event timelineItem) bool {
+	switch event.Event {
 	case "commented", "committed", "reviewed":
 		return true
+	case "cross-referenced":
+		// Only count merged PR cross-references. Open or closed-unmerged
+		// referencing PRs aren't a resolution signal, and issue-to-issue
+		// cross-references (no pull_request field) can't address the item
+		// either - they'd at most warrant a dedicated check of their own.
+		return mergedAtForCrossReference(event) != ""
 	default:
 		return false
 	}
