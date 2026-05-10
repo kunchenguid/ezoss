@@ -50,6 +50,22 @@ type itemGetter interface {
 	GetItem(ctx context.Context, repo string, kind sharedtypes.ItemKind, number int) (ghclient.Item, error)
 }
 
+// currentUserResolver lets the poller learn the authenticated user's
+// GitHub login. It is optional - tests using minimal stubs don't need to
+// implement it; mock daemons skip the self-author filter entirely.
+type currentUserResolver interface {
+	CurrentUser(ctx context.Context) (string, error)
+}
+
+// nonSelfActivityChecker reports whether a PR's timeline contains any
+// activity by an actor other than the running user that occurred at or
+// after since. A zero since scans the whole timeline. It is the signal
+// we use to re-queue self-authored maintainer PRs once someone else
+// engages.
+type nonSelfActivityChecker interface {
+	HasNonSelfActivity(ctx context.Context, repo string, number int, selfLogin string, since time.Time) (bool, error)
+}
+
 type labelActivityChecker interface {
 	HasActivityAfterLabel(ctx context.Context, repo string, number int, label string) (bool, error)
 }
@@ -287,12 +303,33 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 		return fmt.Errorf("poll repo %s: upsert repo: %w", repoID, err)
 	}
 
+	// Self-authored PRs in maintainer (configured) repos are not interesting
+	// for triage - the user already knows what's in their own work. We
+	// flip gh_triaged on locally so Stage C skips them. Issues are out
+	// of scope: a self-filed bug report may still warrant a triage
+	// recommendation. Contributor-mode repos go through PreserveExistingItemRole
+	// and are handled as authored work by Stage A.2 instead.
+	selfLogin := ""
+	if !poller.PreserveExistingItemRole {
+		selfLogin = resolveSelfLogin(ctx, poller)
+	}
+
+	activityChecker, _ := poller.GitHub.(nonSelfActivityChecker)
+
 	seenOpenUntriaged := make(map[int]struct{}, len(items))
 	for _, item := range items {
 		if isOlderThan(item.UpdatedAt, polledAt, poller.IgnoreOlderThan) {
 			continue
 		}
 		seenOpenUntriaged[item.Number] = struct{}{}
+		existing, err := poller.DB.GetItem(itemID(repoID, item.Number))
+		if err != nil {
+			return fmt.Errorf("poll repo %s: get item %d: %w", repoID, item.Number, err)
+		}
+		ghTriaged := hasLabel(item.Labels, triagedLabel)
+		if !ghTriaged && isSelfAuthoredMaintainerPR(item, selfLogin) {
+			ghTriaged = selfPRGHTriaged(ctx, poller, activityChecker, repoID, item, selfLogin, existing)
+		}
 		itemRecord := db.Item{
 			ID:          itemID(repoID, item.Number),
 			RepoID:      repoID,
@@ -302,13 +339,9 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 			Author:      item.Author,
 			State:       item.State,
 			IsDraft:     item.IsDraft,
-			GHTriaged:   hasLabel(item.Labels, triagedLabel),
+			GHTriaged:   ghTriaged,
 			WaitingOn:   sharedtypes.WaitingOnNone,
 			LastEventAt: timePtr(item.UpdatedAt.UTC()),
-		}
-		existing, err := poller.DB.GetItem(itemRecord.ID)
-		if err != nil {
-			return fmt.Errorf("poll repo %s: get item %d: %w", repoID, item.Number, err)
 		}
 		if existing != nil {
 			if poller.PreserveExistingItemRole {
@@ -322,6 +355,15 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 		}
 		if err := poller.DB.UpsertItem(itemRecord); err != nil {
 			return fmt.Errorf("poll repo %s: upsert item %d: %w", repoID, item.Number, err)
+		}
+		// One-shot backfill: if a self-authored PR is being suppressed
+		// for the first time but had recommendations from earlier
+		// cycles, drop them from the inbox so the user does not have
+		// to dismiss their own work by hand.
+		if itemRecord.GHTriaged && existing != nil && !existing.GHTriaged && isSelfAuthoredMaintainerPR(item, selfLogin) {
+			if err := poller.DB.MarkActiveRecommendationsForItemSuperseded(itemRecord.ID, polledAt); err != nil {
+				return fmt.Errorf("poll repo %s: supersede self-authored recs for %d: %w", repoID, item.Number, err)
+			}
 		}
 	}
 	if err := reconcileMissingActiveRecommendations(ctx, poller, repoID, seenOpenUntriaged, polledAt); err != nil {
@@ -1182,6 +1224,70 @@ func supersedeActiveStaleRecommendationsForItem(database *db.DB, itemID string, 
 
 func itemID(repo string, number int) string {
 	return fmt.Sprintf("%s#%d", repo, number)
+}
+
+// resolveSelfLogin returns the authenticated GitHub login for the
+// running user, or "" if the GitHub client cannot resolve it. Callers
+// treat "" as "skip the self-author filter" rather than as an error,
+// since an unreachable gh CLI should not block the rest of the sync.
+func resolveSelfLogin(ctx context.Context, poller Poller) string {
+	resolver, ok := poller.GitHub.(currentUserResolver)
+	if !ok {
+		return ""
+	}
+	login, err := resolver.CurrentUser(ctx)
+	if err != nil {
+		poller.log().Warn("resolve current user", "err", err)
+		return ""
+	}
+	return strings.TrimSpace(login)
+}
+
+// selfPRGHTriaged decides whether a self-authored maintainer PR should
+// be marked locally triaged this cycle. The default is "yes" (suppress
+// it from the inbox), but if the PR's timeline shows any non-self
+// activity since we last saw it we flip the gate off so Stage C
+// re-triages with that new context. Unchanged PRs (UpdatedAt has not
+// moved since the cached LastEventAt) are kept suppressed without an
+// extra timeline call - that's how we avoid spamming the GitHub API on
+// every poll cycle. The timeline scan is bounded by the prior
+// LastEventAt so old foreign activity (e.g. a CI bot comment from
+// months ago) does not keep re-queueing the PR every time UpdatedAt
+// advances; first-sighting (existing == nil) scans the full timeline.
+func selfPRGHTriaged(ctx context.Context, poller Poller, checker nonSelfActivityChecker, repoID string, item ghclient.Item, selfLogin string, existing *db.Item) bool {
+	if existing != nil && existing.GHTriaged && existing.LastEventAt != nil && existing.LastEventAt.Equal(item.UpdatedAt.UTC()) {
+		return true
+	}
+	if checker == nil {
+		return true
+	}
+	var since time.Time
+	if existing != nil && existing.LastEventAt != nil {
+		since = existing.LastEventAt.UTC()
+	}
+	hasOther, err := checker.HasNonSelfActivity(ctx, repoID, item.Number, selfLogin, since)
+	if err != nil {
+		// On failure, fall back to the safe option: leave the PR
+		// suppressed. The next cycle that sees a fresh UpdatedAt
+		// will retry the timeline check.
+		poller.log().Warn("non-self activity check failed", "repo", repoID, "number", item.Number, "err", err)
+		return true
+	}
+	return !hasOther
+}
+
+// isSelfAuthoredMaintainerPR reports whether item is a PR authored by
+// the running user. It is only consulted for maintainer-role syncs
+// (PreserveExistingItemRole == false); contributor sweep PRs and issues
+// authored by the user are handled separately.
+func isSelfAuthoredMaintainerPR(item ghclient.Item, selfLogin string) bool {
+	if selfLogin == "" {
+		return false
+	}
+	if item.Kind != sharedtypes.ItemKindPR {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(item.Author), selfLogin)
 }
 
 func hasLabel(labels []string, want string) bool {

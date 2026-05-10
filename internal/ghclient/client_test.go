@@ -1445,6 +1445,159 @@ func TestHasActivityAfterLabelDecodesConcatenatedPaginatedTimeline(t *testing.T)
 	}
 }
 
+func TestCurrentUserReturnsLoginAndCaches(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: "kunchenguid\n"}}}
+	client := New(runner)
+
+	first, err := client.CurrentUser(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentUser first call: %v", err)
+	}
+	if first != "kunchenguid" {
+		t.Fatalf("CurrentUser = %q, want %q", first, "kunchenguid")
+	}
+
+	second, err := client.CurrentUser(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentUser second call: %v", err)
+	}
+	if second != "kunchenguid" {
+		t.Fatalf("CurrentUser cached = %q, want %q", second, "kunchenguid")
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("CurrentUser made %d gh calls, want 1 (cached)", len(runner.calls))
+	}
+	args := runner.calls[0].args
+	if len(args) < 3 || args[0] != "api" || args[1] != "user" {
+		t.Fatalf("CurrentUser called gh with %v, want [api user ...]", args)
+	}
+	if !containsArg(args, "--jq") {
+		t.Fatalf("CurrentUser missing --jq filter: %v", args)
+	}
+}
+
+func TestHasNonSelfActivityReturnsFalseForSelfOnlyTimeline(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"committed","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"}},
+		{"event":"head_ref_force_pushed","created_at":"2026-05-03T19:08:00Z","actor":{"login":"kunchenguid"}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasNonSelfActivity(context.Background(), "kunchenguid/widgets", 7, "kunchenguid", time.Time{})
+	if err != nil {
+		t.Fatalf("HasNonSelfActivity: %v", err)
+	}
+	if got {
+		t.Fatal("HasNonSelfActivity = true on self-only timeline, want false")
+	}
+}
+
+func TestHasNonSelfActivityDetectsForeignComment(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"committed","created_at":"2026-05-03T19:07:15Z","actor":{"login":"kunchenguid"}},
+		{"event":"commented","created_at":"2026-05-03T19:14:03Z","user":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasNonSelfActivity(context.Background(), "kunchenguid/widgets", 7, "kunchenguid", time.Time{})
+	if err != nil {
+		t.Fatalf("HasNonSelfActivity: %v", err)
+	}
+	if !got {
+		t.Fatal("HasNonSelfActivity = false despite foreign comment, want true")
+	}
+}
+
+func TestHasNonSelfActivityIgnoresEmptyActorEvents(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"subscribed","created_at":"2026-05-03T19:07:15Z"}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasNonSelfActivity(context.Background(), "kunchenguid/widgets", 7, "kunchenguid", time.Time{})
+	if err != nil {
+		t.Fatalf("HasNonSelfActivity: %v", err)
+	}
+	if got {
+		t.Fatal("HasNonSelfActivity = true on empty-actor events, want false")
+	}
+}
+
+func TestHasNonSelfActivityIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"commented","created_at":"2026-05-03T19:14:03Z","user":{"login":"KunchenGUID"}}
+	]`}}}
+	client := New(runner)
+
+	got, err := client.HasNonSelfActivity(context.Background(), "kunchenguid/widgets", 7, "kunchenguid", time.Time{})
+	if err != nil {
+		t.Fatalf("HasNonSelfActivity: %v", err)
+	}
+	if got {
+		t.Fatal("HasNonSelfActivity = true for differently-cased self login, want false")
+	}
+}
+
+func TestHasNonSelfActivityIgnoresForeignEventsBeforeSince(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"commented","created_at":"2026-01-01T00:00:00Z","user":{"login":"old-bot"}},
+		{"event":"committed","created_at":"2026-05-04T18:00:00Z","actor":{"login":"kunchenguid"}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, 5, 3, 0, 0, 0, 0, time.UTC)
+	got, err := client.HasNonSelfActivity(context.Background(), "kunchenguid/widgets", 7, "kunchenguid", since)
+	if err != nil {
+		t.Fatalf("HasNonSelfActivity: %v", err)
+	}
+	if got {
+		t.Fatal("HasNonSelfActivity = true despite only old foreign activity, want false (since bound should filter it)")
+	}
+}
+
+func TestHasNonSelfActivityDetectsForeignEventAtOrAfterSince(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"commented","created_at":"2026-01-01T00:00:00Z","user":{"login":"old-bot"}},
+		{"event":"commented","created_at":"2026-05-04T18:00:00Z","user":{"login":"alice"}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, 5, 3, 0, 0, 0, 0, time.UTC)
+	got, err := client.HasNonSelfActivity(context.Background(), "kunchenguid/widgets", 7, "kunchenguid", since)
+	if err != nil {
+		t.Fatalf("HasNonSelfActivity: %v", err)
+	}
+	if !got {
+		t.Fatal("HasNonSelfActivity = false for foreign comment after since, want true")
+	}
+}
+
+func TestCurrentUserPropagatesError(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{err: errors.New("boom")}}}
+	client := New(runner)
+
+	if _, err := client.CurrentUser(context.Background()); err == nil {
+		t.Fatal("CurrentUser err = nil, want non-nil")
+	}
+}
+
 type stubRunner struct {
 	responses []stubResponse
 	calls     []stubCall

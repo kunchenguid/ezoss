@@ -95,6 +95,373 @@ func TestPollOnceUpsertsRepoAndItems(t *testing.T) {
 	}
 }
 
+func TestSyncRepoDataMarksSelfAuthoredMaintainerPRsLocallyTriaged(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	updated := time.Unix(1713514800, 0).UTC()
+	client := &stubTriageClient{
+		selfLogin: "kun",
+		itemsByRepo: map[string][]ghclient.Item{
+			"kun/widgets": {
+				{
+					Repo:      "kun/widgets",
+					Kind:      sharedtypes.ItemKindPR,
+					Number:    7,
+					Title:     "feat: my own change",
+					Author:    "kun",
+					State:     sharedtypes.ItemStateOpen,
+					URL:       "https://github.com/kun/widgets/pull/7",
+					UpdatedAt: updated,
+				},
+				{
+					Repo:      "kun/widgets",
+					Kind:      sharedtypes.ItemKindPR,
+					Number:    8,
+					Title:     "feat: someone else's PR",
+					Author:    "alice",
+					State:     sharedtypes.ItemStateOpen,
+					URL:       "https://github.com/kun/widgets/pull/8",
+					UpdatedAt: updated,
+				},
+				{
+					Repo:      "kun/widgets",
+					Kind:      sharedtypes.ItemKindIssue,
+					Number:    9,
+					Title:     "bug: my own bug report",
+					Author:    "kun",
+					State:     sharedtypes.ItemStateOpen,
+					URL:       "https://github.com/kun/widgets/issues/9",
+					UpdatedAt: updated,
+				},
+			},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client}, []string{"kun/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	selfPR, _ := database.GetItem("kun/widgets#7")
+	if selfPR == nil {
+		t.Fatal("expected self-authored PR to be stored")
+	}
+	if !selfPR.GHTriaged {
+		t.Fatalf("self-authored PR GHTriaged = false, want true (locally triaged)")
+	}
+
+	otherPR, _ := database.GetItem("kun/widgets#8")
+	if otherPR == nil {
+		t.Fatal("expected other-authored PR to be stored")
+	}
+	if otherPR.GHTriaged {
+		t.Fatalf("other-authored PR GHTriaged = true, want false")
+	}
+
+	selfIssue, _ := database.GetItem("kun/widgets#9")
+	if selfIssue == nil {
+		t.Fatal("expected self-authored issue to be stored")
+	}
+	if selfIssue.GHTriaged {
+		t.Fatalf("self-authored issue GHTriaged = true, want false (issues are not skipped)")
+	}
+}
+
+func TestSyncRepoDataRequeuesSelfAuthoredPRWithNonSelfActivity(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	updated := time.Unix(1713514800, 0).UTC()
+	client := &stubTriageClient{
+		selfLogin: "kun",
+		nonSelfActivityByKey: map[string]bool{
+			"kun/widgets#7": true,
+		},
+		itemsByRepo: map[string][]ghclient.Item{
+			"kun/widgets": {{
+				Repo:      "kun/widgets",
+				Kind:      sharedtypes.ItemKindPR,
+				Number:    7,
+				Title:     "feat: my own change",
+				Author:    "kun",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/kun/widgets/pull/7",
+				UpdatedAt: updated,
+			}},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client}, []string{"kun/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	pr, _ := database.GetItem("kun/widgets#7")
+	if pr == nil {
+		t.Fatal("expected PR to be stored")
+	}
+	if pr.GHTriaged {
+		t.Fatal("self-authored PR with foreign activity GHTriaged = true, want false (must re-queue)")
+	}
+}
+
+func TestSyncRepoDataBoundsTimelineScanByPriorLastEventAt(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	prior := time.Unix(1713514800, 0).UTC()
+	updated := prior.Add(2 * time.Hour)
+	if err := database.UpsertRepo(db.Repo{ID: "kun/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:          "kun/widgets#7",
+		RepoID:      "kun/widgets",
+		Kind:        sharedtypes.ItemKindPR,
+		Number:      7,
+		Title:       "feat: my own change",
+		Author:      "kun",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   true,
+		LastEventAt: timePtr(prior),
+	}); err != nil {
+		t.Fatalf("UpsertItem: %v", err)
+	}
+
+	client := &stubTriageClient{
+		selfLogin: "kun",
+		itemsByRepo: map[string][]ghclient.Item{
+			"kun/widgets": {{
+				Repo:      "kun/widgets",
+				Kind:      sharedtypes.ItemKindPR,
+				Number:    7,
+				Title:     "feat: my own change",
+				Author:    "kun",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/kun/widgets/pull/7",
+				UpdatedAt: updated,
+			}},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client}, []string{"kun/widgets"}); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	if client.nonSelfActivityCalls != 1 {
+		t.Fatalf("HasNonSelfActivity calls = %d, want 1", client.nonSelfActivityCalls)
+	}
+	if !client.lastNonSelfActivitySince.Equal(prior) {
+		t.Fatalf("HasNonSelfActivity since = %v, want %v (prior LastEventAt)", client.lastNonSelfActivitySince, prior)
+	}
+}
+
+func TestSyncRepoDataScansFullTimelineForFirstSightingSelfPR(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	updated := time.Unix(1713514800, 0).UTC()
+	client := &stubTriageClient{
+		selfLogin: "kun",
+		itemsByRepo: map[string][]ghclient.Item{
+			"kun/widgets": {{
+				Repo:      "kun/widgets",
+				Kind:      sharedtypes.ItemKindPR,
+				Number:    7,
+				Title:     "feat: my own change",
+				Author:    "kun",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/kun/widgets/pull/7",
+				UpdatedAt: updated,
+			}},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client}, []string{"kun/widgets"}); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	if client.nonSelfActivityCalls != 1 {
+		t.Fatalf("HasNonSelfActivity calls = %d, want 1", client.nonSelfActivityCalls)
+	}
+	if !client.lastNonSelfActivitySince.IsZero() {
+		t.Fatalf("HasNonSelfActivity since = %v, want zero (full timeline scan for first sighting)", client.lastNonSelfActivitySince)
+	}
+}
+
+func TestSyncRepoDataSkipsTimelineCheckWhenSelfPRUnchanged(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	updated := time.Unix(1713514800, 0).UTC()
+	if err := database.UpsertRepo(db.Repo{ID: "kun/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:          "kun/widgets#7",
+		RepoID:      "kun/widgets",
+		Kind:        sharedtypes.ItemKindPR,
+		Number:      7,
+		Title:       "feat: my own change",
+		Author:      "kun",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   true,
+		LastEventAt: timePtr(updated),
+	}); err != nil {
+		t.Fatalf("UpsertItem: %v", err)
+	}
+
+	client := &stubTriageClient{
+		selfLogin: "kun",
+		itemsByRepo: map[string][]ghclient.Item{
+			"kun/widgets": {{
+				Repo:      "kun/widgets",
+				Kind:      sharedtypes.ItemKindPR,
+				Number:    7,
+				Title:     "feat: my own change",
+				Author:    "kun",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/kun/widgets/pull/7",
+				UpdatedAt: updated,
+			}},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client}, []string{"kun/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	if client.nonSelfActivityCalls != 0 {
+		t.Fatalf("HasNonSelfActivity called %d times for unchanged self PR, want 0", client.nonSelfActivityCalls)
+	}
+
+	pr, _ := database.GetItem("kun/widgets#7")
+	if pr == nil || !pr.GHTriaged {
+		t.Fatalf("PR after sync = %#v, want GHTriaged=true", pr)
+	}
+}
+
+func TestSyncRepoDataSupersedesRecommendationOnSelfAuthorBackfill(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	updated := time.Unix(1713514800, 0).UTC()
+	if err := database.UpsertRepo(db.Repo{ID: "kun/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:          "kun/widgets#7",
+		RepoID:      "kun/widgets",
+		Kind:        sharedtypes.ItemKindPR,
+		Number:      7,
+		Title:       "feat: my own change",
+		Author:      "kun",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   false,
+		LastEventAt: timePtr(updated.Add(-1 * time.Hour)),
+	}); err != nil {
+		t.Fatalf("UpsertItem: %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "kun/widgets#7",
+		Agent:  "claude",
+		Model:  "test",
+		Options: []db.NewRecommendationOption{{
+			StateChange: sharedtypes.StateChangeNone,
+			Rationale:   "looks fine",
+			Confidence:  sharedtypes.ConfidenceLow,
+			WaitingOn:   sharedtypes.WaitingOnNone,
+		}},
+	}); err != nil {
+		t.Fatalf("InsertRecommendation: %v", err)
+	}
+
+	client := &stubTriageClient{
+		selfLogin: "kun",
+		itemsByRepo: map[string][]ghclient.Item{
+			"kun/widgets": {{
+				Repo:      "kun/widgets",
+				Kind:      sharedtypes.ItemKindPR,
+				Number:    7,
+				Title:     "feat: my own change",
+				Author:    "kun",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/kun/widgets/pull/7",
+				UpdatedAt: updated,
+			}},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client}, []string{"kun/widgets"}); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	pr, _ := database.GetItem("kun/widgets#7")
+	if pr == nil || !pr.GHTriaged {
+		t.Fatalf("PR after backfill = %#v, want GHTriaged=true", pr)
+	}
+
+	active, err := database.ListActiveRecommendations()
+	if err != nil {
+		t.Fatalf("ListActiveRecommendations: %v", err)
+	}
+	for _, r := range active {
+		if r.ItemID == "kun/widgets#7" {
+			t.Fatalf("expected recommendation for self-authored PR to be superseded, still active: %#v", r)
+		}
+	}
+}
+
+func TestSyncRepoDataDoesNotSkipContributorAuthoredPRs(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "upstream/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:        "upstream/widgets#42",
+		RepoID:    "upstream/widgets",
+		Kind:      sharedtypes.ItemKindPR,
+		Number:    42,
+		Role:      sharedtypes.RoleContributor,
+		Author:    "kun",
+		State:     sharedtypes.ItemStateOpen,
+		WaitingOn: sharedtypes.WaitingOnMaintainer,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	updated := time.Unix(1713514800, 0).UTC()
+	client := &stubTriageClient{
+		selfLogin: "kun",
+		itemsByRepo: map[string][]ghclient.Item{
+			"upstream/widgets": {{
+				Repo:      "upstream/widgets",
+				Kind:      sharedtypes.ItemKindPR,
+				Number:    42,
+				Title:     "fix",
+				Author:    "kun",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/upstream/widgets/pull/42",
+				UpdatedAt: updated,
+			}},
+		},
+	}
+
+	poller := Poller{DB: database, GitHub: client, PreserveExistingItemRole: true}
+	if err := PollOnce(context.Background(), poller, []string{"upstream/widgets"}); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+
+	pr, _ := database.GetItem("upstream/widgets#42")
+	if pr == nil {
+		t.Fatal("expected contributor PR to be stored")
+	}
+	if pr.GHTriaged {
+		t.Fatalf("contributor self-authored PR GHTriaged = true, want false (only maintainer items are skipped)")
+	}
+}
+
 func TestSyncRepoDataConvertsContributorItemToMaintainer(t *testing.T) {
 	t.Parallel()
 
@@ -2636,6 +3003,30 @@ type stubTriageClient struct {
 
 	ownedRepos    []string
 	ownedReposErr error
+
+	selfLogin    string
+	selfLoginErr error
+
+	nonSelfActivityByKey     map[string]bool
+	nonSelfActivityErr       error
+	nonSelfActivityCalls     int
+	lastNonSelfActivitySince time.Time
+}
+
+func (s *stubTriageClient) CurrentUser(_ context.Context) (string, error) {
+	if s.selfLoginErr != nil {
+		return "", s.selfLoginErr
+	}
+	return s.selfLogin, nil
+}
+
+func (s *stubTriageClient) HasNonSelfActivity(_ context.Context, repo string, number int, _ string, since time.Time) (bool, error) {
+	s.nonSelfActivityCalls++
+	s.lastNonSelfActivitySince = since
+	if s.nonSelfActivityErr != nil {
+		return false, s.nonSelfActivityErr
+	}
+	return s.nonSelfActivityByKey[itemID(repo, number)], nil
 }
 
 func (s *stubTriageClient) ListOwnedRepos(_ context.Context, _ ghclient.RepoVisibility) ([]string, error) {
