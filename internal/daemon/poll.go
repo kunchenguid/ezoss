@@ -327,8 +327,13 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 			return fmt.Errorf("poll repo %s: get item %d: %w", repoID, item.Number, err)
 		}
 		ghTriaged := hasLabel(item.Labels, triagedLabel)
+		lastEventAt := timePtr(item.UpdatedAt.UTC())
 		if !ghTriaged && isSelfAuthoredMaintainerPR(item, selfLogin) {
-			ghTriaged = selfPRGHTriaged(ctx, poller, activityChecker, repoID, item, selfLogin, existing)
+			decision := selfPRGHTriaged(ctx, poller, activityChecker, repoID, item, selfLogin, existing)
+			ghTriaged = decision.ghTriaged
+			if decision.preserveLastEventAt && existing != nil {
+				lastEventAt = existing.LastEventAt
+			}
 		}
 		itemRecord := db.Item{
 			ID:          itemID(repoID, item.Number),
@@ -341,7 +346,7 @@ func syncRepoData(ctx context.Context, poller Poller, repoID string, polledAt ti
 			IsDraft:     item.IsDraft,
 			GHTriaged:   ghTriaged,
 			WaitingOn:   sharedtypes.WaitingOnNone,
-			LastEventAt: timePtr(item.UpdatedAt.UTC()),
+			LastEventAt: lastEventAt,
 		}
 		if existing != nil {
 			if poller.PreserveExistingItemRole {
@@ -1254,12 +1259,17 @@ func resolveSelfLogin(ctx context.Context, poller Poller) string {
 // LastEventAt so old foreign activity (e.g. a CI bot comment from
 // months ago) does not keep re-queueing the PR every time UpdatedAt
 // advances; first-sighting (existing == nil) scans the full timeline.
-func selfPRGHTriaged(ctx context.Context, poller Poller, checker nonSelfActivityChecker, repoID string, item ghclient.Item, selfLogin string, existing *db.Item) bool {
+type selfPRTriageDecision struct {
+	ghTriaged           bool
+	preserveLastEventAt bool
+}
+
+func selfPRGHTriaged(ctx context.Context, poller Poller, checker nonSelfActivityChecker, repoID string, item ghclient.Item, selfLogin string, existing *db.Item) selfPRTriageDecision {
 	if existing != nil && existing.LastEventAt != nil && existing.LastEventAt.Equal(item.UpdatedAt.UTC()) {
-		return existing.GHTriaged
+		return selfPRTriageDecision{ghTriaged: existing.GHTriaged}
 	}
 	if checker == nil {
-		return true
+		return selfPRTriageDecision{ghTriaged: true}
 	}
 	var since time.Time
 	if existing != nil && existing.LastEventAt != nil {
@@ -1267,13 +1277,13 @@ func selfPRGHTriaged(ctx context.Context, poller Poller, checker nonSelfActivity
 	}
 	hasOther, err := checker.HasNonSelfActivity(ctx, repoID, item.Number, selfLogin, since)
 	if err != nil {
-		// On failure, fall back to the safe option: leave the PR
-		// suppressed. The next cycle that sees a fresh UpdatedAt
-		// will retry the timeline check.
 		poller.log().Warn("non-self activity check failed", "repo", repoID, "number", item.Number, "err", err)
-		return true
+		if existing != nil {
+			return selfPRTriageDecision{ghTriaged: existing.GHTriaged, preserveLastEventAt: true}
+		}
+		return selfPRTriageDecision{ghTriaged: true}
 	}
-	return !hasOther
+	return selfPRTriageDecision{ghTriaged: !hasOther}
 }
 
 // isSelfAuthoredMaintainerPR reports whether item is a PR authored by

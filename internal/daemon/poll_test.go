@@ -487,6 +487,62 @@ func TestSyncRepoDataSupersedesRecommendationOnSelfAuthorBackfill(t *testing.T) 
 	}
 }
 
+func TestSyncRepoDataPreservesSelfPRWatermarkWhenNonSelfActivityCheckFails(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	prior := time.Unix(1713511200, 0).UTC()
+	updated := prior.Add(2 * time.Hour)
+	if err := database.UpsertRepo(db.Repo{ID: "kun/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:          "kun/widgets#7",
+		RepoID:      "kun/widgets",
+		Kind:        sharedtypes.ItemKindPR,
+		Number:      7,
+		Title:       "feat: my own change",
+		Author:      "kun",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   false,
+		LastEventAt: timePtr(prior),
+	}); err != nil {
+		t.Fatalf("UpsertItem: %v", err)
+	}
+
+	client := &stubTriageClient{
+		selfLogin:          "kun",
+		nonSelfActivityErr: errors.New("rate limited"),
+		itemsByRepo: map[string][]ghclient.Item{
+			"kun/widgets": {{
+				Repo:      "kun/widgets",
+				Kind:      sharedtypes.ItemKindPR,
+				Number:    7,
+				Title:     "feat: my own change",
+				Author:    "kun",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/kun/widgets/pull/7",
+				UpdatedAt: updated,
+			}},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client}, []string{"kun/widgets"}); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	pr, _ := database.GetItem("kun/widgets#7")
+	if pr == nil {
+		t.Fatal("expected PR to be stored")
+	}
+	if pr.GHTriaged {
+		t.Fatal("GHTriaged = true, want existing false preserved")
+	}
+	if pr.LastEventAt == nil || !pr.LastEventAt.Equal(prior) {
+		t.Fatalf("LastEventAt = %v, want existing %v", pr.LastEventAt, prior)
+	}
+}
+
 func TestSyncRepoDataDoesNotSkipContributorAuthoredPRs(t *testing.T) {
 	t.Parallel()
 
