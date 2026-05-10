@@ -1568,7 +1568,7 @@ func TestHasNonSelfActivityIgnoresForeignEventsBeforeSince(t *testing.T) {
 	}
 }
 
-func TestHasNonSelfActivityDetectsForeignEventAtOrAfterSince(t *testing.T) {
+func TestHasNonSelfActivityDetectsForeignEventAfterSince(t *testing.T) {
 	t.Parallel()
 
 	runner := &stubRunner{responses: []stubResponse{{stdout: `[
@@ -1584,6 +1584,25 @@ func TestHasNonSelfActivityDetectsForeignEventAtOrAfterSince(t *testing.T) {
 	}
 	if !got {
 		t.Fatal("HasNonSelfActivity = false for foreign comment after since, want true")
+	}
+}
+
+func TestHasNonSelfActivityIgnoresForeignEventAtSince(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{{stdout: `[
+		{"event":"commented","created_at":"2026-05-04T18:00:00Z","user":{"login":"alice"}},
+		{"event":"committed","created_at":"2026-05-04T19:00:00Z","actor":{"login":"kunchenguid"}}
+	]`}}}
+	client := New(runner)
+
+	since := time.Date(2026, 5, 4, 18, 0, 0, 0, time.UTC)
+	got, err := client.HasNonSelfActivity(context.Background(), "kunchenguid/widgets", 7, "kunchenguid", since)
+	if err != nil {
+		t.Fatalf("HasNonSelfActivity: %v", err)
+	}
+	if got {
+		t.Fatal("HasNonSelfActivity = true for foreign comment at since, want false")
 	}
 }
 

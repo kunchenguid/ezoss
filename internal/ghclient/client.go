@@ -590,7 +590,7 @@ func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number 
 }
 
 // HasNonSelfActivity reports whether the issue/PR timeline contains any
-// event by an actor other than selfLogin that occurred at or after
+// event by an actor other than selfLogin that occurred after
 // since. It is used to keep the daemon off self-authored maintainer
 // PRs unless someone else has interacted with them. A zero since means
 // "no lower bound" - the entire timeline is scanned. Events with no
@@ -619,7 +619,7 @@ func (c *Client) HasNonSelfActivity(ctx context.Context, repo string, number int
 		}
 		if !since.IsZero() {
 			occurredAt, err := timelineEventTime(event)
-			if err != nil || occurredAt.UTC().Before(sinceUTC) {
+			if err != nil || !occurredAt.UTC().After(sinceUTC) {
 				continue
 			}
 		}
