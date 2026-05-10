@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.3.0...ezoss-v0.4.0) (2026-05-09)
+
+
+### Features
+
+* **cli:** add fix attach recovery command ([#34](https://github.com/kunchenguid/ezoss/issues/34)) ([2ecf8cc](https://github.com/kunchenguid/ezoss/commit/2ecf8ccb12c7c9c5be683877771272d33486bd2e))
+* **daemon:** add activity probe retriage ([#38](https://github.com/kunchenguid/ezoss/issues/38)) ([43e1820](https://github.com/kunchenguid/ezoss/commit/43e182017c4a2239b9cdad45ee17656be82ee663))
+
+
+### Bug Fixes
+
+* **cli:** allow approving in-flight fix jobs ([#35](https://github.com/kunchenguid/ezoss/issues/35)) ([feb569f](https://github.com/kunchenguid/ezoss/commit/feb569f337c117a31b57bac6b97ffc40fb2dc01f))
+* **ghclient:** ignore numeric actor ids ([#31](https://github.com/kunchenguid/ezoss/issues/31)) ([7d72cd2](https://github.com/kunchenguid/ezoss/commit/7d72cd2ccb1eb62a967736f0b2800123ba263a83))
+* **ghclient:** requeue issues for merged PR references ([#37](https://github.com/kunchenguid/ezoss/issues/37)) ([fba9624](https://github.com/kunchenguid/ezoss/commit/fba9624f6fc0519bd78794f5fbd7885a076add78))
+* **tui:** clarify no-mistakes attach status ([#36](https://github.com/kunchenguid/ezoss/issues/36)) ([293f7b6](https://github.com/kunchenguid/ezoss/commit/293f7b6cdda79443e036ffb4449a54b9a0e962d6))
+* **tui:** preserve markdown block newlines when wrapping ([#33](https://github.com/kunchenguid/ezoss/issues/33)) ([ab2f11a](https://github.com/kunchenguid/ezoss/commit/ab2f11ad427c61f2ef4fcce2a37a69381cbaa33d))
+
 ## [0.3.0](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.2.2...ezoss-v0.3.0) (2026-05-04)
 
 
