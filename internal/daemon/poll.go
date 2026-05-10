@@ -1248,15 +1248,15 @@ func resolveSelfLogin(ctx context.Context, poller Poller) string {
 // it from the inbox), but if the PR's timeline shows any non-self
 // activity since we last saw it we flip the gate off so Stage C
 // re-triages with that new context. Unchanged PRs (UpdatedAt has not
-// moved since the cached LastEventAt) are kept suppressed without an
-// extra timeline call - that's how we avoid spamming the GitHub API on
-// every poll cycle. The timeline scan is bounded by the prior
+// moved since the cached LastEventAt) keep their existing local gate
+// without an extra timeline call - that's how we avoid spamming the
+// GitHub API on every poll cycle. The timeline scan is bounded by the prior
 // LastEventAt so old foreign activity (e.g. a CI bot comment from
 // months ago) does not keep re-queueing the PR every time UpdatedAt
 // advances; first-sighting (existing == nil) scans the full timeline.
 func selfPRGHTriaged(ctx context.Context, poller Poller, checker nonSelfActivityChecker, repoID string, item ghclient.Item, selfLogin string, existing *db.Item) bool {
-	if existing != nil && existing.GHTriaged && existing.LastEventAt != nil && existing.LastEventAt.Equal(item.UpdatedAt.UTC()) {
-		return true
+	if existing != nil && existing.LastEventAt != nil && existing.LastEventAt.Equal(item.UpdatedAt.UTC()) {
+		return existing.GHTriaged
 	}
 	if checker == nil {
 		return true

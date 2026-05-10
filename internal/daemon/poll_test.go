@@ -340,6 +340,82 @@ func TestSyncRepoDataSkipsTimelineCheckWhenSelfPRUnchanged(t *testing.T) {
 	}
 }
 
+func TestSyncRepoDataPreservesUnchangedRequeuedSelfPR(t *testing.T) {
+	t.Parallel()
+
+	database := openTestDB(t)
+	updated := time.Unix(1713514800, 0).UTC()
+	if err := database.UpsertRepo(db.Repo{ID: "kun/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo: %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID:          "kun/widgets#7",
+		RepoID:      "kun/widgets",
+		Kind:        sharedtypes.ItemKindPR,
+		Number:      7,
+		Title:       "feat: my own change",
+		Author:      "kun",
+		State:       sharedtypes.ItemStateOpen,
+		GHTriaged:   false,
+		LastEventAt: timePtr(updated),
+	}); err != nil {
+		t.Fatalf("UpsertItem: %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "kun/widgets#7",
+		Agent:  "claude",
+		Model:  "test",
+		Options: []db.NewRecommendationOption{{
+			StateChange: sharedtypes.StateChangeNone,
+			Rationale:   "needs review",
+			Confidence:  sharedtypes.ConfidenceMedium,
+			WaitingOn:   sharedtypes.WaitingOnNone,
+		}},
+	}); err != nil {
+		t.Fatalf("InsertRecommendation: %v", err)
+	}
+
+	client := &stubTriageClient{
+		selfLogin: "kun",
+		itemsByRepo: map[string][]ghclient.Item{
+			"kun/widgets": {{
+				Repo:      "kun/widgets",
+				Kind:      sharedtypes.ItemKindPR,
+				Number:    7,
+				Title:     "feat: my own change",
+				Author:    "kun",
+				State:     sharedtypes.ItemStateOpen,
+				URL:       "https://github.com/kun/widgets/pull/7",
+				UpdatedAt: updated,
+			}},
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: client}, []string{"kun/widgets"}); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	if client.nonSelfActivityCalls != 0 {
+		t.Fatalf("HasNonSelfActivity called %d times for unchanged requeued self PR, want 0", client.nonSelfActivityCalls)
+	}
+
+	pr, _ := database.GetItem("kun/widgets#7")
+	if pr == nil || pr.GHTriaged {
+		t.Fatalf("PR after sync = %#v, want GHTriaged=false", pr)
+	}
+
+	active, err := database.ListActiveRecommendations()
+	if err != nil {
+		t.Fatalf("ListActiveRecommendations: %v", err)
+	}
+	for _, r := range active {
+		if r.ItemID == "kun/widgets#7" {
+			return
+		}
+	}
+	t.Fatal("active recommendation for requeued self-authored PR was superseded")
+}
+
 func TestSyncRepoDataSupersedesRecommendationOnSelfAuthorBackfill(t *testing.T) {
 	t.Parallel()
 
