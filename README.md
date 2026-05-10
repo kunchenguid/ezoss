@@ -32,7 +32,7 @@
 
 If you maintain open source long enough, every new issue and PR starts with the same drag: what is this actually asking, is it legit, what should happen next, and do I need to context-switch into the repo right now?
 
-`ezoss` handles that first pass for you. It polls your repos, also tracks issues and PRs you authored in repos you do not maintain, runs your coding agent against each untriaged item, stores a private recommendation locally, and lets you review or edit the draft before anything touches GitHub.
+`ezoss` handles that first pass for you. It polls your repos, also tracks issues and PRs you authored in repos you do not maintain, runs your coding agent against untriaged items that need your attention, stores a private recommendation locally, and lets you review or edit the draft before anything touches GitHub.
 
 You stay in control. The agent drafts. You decide.
 
@@ -147,6 +147,7 @@ Set `EZOSS_UMAMI_WEBSITE_ID=` to disable a release build's baked-in website ID, 
 
 - **GitHub is the maintainer truth** - for configured repos, `ezoss/triaged` is the public signal that an item has already been handled.
   The daemon also watches for post-label timeline activity, including comments, reviews, commits, cross-references, and linked PR resolution timestamps, and can put the item back in the inbox even if the label remains.
+  Self-authored PRs in configured repos are suppressed locally without writing `ezoss/triaged`, unless someone else adds timeline activity.
   Contributor items are found with `gh search prs/issues --author=@me`, do not edit upstream labels, and are tracked with local sweep metadata.
 - **Local DB is the private memory** - drafts, fix prompts, rationales, approvals, and token accounting stay on disk under `~/.ezoss/`.
   Rerun instructions are stored there too.
@@ -238,6 +239,7 @@ Use `contrib.ignore_repos` to suppress noisy upstream repos by exact `owner/name
 `activity_probe_interval` controls how often the daemon scans each open triaged maintainer item's timeline for activity GitHub does not surface through `updated_at`.
 It defaults to `1h`, accepts the same duration syntax as other settings, and can be set to `0` to disable the probe.
 When the probe fires, it makes one timeline API call per open triaged maintainer item.
+Self-authored maintainer PR checks are separate: the daemon may inspect those PR timelines when first seeing them or when their `updated_at` changes, even if the activity probe is disabled.
 
 ```yaml
 # ~/.ezoss/config.yaml
@@ -261,6 +263,7 @@ sync_labels:
 
 For maintainer items, `ezoss/triaged` is always managed automatically because it is the public source-of-truth signal for whether an item has already been handled.
 Post-label activity, including comments, reviews, commits, cross-references, and linked PR resolution timestamps, can still re-queue the item locally.
+Self-authored maintainer PRs are the exception: they are hidden with local state only, so ezoss does not label your own PRs just to keep them out of the inbox.
 
 Precedence is simple:
 
