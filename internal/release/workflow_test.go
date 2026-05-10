@@ -1131,7 +1131,7 @@ func TestREADMEHeroMatchesCurrentReleaseMessaging(t *testing.T) {
 		"Turn your issue queue into a reviewable inbox instead of a background tax.",
 		"You stay in control. The agent drafts. You decide.",
 		"- **Private by default** - agent rationale, draft comments, fix prompts, and token usage stay in local SQLite until you approve an action.",
-		"- **GitHub-native maintainer state** - maintainer triage visibility is mirrored back to GitHub with `ezoss/*` labels, while contributor items stay local.",
+		"- **GitHub-native maintainer state** - maintainer triage visibility is mirrored back to GitHub with `ezoss/*` labels, while self-authored maintainer PR suppression and contributor items stay local.",
 		"- **Actually usable loop** - daemon polling, one-off triage, a Bubble Tea inbox, and approval/fix-PR/copy-prompt/edit/rerun flows already work end to end.",
 		"- **PRs can pause before review** - PRs without prior agreement can be routed into a maintainer approval step before code review.",
 	}

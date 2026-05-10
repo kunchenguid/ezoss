@@ -5,7 +5,7 @@ This file provides shared guidance for coding agents working in this repository.
 ## Project
 
 `ezoss` is a single-user maintainer/contributor orchestrator written in Go.
-A background daemon polls configured GitHub repos, searches for issues and PRs authored by the user in repos they do not maintain, runs a coding agent (`claude`, `codex`, `rovodev`, or `opencode`) against each untriaged item, stores a structured recommendation in a local SQLite cache, and surfaces drafts in a Bubble Tea TUI inbox where the user approves, queues fixes, edits, marks triaged, or reruns.
+A background daemon polls configured GitHub repos, searches for issues and PRs authored by the user in repos they do not maintain, runs a coding agent (`claude`, `codex`, `rovodev`, or `opencode`) against untriaged items that need the user's attention, stores a structured recommendation in a local SQLite cache, and surfaces drafts in a Bubble Tea TUI inbox where the user approves, queues fixes, edits, marks triaged, or reruns.
 Nothing is posted to GitHub until the user approves an action, queues a fix job, or runs `ezoss fix`; maintainer writes use the configured repo flow, while contributor writes stay within contributor-safe actions.
 Daemon fix jobs run only after the user queues them.
 
@@ -56,6 +56,8 @@ All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` 
 
 1. **Stage A.1 (maintainer sync):** for each configured repo, call the GitHub client (`internal/ghclient`, which shells out to `gh`) to list items missing `ezoss/triaged` and items recently re-triaged.
    Reconcile into the `items` table.
+   Self-authored PRs in configured repos are marked locally `gh_triaged=true` without writing the GitHub label, superseding any older active recommendation from before the filter existed.
+   They are re-queued only when a timeline check sees non-self activity since the prior `last_event_at`; first sighting scans the whole timeline, unchanged PRs skip the extra call, and timeline-check failures preserve the existing local gate.
    Refreshed open triaged items also check timeline activity after `ezoss/triaged`; comments, reviews, commits, cross-references, or linked PR resolution timestamps can set local `gh_triaged=false` while the GitHub label remains.
    Maintainer self actions store `last_self_activity_at` so ezoss approvals and mark-triaged actions do not re-queue themselves.
    Items from configured repos are role `maintainer`.
@@ -114,6 +116,7 @@ For maintainer items, `last_self_activity_at` records ezoss approvals and mark-t
 `gh_triaged` on `items` is the local queue gate for maintainer items.
 The label is the public source of truth: removing it on GitHub re-queues the item for triage, and post-label timeline activity can set local `gh_triaged=false` while the label remains.
 Timeline activity includes comments, reviews, commits, cross-references, and linked PR resolution timestamps after the latest recommendation watermark.
+Self-authored maintainer PRs are a local-only exception: they can have `gh_triaged=true` with no `ezoss/triaged` label, and non-self timeline activity flips them back into the queue.
 
 ### TUI
 
@@ -134,6 +137,7 @@ Fix PR creation modes under `fixes.pr_create`: `auto`, `no-mistakes`, `gh`, `dis
 Contributor push modes under `fixes.contrib_push`: `auto`, `no-mistakes`, `disabled`.
 Contributor mode defaults to enabled and is configured by `contrib.enabled` plus `contrib.ignore_repos`.
 `activity_probe_interval` defaults to `1h`, accepts the standard duration parser, can be set to `0` to disable, and controls deep activity probe timeline API usage.
+Self-authored maintainer PR suppression uses its own timeline checks on first sighting or changed `updated_at`, independent of `activity_probe_interval`.
 Durations parse Go `time.Duration` plus the suffix `d` for days (e.g. `30d`).
 
 ### Self-update
@@ -151,5 +155,6 @@ Build version is injected via `-ldflags` into `internal/buildinfo.Version` (defa
 - **Platform-specific files** use the `_unix.go` / `_windows.go` suffix convention (see `internal/daemon/process_*.go`, `internal/ipc/transport_*.go`, `internal/update/spawn_*.go`). Mirror that when adding new platform-conditional code.
 - **The `ezoss/triaged` label is sacred for maintainer items** - it is the only GitHub-visible signal of triage state for configured repos and is always managed by the daemon regardless of `sync_labels` config.
   Post-label comments, reviews, commits, cross-references, or linked PR resolution timestamps can still re-queue the item locally while the label remains.
+  Self-authored maintainer PRs are suppressed locally instead of labeled, so do not add code that writes `ezoss/triaged` just to hide the user's own PRs.
   Contributor items do not manage upstream labels; their state comes from local role and sweep metadata.
 - Tests should not require `gh`, agent binaries, or network. Use the mock packages under `internal/agent/mock` and `internal/ghclient/mock`, the `--mock` daemon flag, or `paths.WithRoot` + a temp dir for filesystem isolation.

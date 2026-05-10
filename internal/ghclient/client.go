@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
@@ -26,6 +27,10 @@ type Runner interface {
 
 type Client struct {
 	runner Runner
+
+	currentUserMu     sync.Mutex
+	currentUserVal    string
+	currentUserCached bool
 }
 
 type RateLimitError struct {
@@ -151,6 +156,32 @@ func New(runner Runner) *Client {
 
 func (c *Client) ListNeedingTriage(ctx context.Context, repo string) ([]Item, error) {
 	return c.listFilteredItems(ctx, repo, "-label:"+triagedLabel, "open")
+}
+
+// CurrentUser returns the GitHub login of the authenticated user. A
+// successful result is cached for the lifetime of the Client; the daemon
+// reuses one Client across poll cycles, so we resolve it once and avoid an
+// extra gh call on every cycle. A daemon restart is required to pick up
+// `gh auth switch` changes.
+func (c *Client) CurrentUser(ctx context.Context) (string, error) {
+	c.currentUserMu.Lock()
+	defer c.currentUserMu.Unlock()
+
+	if c.currentUserCached {
+		return c.currentUserVal, nil
+	}
+
+	stdout, err := c.runner.Run(ctx, "api", "user", "--jq", ".login")
+	if err != nil {
+		return "", fmt.Errorf("gh api user: %w", classifyError(err))
+	}
+	login := strings.TrimSpace(string(stdout))
+	if login == "" {
+		return "", fmt.Errorf("gh api user: empty login")
+	}
+	c.currentUserVal = login
+	c.currentUserCached = true
+	return c.currentUserVal, nil
 }
 
 // ListTriaged returns items with the triaged label. When sinceUpdated is
@@ -556,6 +587,45 @@ func (c *Client) SearchAuthoredOpenIssues(ctx context.Context) ([]Item, error) {
 
 func (c *Client) HasActivityAfterLabel(ctx context.Context, repo string, number int, label string) (bool, error) {
 	return c.hasActivityAfterLabelSince(ctx, repo, number, label, time.Time{}, time.Time{})
+}
+
+// HasNonSelfActivity reports whether the issue/PR timeline contains any
+// event by an actor other than selfLogin that occurred after
+// since. It is used to keep the daemon off self-authored maintainer
+// PRs unless someone else has interacted with them. A zero since means
+// "no lower bound" - the entire timeline is scanned. Events with no
+// identifiable actor (e.g. committed events without actor metadata)
+// are treated as self activity to avoid false-positive re-queueing.
+// Events whose timestamps cannot be parsed are skipped when since is
+// non-zero.
+func (c *Client) HasNonSelfActivity(ctx context.Context, repo string, number int, selfLogin string, since time.Time) (bool, error) {
+	stdout, err := c.runner.Run(ctx, "api", "repos/"+repo+"/issues/"+strconv.Itoa(number)+"/timeline", "--paginate")
+	if err != nil {
+		return false, fmt.Errorf("gh api repos/%s/issues/%d/timeline: %w", repo, number, classifyError(err))
+	}
+	events, err := decodeTimelineItems(stdout)
+	if err != nil {
+		return false, fmt.Errorf("decode issue timeline %s#%d: %w", repo, number, err)
+	}
+	self := strings.TrimSpace(strings.ToLower(selfLogin))
+	if self == "" {
+		return false, nil
+	}
+	sinceUTC := since.UTC()
+	for _, event := range events {
+		actor := strings.ToLower(timelineActorLogin(event))
+		if actor == "" || actor == self {
+			continue
+		}
+		if !since.IsZero() {
+			occurredAt, err := timelineEventTime(event)
+			if err != nil || !occurredAt.UTC().After(sinceUTC) {
+				continue
+			}
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func (c *Client) HasActivityAfterLabelSince(ctx context.Context, repo string, number int, label string, since time.Time) (bool, error) {
