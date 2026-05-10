@@ -28,9 +28,9 @@ type Runner interface {
 type Client struct {
 	runner Runner
 
-	currentUserOnce sync.Once
-	currentUserVal  string
-	currentUserErr  error
+	currentUserMu     sync.Mutex
+	currentUserVal    string
+	currentUserCached bool
 }
 
 type RateLimitError struct {
@@ -158,26 +158,30 @@ func (c *Client) ListNeedingTriage(ctx context.Context, repo string) ([]Item, er
 	return c.listFilteredItems(ctx, repo, "-label:"+triagedLabel, "open")
 }
 
-// CurrentUser returns the GitHub login of the authenticated user. The
-// result (success or error) is cached for the lifetime of the Client;
-// the daemon reuses one Client across poll cycles, so we resolve it
-// once and avoid an extra gh call on every cycle. A daemon restart is
-// required to pick up `gh auth switch` changes.
+// CurrentUser returns the GitHub login of the authenticated user. A
+// successful result is cached for the lifetime of the Client; the daemon
+// reuses one Client across poll cycles, so we resolve it once and avoid an
+// extra gh call on every cycle. A daemon restart is required to pick up
+// `gh auth switch` changes.
 func (c *Client) CurrentUser(ctx context.Context) (string, error) {
-	c.currentUserOnce.Do(func() {
-		stdout, err := c.runner.Run(ctx, "api", "user", "--jq", ".login")
-		if err != nil {
-			c.currentUserErr = fmt.Errorf("gh api user: %w", classifyError(err))
-			return
-		}
-		login := strings.TrimSpace(string(stdout))
-		if login == "" {
-			c.currentUserErr = fmt.Errorf("gh api user: empty login")
-			return
-		}
-		c.currentUserVal = login
-	})
-	return c.currentUserVal, c.currentUserErr
+	c.currentUserMu.Lock()
+	defer c.currentUserMu.Unlock()
+
+	if c.currentUserCached {
+		return c.currentUserVal, nil
+	}
+
+	stdout, err := c.runner.Run(ctx, "api", "user", "--jq", ".login")
+	if err != nil {
+		return "", fmt.Errorf("gh api user: %w", classifyError(err))
+	}
+	login := strings.TrimSpace(string(stdout))
+	if login == "" {
+		return "", fmt.Errorf("gh api user: empty login")
+	}
+	c.currentUserVal = login
+	c.currentUserCached = true
+	return c.currentUserVal, nil
 }
 
 // ListTriaged returns items with the triaged label. When sinceUpdated is

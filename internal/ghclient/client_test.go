@@ -1598,6 +1598,31 @@ func TestCurrentUserPropagatesError(t *testing.T) {
 	}
 }
 
+func TestCurrentUserRetriesAfterError(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{responses: []stubResponse{
+		{err: errors.New("boom")},
+		{stdout: "kunchenguid\n"},
+	}}
+	client := New(runner)
+
+	if _, err := client.CurrentUser(context.Background()); err == nil {
+		t.Fatal("CurrentUser first err = nil, want non-nil")
+	}
+
+	login, err := client.CurrentUser(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentUser second call: %v", err)
+	}
+	if login != "kunchenguid" {
+		t.Fatalf("CurrentUser = %q, want %q", login, "kunchenguid")
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("CurrentUser made %d gh calls, want 2", len(runner.calls))
+	}
+}
+
 type stubRunner struct {
 	responses []stubResponse
 	calls     []stubCall
