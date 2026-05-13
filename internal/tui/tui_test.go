@@ -541,6 +541,47 @@ func TestApproveAdvancesCursorToNextEntry(t *testing.T) {
 	}
 }
 
+func TestApproveFixRequiredReloadsFollowupEntry(t *testing.T) {
+	refreshed := Entry{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "one",
+		StateChange:      sharedtypes.StateChangeFixRequired,
+		FixPrompt:        "fix it",
+		FixStatus:        "running",
+		FixPhase:         "waiting_for_pr",
+	}
+	m := NewModelWithActions([]Entry{{
+		RecommendationID: "rec-1",
+		RepoID:           "acme/widgets",
+		Number:           1,
+		Kind:             sharedtypes.ItemKindIssue,
+		Title:            "one",
+		StateChange:      sharedtypes.StateChangeFixRequired,
+		FixPrompt:        "fix it",
+	}}, ModelActions{
+		Approve: func([]Entry) (string, error) { return "", nil },
+		Reload:  func() ([]Entry, error) { return []Entry{refreshed}, nil },
+	})
+	m.width = 100
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	finishMsg := runActionCmd(t, cmd)
+	if len(finishMsg.updatedEntries) != 1 || finishMsg.updatedEntries[0].FixPhase != "waiting_for_pr" {
+		t.Fatalf("finish updatedEntries = %#v, want refreshed waiting fix entry", finishMsg.updatedEntries)
+	}
+	updated, _ = updated.(Model).Update(finishMsg)
+	next := updated.(Model)
+	if len(next.entries) != 1 || next.entries[0].RecommendationID != "rec-1" {
+		t.Fatalf("entries after approve = %#v, want rec-1 retained", next.entries)
+	}
+	if next.entries[0].FixStatus != "running" || next.entries[0].FixPhase != "waiting_for_pr" {
+		t.Fatalf("retained fix state = %q/%q, want running/waiting_for_pr", next.entries[0].FixStatus, next.entries[0].FixPhase)
+	}
+}
+
 // TestMarkTriagedAdvancesCursorToNextEntry mirrors the approve advance
 // behavior for 'm'.
 func TestMarkTriagedAdvancesCursorToNextEntry(t *testing.T) {

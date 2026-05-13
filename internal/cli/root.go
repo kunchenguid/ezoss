@@ -1349,6 +1349,7 @@ func loadInboxEntries() ([]tui.Entry, error) {
 	}
 
 	entries := make([]tui.Entry, 0, len(recommendations))
+	activeItemIDs := make(map[string]struct{}, len(recommendations))
 	for _, rec := range recommendations {
 		item, err := database.GetItem(rec.ItemID)
 		if err != nil {
@@ -1357,50 +1358,202 @@ func loadInboxEntries() ([]tui.Entry, error) {
 		if item == nil {
 			continue
 		}
-		_, isConfigured := configuredRepos[item.RepoID]
-		totals, err := database.RecommendationTokenTotalsForItem(rec.ItemID)
+		activeItemIDs[rec.ItemID] = struct{}{}
+		entry, err := buildInboxEntry(database, configuredRepos, rec, item, nil)
 		if err != nil {
-			return nil, fmt.Errorf("recommendation token totals for %s: %w", rec.ItemID, err)
+			return nil, err
 		}
-		role := item.Role
-		if role == "" {
-			role = sharedtypes.RoleMaintainer
+		entries = append(entries, entry)
+	}
+	fixEntries, err := loadApprovedFixJobInboxEntries(database, configuredRepos, activeItemIDs)
+	if err != nil {
+		return nil, err
+	}
+	entries = append(entries, fixEntries...)
+	return entries, nil
+}
+
+func buildInboxEntry(database *db.DB, configuredRepos map[string]struct{}, rec db.Recommendation, item *db.Item, fixJob *db.FixJob) (tui.Entry, error) {
+	_, isConfigured := configuredRepos[item.RepoID]
+	totals, err := database.RecommendationTokenTotalsForItem(rec.ItemID)
+	if err != nil {
+		return tui.Entry{}, fmt.Errorf("recommendation token totals for %s: %w", rec.ItemID, err)
+	}
+	role := item.Role
+	if role == "" {
+		role = sharedtypes.RoleMaintainer
+	}
+	// A contributor item lives in a repo we don't maintain - it shouldn't be
+	// flagged as unconfigured even if it isn't in cfg.Repos.
+	unconfigured := !isConfigured && role != sharedtypes.RoleContributor
+	entry := tui.Entry{
+		RecommendationID:  rec.ID,
+		RepoID:            item.RepoID,
+		Number:            item.Number,
+		Kind:              item.Kind,
+		Role:              role,
+		Author:            item.Author,
+		Unconfigured:      unconfigured,
+		Title:             item.Title,
+		URL:               githubItemURL(item.RepoID, item.Kind, item.Number),
+		TokensIn:          totals.TokensIn,
+		TokensOut:         totals.TokensOut,
+		AgeLabel:          recommendationAgeLabel(rec.CreatedAt),
+		ApprovalError:     latestApprovalError(database, rec.ID),
+		CurrentWaitingOn:  item.WaitingOn,
+		RerunInstructions: rec.RerunInstructions,
+		Options:           buildEntryOptions(rec.Options),
+	}
+	if fixJob == nil {
+		latest, err := database.LatestFixJobForItem(item.ID)
+		if err != nil {
+			return tui.Entry{}, fmt.Errorf("latest fix job for %s: %w", item.ID, err)
 		}
-		// A contributor item lives in a repo we don't maintain - it
-		// shouldn't be flagged as unconfigured even if it isn't in
-		// cfg.Repos.
-		unconfigured := !isConfigured && role != sharedtypes.RoleContributor
-		entry := tui.Entry{
-			RecommendationID:  rec.ID,
-			RepoID:            item.RepoID,
-			Number:            item.Number,
-			Kind:              item.Kind,
-			Role:              role,
-			Author:            item.Author,
-			Unconfigured:      unconfigured,
-			Title:             item.Title,
-			URL:               githubItemURL(item.RepoID, item.Kind, item.Number),
-			TokensIn:          totals.TokensIn,
-			TokensOut:         totals.TokensOut,
-			AgeLabel:          recommendationAgeLabel(rec.CreatedAt),
-			ApprovalError:     latestApprovalError(database, rec.ID),
-			CurrentWaitingOn:  item.WaitingOn,
-			RerunInstructions: rec.RerunInstructions,
-			Options:           buildEntryOptions(rec.Options),
+		fixJob = latest
+	}
+	if fixJob != nil {
+		entry.FixJobID = fixJob.ID
+		entry.FixStatus = string(fixJob.Status)
+		entry.FixPhase = string(fixJob.Phase)
+		entry.FixMessage = fixJob.Message
+		entry.FixError = fixJob.Error
+		entry.FixPRURL = fixJob.PRURL
+		entry.FixWorktreePath = fixJob.WorktreePath
+		entry.ActiveOption = entryOptionIndex(entry.Options, fixJob.OptionID)
+	}
+	entry.SyncActive()
+	return entry, nil
+}
+
+func entryOptionIndex(options []tui.EntryOption, optionID string) int {
+	if strings.TrimSpace(optionID) == "" {
+		return 0
+	}
+	for i, option := range options {
+		if option.ID == optionID {
+			return i
 		}
-		if fixJob, err := database.LatestFixJobForItem(item.ID); err == nil && fixJob != nil {
-			entry.FixJobID = fixJob.ID
-			entry.FixStatus = string(fixJob.Status)
-			entry.FixPhase = string(fixJob.Phase)
-			entry.FixMessage = fixJob.Message
-			entry.FixError = fixJob.Error
-			entry.FixPRURL = fixJob.PRURL
-			entry.FixWorktreePath = fixJob.WorktreePath
+	}
+	return 0
+}
+
+func loadApprovedFixJobInboxEntries(database *db.DB, configuredRepos map[string]struct{}, activeItemIDs map[string]struct{}) ([]tui.Entry, error) {
+	jobs, err := database.ListFixJobsByStatus(db.FixJobStatusQueued, db.FixJobStatusRunning, db.FixJobStatusSucceeded, db.FixJobStatusFailed)
+	if err != nil {
+		return nil, err
+	}
+	latestByItem := map[string]db.FixJob{}
+	for _, job := range jobs {
+		if !fixJobRemainsInInbox(job) {
+			continue
 		}
-		entry.SyncActive()
+		latestByItem[job.ItemID] = job
+	}
+	latest := make([]db.FixJob, 0, len(latestByItem))
+	for _, job := range latestByItem {
+		latest = append(latest, job)
+	}
+	sort.SliceStable(latest, func(i, j int) bool {
+		if latest[i].UpdatedAt == latest[j].UpdatedAt {
+			return latest[i].ID > latest[j].ID
+		}
+		return latest[i].UpdatedAt > latest[j].UpdatedAt
+	})
+
+	entries := make([]tui.Entry, 0, len(latest))
+	for i := range latest {
+		job := latest[i]
+		if _, ok := activeItemIDs[job.ItemID]; ok {
+			continue
+		}
+		item, err := database.GetItem(job.ItemID)
+		if err != nil {
+			return nil, fmt.Errorf("get item %s: %w", job.ItemID, err)
+		}
+		if item == nil || item.State != sharedtypes.ItemStateOpen {
+			continue
+		}
+		closed, err := fixJobPRLocallyClosed(database, job)
+		if err != nil {
+			return nil, err
+		}
+		if closed {
+			continue
+		}
+		approved, err := fixJobHasApprovedOption(database, job)
+		if err != nil {
+			return nil, err
+		}
+		if !approved {
+			continue
+		}
+		rec, err := database.GetRecommendation(job.RecommendationID)
+		if err != nil {
+			return nil, fmt.Errorf("get recommendation %s: %w", job.RecommendationID, err)
+		}
+		if rec == nil {
+			continue
+		}
+		entry, err := buildInboxEntry(database, configuredRepos, *rec, item, &job)
+		if err != nil {
+			return nil, err
+		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+func fixJobRemainsInInbox(job db.FixJob) bool {
+	switch job.Status {
+	case db.FixJobStatusQueued, db.FixJobStatusRunning, db.FixJobStatusFailed:
+		return true
+	case db.FixJobStatusSucceeded:
+		return job.Phase == db.FixJobPhasePROpened
+	default:
+		return false
+	}
+}
+
+func fixJobHasApprovedOption(database *db.DB, job db.FixJob) (bool, error) {
+	approvals, err := database.ListApprovalsForRecommendation(job.RecommendationID)
+	if err != nil {
+		return false, err
+	}
+	for _, approval := range approvals {
+		if approval.Decision != sharedtypes.ApprovalDecisionApproved && approval.Decision != sharedtypes.ApprovalDecisionEdited {
+			continue
+		}
+		if strings.TrimSpace(job.OptionID) == "" || approval.OptionID == job.OptionID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func fixJobPRLocallyClosed(database *db.DB, job db.FixJob) (bool, error) {
+	repoID, number, ok := githubPRURLParts(job.PRURL)
+	if !ok {
+		return false, nil
+	}
+	item, err := database.GetItem(fmt.Sprintf("%s#%d", repoID, number))
+	if err != nil {
+		return false, fmt.Errorf("get fix PR item %s#%d: %w", repoID, number, err)
+	}
+	return item != nil && item.State != sharedtypes.ItemStateOpen, nil
+}
+
+func githubPRURLParts(rawURL string) (string, int, bool) {
+	trimmed := strings.TrimSpace(rawURL)
+	trimmed = strings.TrimPrefix(trimmed, "https://github.com/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 4 || parts[2] != "pull" {
+		return "", 0, false
+	}
+	number, err := strconv.Atoi(parts[3])
+	if err != nil || number <= 0 {
+		return "", 0, false
+	}
+	return parts[0] + "/" + parts[1], number, true
 }
 
 // buildEntryOptions converts persisted recommendation options into the

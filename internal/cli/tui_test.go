@@ -1441,6 +1441,91 @@ func TestLoadInboxEntriesPopulatesGitHubURLForIssuesAndPRs(t *testing.T) {
 	}
 }
 
+func TestLoadInboxEntriesKeepsApprovedFixJobForOpenItem(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "panic in parser", Author: "alice", State: sharedtypes.ItemStateOpen, GHTriaged: true,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	rec, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#42",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			Rationale:    "This needs a code fix after leaving context for the reporter.",
+			DraftComment: "I can reproduce this and will put up a fix.",
+			StateChange:  sharedtypes.StateChangeFixRequired,
+			FixPrompt:    "Fix https://github.com/acme/widgets/issues/42 by adding a regression test.",
+			Confidence:   sharedtypes.ConfidenceHigh,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+	option := rec.Options[0]
+	if _, err := database.CreateFixJob(db.NewFixJob{
+		ItemID: "acme/widgets#42", RecommendationID: rec.ID, OptionID: option.ID,
+		RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue,
+		Title: "panic in parser", FixPrompt: option.FixPrompt, PRCreate: "auto",
+	}); err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	job, err := database.LatestFixJobForItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("LatestFixJobForItem() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{
+		Status:       db.FixJobStatusRunning,
+		Phase:        db.FixJobPhaseWaitingForPR,
+		Message:      "waiting for no-mistakes pipeline to finish",
+		WorktreePath: filepath.Join(tempRoot, "fix-worktree"),
+	}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+	if _, err := database.ApproveOption(option.ID, option.DraftComment, nil, option.StateChange, time.Unix(1713000000, 0)); err != nil {
+		t.Fatalf("ApproveOption() error = %v", err)
+	}
+
+	entries, err := loadInboxEntries()
+	if err != nil {
+		t.Fatalf("loadInboxEntries() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.RecommendationID != rec.ID || entry.OptionID != option.ID {
+		t.Fatalf("entry recommendation/option = %q/%q, want %q/%q", entry.RecommendationID, entry.OptionID, rec.ID, option.ID)
+	}
+	if entry.FixStatus != string(db.FixJobStatusRunning) || entry.FixPhase != string(db.FixJobPhaseWaitingForPR) {
+		t.Fatalf("entry fix status = %q/%q, want running/waiting_for_pr", entry.FixStatus, entry.FixPhase)
+	}
+	if entry.DraftComment != option.DraftComment || entry.FixPrompt != option.FixPrompt {
+		t.Fatalf("entry option fields = comment %q prompt %q", entry.DraftComment, entry.FixPrompt)
+	}
+}
+
 func TestCopyTextWithSystemClipboardRejectsEmptyPrompt(t *testing.T) {
 	err := copyTextWithSystemClipboard(context.Background(), "  \n\t")
 	if err == nil {
