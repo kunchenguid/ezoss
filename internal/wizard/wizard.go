@@ -1,7 +1,7 @@
 // Package wizard provides the interactive `ezoss init` flow. It walks the
-// user through choosing a repo-seeding mode (all owned, all public owned, or
-// one at a time) and confirms the resulting set before handing control back
-// to the caller for persistence.
+// user through choosing dynamic repo sources (all owned, all public owned, or
+// public owned and starred) or explicit repos, then hands control back to the
+// caller for persistence.
 package wizard
 
 import (
@@ -32,11 +32,11 @@ const (
 func (m Mode) label() string {
 	switch m {
 	case ModeAllOwned:
-		return "Add all repos I own"
+		return "Use all repos I own as a dynamic source"
 	case ModeAllPublicOwned:
-		return "Add all my public repos only"
+		return "Use all my public repos as a dynamic source"
 	case ModeAllPublicOwnedAndStarred:
-		return "Add public repos I both own and have starred"
+		return "Use public repos I own and have starred as a dynamic source"
 	case ModeOneAtATime:
 		return "Set up one repo at a time"
 	}
@@ -65,8 +65,9 @@ type Config struct {
 	DisableInput bool
 }
 
-// Result describes what the wizard produced. Repos is the deduped owner/name
-// set the user confirmed; the caller is responsible for persisting it.
+// Result describes what the wizard produced. Bulk modes return a Mode for the
+// caller to persist as a dynamic source; one-at-a-time mode returns the deduped
+// owner/name Repos the user confirmed.
 type Result struct {
 	Mode    Mode
 	Repos   []string
