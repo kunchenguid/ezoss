@@ -125,7 +125,7 @@ It pins `lipgloss.SetColorProfile(termenv.ANSI)` for portable styling.
 The TUI subscribes to the daemon over IPC and reacts to recommendation and fix-job events; it can also operate against the DB directly (used in tests and when no daemon is running).
 Layout is inbox list on top, details pane below, action bar.
 The `a` action queues a fix job before approval side effects when approving a `fix_required` option with a fix prompt; if the same option's fix job is already in flight, approval still continues and surfaces an info notice.
-The `f` action queues that fix job without approving the option.
+The `f` action queues that fix job without approving the option, then advances to the next inbox item while the queued item remains pending.
 The `F` action cycles the inbox role filter through all, maintainer, and contributor items; contributor entries show a `contrib` badge.
 
 ### Configuration
