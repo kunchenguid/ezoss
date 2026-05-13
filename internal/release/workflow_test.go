@@ -1405,7 +1405,7 @@ func TestREADMEInboxActionsAndRequirementsCoverShippedWorkflow(t *testing.T) {
 		"## Inbox Actions",
 		"| `a` | Approve | Execute the selected action; `fix_required` options queue their fix job first, or continue if the same fix is already running |",
 		"| `c` | Copy prompt | Copy the active option's coding-agent fix prompt when one exists |",
-		"| `f` | Fix | Queue or replace a daemon-backed coding-agent fix job when a fix prompt exists |",
+		"| `f` | Fix | Queue or replace a daemon-backed coding-agent fix job when a fix prompt exists, then move to the next item |",
 		"| `e` | Edit | Open the draft in your editor before approval |",
 		"| `F` | Filter | Cycle role filter through all, maintainer, and contributor items |",
 		"| `m` | Mark triaged | Stamp `ezoss/triaged` for maintainer items, or mark contributor items handled locally |",
