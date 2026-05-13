@@ -745,13 +745,15 @@ func (m *Model) fixCurrent() tea.Cmd {
 		m.pushLog(logEntry{state: logStateInfo, note: "fix unavailable"})
 		return nil
 	}
-	return m.startAction(entry, "fix", func() tea.Msg {
+	cmd := m.startAction(entry, "fix", func() tea.Msg {
 		return actionFinishedMsg{
 			verb:             "fix",
 			recommendationID: entry.RecommendationID,
 			err:              m.fix(entry),
 		}
 	})
+	m.advanceCursorPastPending()
+	return cmd
 }
 
 // guardConflict reports whether an action on entry should be refused
@@ -2523,10 +2525,9 @@ func (m *Model) dismissCurrent() tea.Cmd {
 }
 
 // advanceCursorPastPending moves the selection to the next entry when an
-// action expected to remove the current entry has just been started. The
-// pending entry stays visible (with its spinner) until the async action
-// finishes, but the cursor moves on so the maintainer can immediately
-// see what's next.
+// async action has just been started. The pending entry may stay visible
+// while the action runs, but the cursor moves on so the maintainer can
+// immediately see what's next.
 func (m *Model) advanceCursorPastPending() {
 	if m.cursor < len(m.entries)-1 {
 		m.cursor++

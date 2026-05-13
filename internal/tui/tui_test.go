@@ -557,6 +557,28 @@ func TestMarkTriagedAdvancesCursorToNextEntry(t *testing.T) {
 	}
 }
 
+// TestFixAdvancesCursorToNextEntry mirrors the approve/mark behavior for
+// queueing a fix: once background fix work is queued, the maintainer can
+// immediately review the next inbox item while the original remains pending.
+func TestFixAdvancesCursorToNextEntry(t *testing.T) {
+	m := NewModelWithActions([]Entry{
+		{RecommendationID: "rec-1", RepoID: "acme/widgets", Number: 1, Kind: sharedtypes.ItemKindIssue, Title: "one", FixPrompt: "fix one"},
+		{RecommendationID: "rec-2", RepoID: "acme/widgets", Number: 2, Kind: sharedtypes.ItemKindIssue, Title: "two"},
+	}, ModelActions{
+		Fix: func(Entry) error { return nil },
+	})
+	m.width = 100
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	next := updated.(Model)
+	if next.cursor != 1 {
+		t.Fatalf("cursor after queue fix should advance; got %d, want 1", next.cursor)
+	}
+	if len(next.entries) != 2 {
+		t.Fatalf("entry should remain in list while fix queues, got %d entries", len(next.entries))
+	}
+}
+
 // TestApproveOnLastEntryKeepsCursor verifies that the advance is a no-op
 // when there is no next entry to move to.
 func TestApproveOnLastEntryKeepsCursor(t *testing.T) {
