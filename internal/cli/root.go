@@ -1339,14 +1339,13 @@ func loadInboxEntries() ([]tui.Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	configuredRepos := make(map[string]struct{}, len(cfg.Repos))
-	for _, repoID := range cfg.Repos {
-		configuredRepos[repoID] = struct{}{}
-	}
-
 	recommendations, err := database.ListActiveRecommendations()
 	if err != nil {
 		return nil, fmt.Errorf("list active recommendations: %w", err)
+	}
+	configuredRepos, err := configuredRepoSet(database, cfg.Repos, cfg.RepoSources)
+	if err != nil {
+		return nil, err
 	}
 
 	entries := make([]tui.Entry, 0, len(recommendations))
@@ -3013,11 +3012,6 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 		}
 	}
 
-	effectiveRepos := data.effectiveRepos()
-	configured := make(map[string]struct{}, len(effectiveRepos))
-	for _, repoID := range effectiveRepos {
-		configured[repoID] = struct{}{}
-	}
 	if _, err := os.Stat(p.DBPath()); err == nil {
 		database, err := openDBWithRetry(p.DBPath())
 		if err != nil {
@@ -3028,6 +3022,16 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 		data.pending, err = database.CountActiveRecommendations()
 		if err != nil {
 			return statusData{}, fmt.Errorf("read pending recommendations: %w", err)
+		}
+
+		data.repos, err = configuredRepoList(database, data.repos, cfg.RepoSources)
+		if err != nil {
+			return statusData{}, err
+		}
+		effectiveRepos := data.effectiveRepos()
+		configured := make(map[string]struct{}, len(effectiveRepos))
+		for _, repoID := range effectiveRepos {
+			configured[repoID] = struct{}{}
 		}
 
 		recommendations, err := database.ListActiveRecommendations()
@@ -3064,6 +3068,33 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 	}
 
 	return data, nil
+}
+
+func configuredRepoSet(database *db.DB, staticRepos []string, repoSources []config.RepoSource) (map[string]struct{}, error) {
+	repos, err := configuredRepoList(database, staticRepos, repoSources)
+	if err != nil {
+		return nil, err
+	}
+	configured := make(map[string]struct{}, len(repos))
+	for _, repoID := range repos {
+		configured[repoID] = struct{}{}
+	}
+	return configured, nil
+}
+
+func configuredRepoList(database *db.DB, staticRepos []string, repoSources []config.RepoSource) ([]string, error) {
+	repos := make([]string, 0, len(staticRepos))
+	repos = append(repos, staticRepos...)
+	if len(repoSources) > 0 {
+		persisted, err := database.ListReposBySource(db.RepoSourceConfig)
+		if err != nil {
+			return nil, fmt.Errorf("list configured repos: %w", err)
+		}
+		for _, repo := range persisted {
+			repos = append(repos, repo.ID)
+		}
+	}
+	return mergeRepoIDs(nil, repos), nil
 }
 
 func (d statusData) effectiveRepos() []string {
@@ -3360,9 +3391,9 @@ func renderPendingRecommendations(out io.Writer, rerunInTerminal bool) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	configured := make(map[string]struct{}, len(cfg.Repos))
-	for _, r := range cfg.Repos {
-		configured[r] = struct{}{}
+	configured, err := configuredRepoSet(database, cfg.Repos, cfg.RepoSources)
+	if err != nil {
+		return err
 	}
 
 	type pendingRecommendationRow struct {

@@ -298,6 +298,55 @@ func TestStatusCommandPrintsConfiguredAndUnconfiguredPendingRecommendationCounts
 	}
 }
 
+func TestStatusCommandTreatsConfigSourceReposAsConfigured(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{RepoSources: []config.RepoSource{config.RepoSourceAllPublicOwned}}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "dynamic/repo", Source: db.RepoSourceConfig, DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo(dynamic) error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "dynamic/repo#7", RepoID: "dynamic/repo", Kind: sharedtypes.ItemKindIssue, Number: 7, Title: "dynamic", State: sharedtypes.ItemStateOpen}); err != nil {
+		t.Fatalf("UpsertItem(dynamic) error = %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: "dynamic/repo#7", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+		t.Fatalf("InsertRecommendation(dynamic) error = %v", err)
+	}
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"status", "--short"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if got, want := buf.String(), "pending=1 repos=1 daemon=stopped\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestStatusCommandExplainsDatabaseLockErrors(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths
@@ -335,6 +384,21 @@ func TestStatusCommandExplainsDatabaseLockErrors(t *testing.T) {
 	}
 	if strings.Contains(msg, "(261)") {
 		t.Fatalf("error = %q, should hide raw sqlite error code", msg)
+	}
+}
+
+func TestStatusDataEffectiveReposUsesCurrentSyncSnapshot(t *testing.T) {
+	data := statusData{
+		repos: []string{"acme/static"},
+		sync: &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{
+			{Repo: "acme/current"},
+		}},
+	}
+
+	got := data.effectiveRepos()
+	want := []string{"acme/static", "acme/current"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("effectiveRepos() = %v, want %v", got, want)
 	}
 }
 

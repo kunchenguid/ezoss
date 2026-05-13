@@ -71,6 +71,28 @@ func TestSyncState_RepoBeginRepoEndUpdatesCurrentAndPerRepo(t *testing.T) {
 	}
 }
 
+func TestSyncState_BeginCycleReplacesRepos(t *testing.T) {
+	s := NewSyncState(time.Minute)
+
+	s.BeginCycle([]string{"acme/old", "acme/current"})
+	s.RepoBegin("acme/old", 0, 2)
+	s.RepoEnd("acme/old", nil)
+	s.EndCycle()
+
+	s.BeginCycle([]string{"acme/current"})
+	s.RepoBegin("acme/current", 0, 1)
+	s.RepoEnd("acme/current", nil)
+	s.EndCycle()
+
+	snap := s.Snapshot()
+	if len(snap.Repos) != 1 {
+		t.Fatalf("Repos len = %d, want 1: %+v", len(snap.Repos), snap.Repos)
+	}
+	if snap.Repos[0].Repo != "acme/current" {
+		t.Fatalf("Repos[0].Repo = %q, want acme/current", snap.Repos[0].Repo)
+	}
+}
+
 func TestSyncState_RepoEndRecordsErrorString(t *testing.T) {
 	s := NewSyncState(0)
 	s.BeginCycle([]string{"acme/widgets"})
