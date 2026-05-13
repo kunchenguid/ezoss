@@ -2578,9 +2578,9 @@ func newInitCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringSliceVar(&repoIDs, "repo", nil, "Repository to monitor (owner/name); repeatable")
-	cmd.Flags().BoolVar(&allOwned, "all-owned", false, "Add all repos owned by the authenticated GitHub user")
-	cmd.Flags().BoolVar(&allPublicOwned, "all-public-owned", false, "Add all public repos owned by the authenticated GitHub user")
-	cmd.Flags().BoolVar(&allPublicOwnedAndStarred, "all-public-owned-and-starred", false, "Add public repos that the authenticated GitHub user both owns and has starred")
+	cmd.Flags().BoolVar(&allOwned, "all-owned", false, "Add a dynamic source for all repos owned by the authenticated GitHub user")
+	cmd.Flags().BoolVar(&allPublicOwned, "all-public-owned", false, "Add a dynamic source for public repos owned by the authenticated GitHub user")
+	cmd.Flags().BoolVar(&allPublicOwnedAndStarred, "all-public-owned-and-starred", false, "Add a dynamic source for public repos the authenticated GitHub user both owns and has starred")
 	cmd.Flags().StringVar(&agent, "agent", "", "Agent to use (auto, claude, codex, rovodev, opencode)")
 	cmd.Flags().StringVar(&mergeMethod, "merge-method", "", "Default PR merge method (merge, squash, rebase)")
 	cmd.Flags().StringVar(&pollInterval, "poll-interval", "", "Polling interval duration")
