@@ -629,11 +629,23 @@ func (m *Model) approveCurrent() tea.Cmd {
 	}
 	cmd := m.startAction(entry, "approve", func() tea.Msg {
 		notice, err := m.approve([]Entry{entry})
+		var updatedEntries []Entry
+		if err == nil && entry.StateChange == sharedtypes.StateChangeFixRequired && strings.TrimSpace(entry.FixPrompt) != "" && m.reload != nil {
+			if refreshed, reloadErr := m.reload(); reloadErr == nil {
+				for _, updated := range refreshed {
+					if updated.RecommendationID == entry.RecommendationID {
+						updatedEntries = append(updatedEntries, updated)
+						break
+					}
+				}
+			}
+		}
 		return actionFinishedMsg{
 			verb:             "approve",
 			recommendationID: entry.RecommendationID,
 			notice:           notice,
 			err:              err,
+			updatedEntries:   updatedEntries,
 		}
 	})
 	m.advanceCursorPastPending()
@@ -856,6 +868,19 @@ func (m *Model) applyActionFinished(msg actionFinishedMsg) {
 	}
 	switch msg.verb {
 	case "approve", "mark":
+		if msg.verb == "approve" && len(msg.updatedEntries) > 0 {
+			updated := msg.updatedEntries[0]
+			if idx >= 0 {
+				m.entries[idx] = updated
+				m.replaceAllEntry(updated, msg.recommendationID)
+				if idx == m.cursor {
+					m.cardScroll = 0
+				}
+				return
+			}
+			m.replaceAllEntry(updated, msg.recommendationID)
+			return
+		}
 		if idx < 0 {
 			m.removeAllEntriesByID(map[string]struct{}{msg.recommendationID: {}})
 			return

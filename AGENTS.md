@@ -76,6 +76,7 @@ All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` 
 Daemon-backed fix work comes from `fix.start` in the TUI path.
 `CreateFixJob` cancels and replaces an existing queued or `waiting_for_pr` job for the same item, but returns `ErrFixJobInFlight` while the existing job is preparing a worktree, running the agent, committing, or pushing.
 Approving the same `fix_required` option whose fix job is already in flight is the exception: approval side effects continue and the TUI surfaces an info notice instead of failing the approval.
+The inbox supplements active recommendations with approved fix jobs for open source items, keeping queued, running, failed, and `succeeded`/`pr_opened` jobs visible until a locally known fix PR closes; active recommendation entries win to avoid duplicates.
 PR detection must complete waiting jobs with `CompleteWaitingFixJobWithPR` so a detected URL cannot resurrect a job that was superseded while detection was in flight.
 The direct `ezoss fix <owner/repo#number>` CLI path uses `cliFixRunner`, which prepares an isolated worktree under `~/.ezoss/fixes`, resolves repo/global agent config, runs the selected agent with the option's `fix_prompt`, and commits produced changes.
 The recovery `ezoss fix attach <owner/repo#number>` path is for `waiting_for_pr` jobs that are waiting on a `no-mistakes` pipeline; it runs `no-mistakes attach` from the stored worktree, and the TUI shows this command only for those no-mistakes waits.
