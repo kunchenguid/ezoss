@@ -1343,7 +1343,7 @@ func loadInboxEntries() ([]tui.Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list active recommendations: %w", err)
 	}
-	configuredRepos, err := configuredRepoSet(database, cfg.Repos, cfg.RepoSources)
+	configuredRepos, err := configuredRepoSetForPaths(p, database, cfg.Repos, cfg.RepoSources)
 	if err != nil {
 		return nil, err
 	}
@@ -2846,14 +2846,16 @@ func newConfiguredRepoResolver(sources []config.RepoSource, lister repoLister, i
 	var mu sync.Mutex
 	var cachedDynamic []string
 	var cachedAt time.Time
+	var attemptedAt time.Time
 	return func(ctx context.Context, staticRepos []string) ([]string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 
 		current := now()
-		if !cachedAt.IsZero() && current.Sub(cachedAt) < interval {
+		if !attemptedAt.IsZero() && current.Sub(attemptedAt) < interval {
 			return mergeRepoIDs(staticRepos, cachedDynamic), nil
 		}
+		attemptedAt = current
 
 		dynamic, err := resolveConfiguredRepos(ctx, nil, sources, lister)
 		if err != nil {
@@ -3024,7 +3026,7 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 			return statusData{}, fmt.Errorf("read pending recommendations: %w", err)
 		}
 
-		data.repos, err = configuredRepoList(database, data.repos, cfg.RepoSources)
+		data.repos, err = configuredRepoList(database, data.repos, cfg.RepoSources, data.sync)
 		if err != nil {
 			return statusData{}, err
 		}
@@ -3070,8 +3072,18 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 	return data, nil
 }
 
-func configuredRepoSet(database *db.DB, staticRepos []string, repoSources []config.RepoSource) (map[string]struct{}, error) {
-	repos, err := configuredRepoList(database, staticRepos, repoSources)
+func configuredRepoSetForPaths(p *paths.Paths, database *db.DB, staticRepos []string, repoSources []config.RepoSource) (map[string]struct{}, error) {
+	var syncStatus *ipc.SyncStatusResult
+	if daemonStatus, err := readDaemonStatus(p.PIDPath()); err == nil && daemonStatus.State == daemon.StateRunning {
+		if sync, err := fetchDaemonSyncStatus(p.IPCPath()); err == nil {
+			syncStatus = sync
+		}
+	}
+	return configuredRepoSet(database, staticRepos, repoSources, syncStatus)
+}
+
+func configuredRepoSet(database *db.DB, staticRepos []string, repoSources []config.RepoSource, syncStatus *ipc.SyncStatusResult) (map[string]struct{}, error) {
+	repos, err := configuredRepoList(database, staticRepos, repoSources, syncStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -3082,9 +3094,17 @@ func configuredRepoSet(database *db.DB, staticRepos []string, repoSources []conf
 	return configured, nil
 }
 
-func configuredRepoList(database *db.DB, staticRepos []string, repoSources []config.RepoSource) ([]string, error) {
+func configuredRepoList(database *db.DB, staticRepos []string, repoSources []config.RepoSource, syncStatus *ipc.SyncStatusResult) ([]string, error) {
 	repos := make([]string, 0, len(staticRepos))
 	repos = append(repos, staticRepos...)
+	if syncStatus != nil && len(syncStatus.Repos) > 0 {
+		for _, repo := range syncStatus.Repos {
+			if repo.Repo != "" {
+				repos = append(repos, repo.Repo)
+			}
+		}
+		return mergeRepoIDs(nil, repos), nil
+	}
 	if len(repoSources) > 0 {
 		persisted, err := database.ListReposBySource(db.RepoSourceConfig)
 		if err != nil {
@@ -3391,7 +3411,7 @@ func renderPendingRecommendations(out io.Writer, rerunInTerminal bool) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	configured, err := configuredRepoSet(database, cfg.Repos, cfg.RepoSources)
+	configured, err := configuredRepoSetForPaths(p, database, cfg.Repos, cfg.RepoSources)
 	if err != nil {
 		return err
 	}

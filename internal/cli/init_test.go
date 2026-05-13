@@ -530,6 +530,43 @@ func TestConfiguredRepoResolverCachesDynamicSourcesForOneHour(t *testing.T) {
 	}
 }
 
+func TestConfiguredRepoResolverThrottlesFailedRefreshes(t *testing.T) {
+	stub := &stubRepoLister{err: errors.New("rate limited")}
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	resolver := newConfiguredRepoResolver([]config.RepoSource{config.RepoSourceAllPublicOwned}, stub, repoDiscoveryInterval, func() time.Time {
+		return now
+	})
+
+	_, err := resolver(context.Background(), []string{"manual/repo"})
+	if err == nil {
+		t.Fatal("first resolver call error = nil, want source error")
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("ListOwnedRepos calls after first failure = %d, want 1", len(stub.calls))
+	}
+
+	now = now.Add(repoDiscoveryInterval - time.Minute)
+	second, err := resolver(context.Background(), []string{"manual/repo"})
+	if err != nil {
+		t.Fatalf("second resolver call error = %v, want cached static repos", err)
+	}
+	if want := []string{"manual/repo"}; !reflect.DeepEqual(second, want) {
+		t.Fatalf("second repos = %v, want %v", second, want)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("ListOwnedRepos calls before interval = %d, want still 1", len(stub.calls))
+	}
+
+	now = now.Add(2 * time.Minute)
+	_, err = resolver(context.Background(), []string{"manual/repo"})
+	if err == nil {
+		t.Fatal("third resolver call error = nil, want retry error after interval")
+	}
+	if len(stub.calls) != 2 {
+		t.Fatalf("ListOwnedRepos calls after interval = %d, want 2", len(stub.calls))
+	}
+}
+
 func TestInitCommandSkipsWizardWhenNonInteractive(t *testing.T) {
 	tempRoot := withInitTestEnv(t)
 

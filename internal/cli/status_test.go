@@ -402,6 +402,66 @@ func TestStatusDataEffectiveReposUsesCurrentSyncSnapshot(t *testing.T) {
 	}
 }
 
+func TestCollectStatusDataUsesCurrentSyncSnapshotOverPersistedDynamicRepos(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalReadDaemonStatus := readDaemonStatus
+	originalDialDaemonIPC := dialDaemonIPC
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		readDaemonStatus = originalReadDaemonStatus
+		dialDaemonIPC = originalDialDaemonIPC
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	readDaemonStatus = func(string) (daemon.Status, error) {
+		return daemon.Status{State: daemon.StateRunning, PID: 123}, nil
+	}
+	dialDaemonIPC = func(string) (daemonIPCClient, error) {
+		return stubDaemonIPCClient{call: func(method string, _ interface{}, result interface{}) error {
+			if method != ipc.MethodSyncStatus {
+				t.Fatalf("Call() method = %q, want %q", method, ipc.MethodSyncStatus)
+			}
+			out := result.(*ipc.SyncStatusResult)
+			*out = ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{{Repo: "dynamic/current"}}}
+			return nil
+		}}, nil
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{RepoSources: []config.RepoSource{config.RepoSourceAllPublicOwned}}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	for _, repoID := range []string{"dynamic/current", "dynamic/stale"} {
+		if err := database.UpsertRepo(db.Repo{ID: repoID, Source: db.RepoSourceConfig, DefaultBranch: "main"}); err != nil {
+			t.Fatalf("UpsertRepo(%s) error = %v", repoID, err)
+		}
+		if err := database.UpsertItem(db.Item{ID: repoID + "#1", RepoID: repoID, Kind: sharedtypes.ItemKindIssue, Number: 1, Title: repoID, State: sharedtypes.ItemStateOpen}); err != nil {
+			t.Fatalf("UpsertItem(%s) error = %v", repoID, err)
+		}
+		if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: repoID + "#1", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+			t.Fatalf("InsertRecommendation(%s) error = %v", repoID, err)
+		}
+	}
+
+	data, err := collectStatusData(NewRootCmd())
+	if err != nil {
+		t.Fatalf("collectStatusData() error = %v", err)
+	}
+	if data.configuredPending != 1 || data.unconfigured != 1 {
+		t.Fatalf("configured/unconfigured = %d/%d, want 1/1", data.configuredPending, data.unconfigured)
+	}
+}
+
 func TestStatusCommandRetriesTransientDatabaseLock(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths
