@@ -3097,7 +3097,7 @@ func configuredRepoSet(database *db.DB, staticRepos []string, repoSources []conf
 func configuredRepoList(database *db.DB, staticRepos []string, repoSources []config.RepoSource, syncStatus *ipc.SyncStatusResult) ([]string, error) {
 	repos := make([]string, 0, len(staticRepos))
 	repos = append(repos, staticRepos...)
-	if syncStatus != nil && len(syncStatus.Repos) > 0 {
+	if syncStatus != nil {
 		for _, repo := range syncStatus.Repos {
 			if repo.Repo != "" {
 				repos = append(repos, repo.Repo)
