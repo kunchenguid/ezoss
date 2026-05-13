@@ -71,6 +71,14 @@ type ContribConfig struct {
 	IgnoreRepos []string `yaml:"ignore_repos"`
 }
 
+type RepoSource string
+
+const (
+	RepoSourceAllOwned                 RepoSource = "all_owned"
+	RepoSourceAllPublicOwned           RepoSource = "all_public_owned"
+	RepoSourceAllPublicOwnedAndStarred RepoSource = "all_public_owned_and_starred"
+)
+
 type syncLabelsRaw struct {
 	Triaged   *bool `yaml:"triaged"`
 	WaitingOn *bool `yaml:"waiting_on"`
@@ -90,6 +98,7 @@ type GlobalConfig struct {
 	ActivityProbeInterval time.Duration
 	MergeMethod           string
 	Repos                 []string
+	RepoSources           []RepoSource
 	SyncLabels            SyncLabels
 	Fixes                 FixesConfig
 	Contrib               ContribConfig
@@ -104,6 +113,7 @@ type globalConfigRaw struct {
 	ActivityProbeInterval string         `yaml:"activity_probe_interval"`
 	MergeMethod           string         `yaml:"merge_method"`
 	Repos                 []string       `yaml:"repos"`
+	RepoSources           []RepoSource   `yaml:"repo_sources"`
 	SyncLabels            *syncLabelsRaw `yaml:"sync_labels"`
 	Fixes                 *FixesConfig   `yaml:"fixes"`
 	Contrib               *contribRaw    `yaml:"contrib"`
@@ -127,6 +137,7 @@ type globalConfigFile struct {
 	ActivityProbeInterval string         `yaml:"activity_probe_interval"`
 	MergeMethod           string         `yaml:"merge_method"`
 	Repos                 []string       `yaml:"repos"`
+	RepoSources           []RepoSource   `yaml:"repo_sources"`
 	Fixes                 FixesConfig    `yaml:"fixes"`
 	Contrib               ContribConfig  `yaml:"contrib"`
 	SyncLabels            syncLabelsFile `yaml:"sync_labels"`
@@ -149,6 +160,7 @@ type Config struct {
 	ActivityProbeInterval time.Duration
 	MergeMethod           string
 	Repos                 []string
+	RepoSources           []RepoSource
 	SyncLabels            SyncLabels
 	Fixes                 FixesConfig
 	Contrib               ContribConfig
@@ -210,6 +222,28 @@ func normalizeContribPushMode(value ContribPushMode) (ContribPushMode, error) {
 	}
 }
 
+func normalizeRepoSources(values []RepoSource) ([]RepoSource, error) {
+	seen := make(map[RepoSource]struct{}, len(values))
+	out := make([]RepoSource, 0, len(values))
+	for _, value := range values {
+		source := RepoSource(strings.ToLower(strings.TrimSpace(string(value))))
+		if source == "" {
+			continue
+		}
+		switch source {
+		case RepoSourceAllOwned, RepoSourceAllPublicOwned, RepoSourceAllPublicOwnedAndStarred:
+		default:
+			return nil, fmt.Errorf("invalid repo_sources entry %q: must be all_owned, all_public_owned, or all_public_owned_and_starred", value)
+		}
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		out = append(out, source)
+	}
+	return out, nil
+}
+
 const defaultConfigYAML = `# ezoss global configuration
 
 # Agent to use for triage
@@ -247,13 +281,18 @@ fixes:
 # Track issues you authored and PRs you opened in repos you don't maintain.
 # Each cycle the daemon runs gh search prs/issues --author=@me and
 # surfaces those items in the inbox alongside maintainer items.
-# Set enabled: false to opt out and only triage repos listed under repos:.
+# Set enabled: false to opt out and only triage maintainer repos from
+# repos: and repo_sources:.
 contrib:
   enabled: true
   ignore_repos: []
 
 # Repositories to monitor
 repos: []
+
+# Dynamic maintainer repo sources to refresh at most once per hour.
+# Options: all_owned, all_public_owned, all_public_owned_and_starred
+repo_sources: []
 
 # Optional ezoss/* state labels to mirror to GitHub for maintainer items.
 # ezoss/triaged is always managed automatically for maintainer items.
@@ -316,6 +355,7 @@ func SaveGlobal(path string, cfg *GlobalConfig) error {
 		ActivityProbeInterval: formatConfigDuration(cfg.ActivityProbeInterval),
 		MergeMethod:           cfg.MergeMethod,
 		Repos:                 append([]string(nil), cfg.Repos...),
+		RepoSources:           append([]RepoSource(nil), cfg.RepoSources...),
 		Fixes:                 cfg.Fixes,
 		SyncLabels: syncLabelsFile{
 			WaitingOn: cfg.SyncLabels.WaitingOn,
@@ -345,6 +385,11 @@ func SaveGlobal(path string, cfg *GlobalConfig) error {
 		return err
 	}
 	file.MergeMethod = mergeMethod
+	repoSources, err := normalizeRepoSources(file.RepoSources)
+	if err != nil {
+		return err
+	}
+	file.RepoSources = repoSources
 	prCreate, err := normalizePRCreateMode(file.Fixes.PRCreate)
 	if err != nil {
 		return err
@@ -456,6 +501,13 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 	if raw.Repos != nil {
 		cfg.Repos = append([]string(nil), raw.Repos...)
 	}
+	if raw.RepoSources != nil {
+		repoSources, err := normalizeRepoSources(raw.RepoSources)
+		if err != nil {
+			return nil, err
+		}
+		cfg.RepoSources = repoSources
+	}
 	if raw.SyncLabels != nil {
 		if raw.SyncLabels.WaitingOn != nil {
 			cfg.SyncLabels.WaitingOn = *raw.SyncLabels.WaitingOn
@@ -502,6 +554,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		ActivityProbeInterval: global.ActivityProbeInterval,
 		MergeMethod:           global.MergeMethod,
 		Repos:                 append([]string(nil), global.Repos...),
+		RepoSources:           append([]RepoSource(nil), global.RepoSources...),
 		SyncLabels:            global.SyncLabels,
 		Fixes:                 global.Fixes,
 		Contrib: ContribConfig{

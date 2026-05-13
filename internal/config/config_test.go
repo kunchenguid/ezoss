@@ -32,12 +32,61 @@ func TestLoadGlobalDefaults(t *testing.T) {
 	if len(cfg.Repos) != 0 {
 		t.Fatalf("Repos = %v, want empty", cfg.Repos)
 	}
+	if len(cfg.RepoSources) != 0 {
+		t.Fatalf("RepoSources = %v, want empty", cfg.RepoSources)
+	}
 	if cfg.Fixes.PRCreate != PRCreateAuto {
 		t.Fatalf("Fixes.PRCreate = %q, want %q", cfg.Fixes.PRCreate, PRCreateAuto)
 	}
 	if !cfg.Contrib.Enabled {
 		t.Fatalf("Contrib.Enabled = false, want true (contributor mode is on by default)")
 	}
+}
+
+func TestLoadGlobalRepoSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := `repo_sources:
+  - all_owned
+  - all_public_owned_and_starred
+`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := LoadGlobal(path)
+	if err != nil {
+		t.Fatalf("LoadGlobal() error = %v", err)
+	}
+
+	want := []RepoSource{RepoSourceAllOwned, RepoSourceAllPublicOwnedAndStarred}
+	if strings.Join(repoSourcesToStrings(cfg.RepoSources), ",") != strings.Join(repoSourcesToStrings(want), ",") {
+		t.Fatalf("RepoSources = %v, want %v", cfg.RepoSources, want)
+	}
+}
+
+func TestSaveGlobalWritesRepoSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	want := []RepoSource{RepoSourceAllPublicOwned}
+
+	if err := SaveGlobal(path, &GlobalConfig{RepoSources: want}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	got, err := LoadGlobal(path)
+	if err != nil {
+		t.Fatalf("LoadGlobal() error = %v", err)
+	}
+	if strings.Join(repoSourcesToStrings(got.RepoSources), ",") != strings.Join(repoSourcesToStrings(want), ",") {
+		t.Fatalf("RepoSources = %v, want %v", got.RepoSources, want)
+	}
+}
+
+func repoSourcesToStrings(sources []RepoSource) []string {
+	out := make([]string, 0, len(sources))
+	for _, source := range sources {
+		out = append(out, string(source))
+	}
+	return out
 }
 
 func TestLoadGlobalContribExplicitOptOut(t *testing.T) {

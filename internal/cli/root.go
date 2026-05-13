@@ -69,6 +69,9 @@ var runDaemonWithOptions = daemon.RunWithOptions
 var installTimestampedLogPipe = daemon.InstallTimestampedLogPipe
 var daemonReadyTimeout = 5 * time.Second
 var daemonReadyPollInterval = 100 * time.Millisecond
+
+const repoDiscoveryInterval = time.Hour
+
 var newGitHubClient = func() itemFetcher {
 	return ghclient.New(nil)
 }
@@ -209,6 +212,7 @@ type daemonTriageLister interface {
 	SearchAuthoredOpenPRs(ctx context.Context) ([]ghclient.Item, error)
 	SearchAuthoredOpenIssues(ctx context.Context) ([]ghclient.Item, error)
 	ListOwnedRepos(ctx context.Context, visibility ghclient.RepoVisibility) ([]string, error)
+	ListStarredRepos(ctx context.Context) ([]string, error)
 }
 
 type triageAgent interface {
@@ -1021,9 +1025,10 @@ func newDaemonRunCmd() *cobra.Command {
 
 			syncState := daemon.NewSyncState(cfg.PollInterval)
 			activityProbeState := daemon.NewActivityProbeState()
+			ghClient := newDaemonTriageLister()
 			poller := daemon.Poller{
 				DB:                    database,
-				GitHub:                newDaemonTriageLister(),
+				GitHub:                ghClient,
 				StaleThreshold:        cfg.StaleThreshold,
 				IgnoreOlderThan:       cfg.IgnoreOlderThan,
 				ActivityProbeInterval: cfg.ActivityProbeInterval,
@@ -1034,9 +1039,10 @@ func newDaemonRunCmd() *cobra.Command {
 				ContribIgnoreRepos:    append([]string(nil), cfg.Contrib.IgnoreRepos...),
 			}
 			if useMock {
+				ghClient = ghmock.New()
 				poller = daemon.Poller{
 					DB:                    database,
-					GitHub:                ghmock.New(),
+					GitHub:                ghClient,
 					Triage:                mockTriageRunner{},
 					AgentsInstructions:    readAgentsInstructions(p.Root()),
 					StaleThreshold:        cfg.StaleThreshold,
@@ -1070,9 +1076,14 @@ func newDaemonRunCmd() *cobra.Command {
 					return ipc.FixStartResult{}, fmt.Errorf("fix is unavailable in mock mode")
 				}
 			}
+			var resolveRepos daemon.ResolveReposFunc
+			if len(cfg.RepoSources) > 0 {
+				resolveRepos = newConfiguredRepoResolver(cfg.RepoSources, ghClient, repoDiscoveryInterval, time.Now)
+			}
 
 			if err := runDaemonWithOptions(p.PIDPath(), nil, daemon.RunOptions{
 				Repos:           append([]string(nil), cfg.Repos...),
+				ResolveRepos:    resolveRepos,
 				PollInterval:    cfg.PollInterval,
 				StaleThreshold:  cfg.StaleThreshold,
 				IgnoreOlderThan: cfg.IgnoreOlderThan,
@@ -1123,7 +1134,7 @@ func newDaemonStartCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("load config: %w", err)
 				}
-				if cfg == nil || len(cfg.Repos) == 0 {
+				if cfg == nil || (len(cfg.Repos) == 0 && len(cfg.RepoSources) == 0) {
 					if cfg != nil && cfg.Contrib.Enabled {
 						fmt.Fprintln(cmd.ErrOrStderr(), "warning: no repos configured; daemon will only track contributor items.")
 						fmt.Fprintln(cmd.ErrOrStderr(), "hint: add maintainer repos with ezoss init --repo owner/name")
@@ -1328,14 +1339,13 @@ func loadInboxEntries() ([]tui.Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	configuredRepos := make(map[string]struct{}, len(cfg.Repos))
-	for _, repoID := range cfg.Repos {
-		configuredRepos[repoID] = struct{}{}
-	}
-
 	recommendations, err := database.ListActiveRecommendations()
 	if err != nil {
 		return nil, fmt.Errorf("list active recommendations: %w", err)
+	}
+	configuredRepos, err := configuredRepoSetForPaths(p, database, cfg.Repos, cfg.RepoSources)
+	if err != nil {
+		return nil, err
 	}
 
 	entries := make([]tui.Entry, 0, len(recommendations))
@@ -2534,7 +2544,7 @@ func newInitCmd() *cobra.Command {
 			anyFlag := len(repoIDs) > 0 || allOwned || allPublicOwned || allPublicOwnedAndStarred ||
 				agent != "" || mergeMethod != "" || pollInterval != "" || staleThreshold != ""
 
-			collected, err := collectInitRepos(cmd, repoIDs, allOwned, allPublicOwned, allPublicOwnedAndStarred)
+			collected, sources, err := collectInitRepos(repoIDs, allOwned, allPublicOwned, allPublicOwnedAndStarred)
 			if err != nil {
 				return err
 			}
@@ -2543,7 +2553,7 @@ func newInitCmd() *cobra.Command {
 			// shell, drop into the wizard so they don't have to remember the
 			// `--repo` / `--all-owned` flag spelling.
 			if !anyFlag && initWizardEnabled(cmd) {
-				wizardRepos, aborted, err := runInitWizardFlow(cmd)
+				wizardRepos, wizardSources, aborted, err := runInitWizardFlow(cmd)
 				if err != nil {
 					return err
 				}
@@ -2552,9 +2562,11 @@ func newInitCmd() *cobra.Command {
 					return nil
 				}
 				collected = append(collected, wizardRepos...)
+				sources = append(sources, wizardSources...)
 			}
 
 			cfg.Repos = mergeRepoIDs(cfg.Repos, collected)
+			cfg.RepoSources = mergeRepoSources(cfg.RepoSources, sources)
 
 			if err := config.SaveGlobal(configPath, cfg); err != nil {
 				return fmt.Errorf("save config: %w", err)
@@ -2566,9 +2578,9 @@ func newInitCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringSliceVar(&repoIDs, "repo", nil, "Repository to monitor (owner/name); repeatable")
-	cmd.Flags().BoolVar(&allOwned, "all-owned", false, "Add all repos owned by the authenticated GitHub user")
-	cmd.Flags().BoolVar(&allPublicOwned, "all-public-owned", false, "Add all public repos owned by the authenticated GitHub user")
-	cmd.Flags().BoolVar(&allPublicOwnedAndStarred, "all-public-owned-and-starred", false, "Add public repos that the authenticated GitHub user both owns and has starred")
+	cmd.Flags().BoolVar(&allOwned, "all-owned", false, "Add a dynamic source for all repos owned by the authenticated GitHub user")
+	cmd.Flags().BoolVar(&allPublicOwned, "all-public-owned", false, "Add a dynamic source for public repos owned by the authenticated GitHub user")
+	cmd.Flags().BoolVar(&allPublicOwnedAndStarred, "all-public-owned-and-starred", false, "Add a dynamic source for public repos the authenticated GitHub user both owns and has starred")
 	cmd.Flags().StringVar(&agent, "agent", "", "Agent to use (auto, claude, codex, rovodev, opencode)")
 	cmd.Flags().StringVar(&mergeMethod, "merge-method", "", "Default PR merge method (merge, squash, rebase)")
 	cmd.Flags().StringVar(&pollInterval, "poll-interval", "", "Polling interval duration")
@@ -2577,42 +2589,32 @@ func newInitCmd() *cobra.Command {
 	return cmd
 }
 
-// collectInitRepos resolves the repo IDs supplied via flags. It does NOT
-// touch existing config.Repos; merging is the caller's responsibility.
-func collectInitRepos(cmd *cobra.Command, repoIDs []string, allOwned, allPublicOwned, allPublicOwnedAndStarred bool) ([]string, error) {
+// collectInitRepos resolves the repo IDs and dynamic sources supplied via flags.
+// It does NOT touch existing config; merging is the caller's responsibility.
+func collectInitRepos(repoIDs []string, allOwned, allPublicOwned, allPublicOwnedAndStarred bool) ([]string, []config.RepoSource, error) {
 	out := make([]string, 0, len(repoIDs))
 
 	for _, raw := range repoIDs {
 		repoID, err := parseRepoID(raw)
 		if err != nil {
-			return nil, fmt.Errorf("parse --repo: %w", err)
+			return nil, nil, fmt.Errorf("parse --repo: %w", err)
 		}
 		out = append(out, repoID)
 	}
 
+	var sources []config.RepoSource
 	if allOwned || allPublicOwned || allPublicOwnedAndStarred {
-		lister := newRepoLister()
-		visibility := ghclient.RepoVisibilityAll
-		if allPublicOwned || allPublicOwnedAndStarred {
-			visibility = ghclient.RepoVisibilityPublic
+		source := config.RepoSourceAllOwned
+		if allPublicOwned {
+			source = config.RepoSourceAllPublicOwned
 		}
-		fetched, err := lister.ListOwnedRepos(cmd.Context(), visibility)
-		if err != nil {
-			return nil, fmt.Errorf("list owned repos: %w", err)
-		}
-
 		if allPublicOwnedAndStarred {
-			starred, err := lister.ListStarredRepos(cmd.Context())
-			if err != nil {
-				return nil, fmt.Errorf("list starred repos: %w", err)
-			}
-			fetched = intersectRepoIDs(fetched, starred)
+			source = config.RepoSourceAllPublicOwnedAndStarred
 		}
-
-		out = append(out, fetched...)
+		sources = append(sources, source)
 	}
 
-	return out, nil
+	return out, sources, nil
 }
 
 // intersectRepoIDs returns the repos present in both lists, preserving the
@@ -2648,7 +2650,7 @@ func intersectRepoIDs(a, b []string) []string {
 	return out
 }
 
-func runInitWizardFlow(cmd *cobra.Command) ([]string, bool, error) {
+func runInitWizardFlow(cmd *cobra.Command) ([]string, []config.RepoSource, bool, error) {
 	cwd, err := currentWorkingDir()
 	if err != nil {
 		cwd = ""
@@ -2679,12 +2681,28 @@ func runInitWizardFlow(cmd *cobra.Command) ([]string, bool, error) {
 
 	result, err := runInitWizard(cfg)
 	if err != nil {
-		return nil, false, fmt.Errorf("run init wizard: %w", err)
+		return nil, nil, false, fmt.Errorf("run init wizard: %w", err)
 	}
 	if result.Err != nil {
-		return nil, false, result.Err
+		return nil, nil, false, result.Err
 	}
-	return result.Repos, result.Aborted, nil
+	if source, ok := repoSourceForWizardMode(result.Mode); ok {
+		return nil, []config.RepoSource{source}, result.Aborted, nil
+	}
+	return result.Repos, nil, result.Aborted, nil
+}
+
+func repoSourceForWizardMode(mode wizard.Mode) (config.RepoSource, bool) {
+	switch mode {
+	case wizard.ModeAllOwned:
+		return config.RepoSourceAllOwned, true
+	case wizard.ModeAllPublicOwned:
+		return config.RepoSourceAllPublicOwned, true
+	case wizard.ModeAllPublicOwnedAndStarred:
+		return config.RepoSourceAllPublicOwnedAndStarred, true
+	default:
+		return "", false
+	}
 }
 
 // mergeRepoIDs returns the union of existing and incoming repo IDs in the
@@ -2710,12 +2728,163 @@ func mergeRepoIDs(existing, incoming []string) []string {
 	return merged
 }
 
+func mergeRepoSources(existing, incoming []config.RepoSource) []config.RepoSource {
+	seen := make(map[config.RepoSource]struct{}, len(existing)+len(incoming))
+	merged := make([]config.RepoSource, 0, len(existing)+len(incoming))
+	for _, source := range existing {
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		merged = append(merged, source)
+	}
+	for _, source := range incoming {
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		merged = append(merged, source)
+	}
+	return merged
+}
+
+func resolveConfiguredRepos(ctx context.Context, staticRepos []string, sources []config.RepoSource, lister repoLister) ([]string, error) {
+	if len(sources) == 0 {
+		return mergeRepoIDs(nil, staticRepos), nil
+	}
+	if lister == nil {
+		return nil, errors.New("resolve repo sources: nil repo lister")
+	}
+
+	var ownedAll []string
+	var ownedPublic []string
+	var starred []string
+	loadedOwnedAll := false
+	loadedOwnedPublic := false
+	loadedStarred := false
+
+	loadOwned := func(visibility ghclient.RepoVisibility) ([]string, error) {
+		if visibility == ghclient.RepoVisibilityPublic {
+			if loadedOwnedPublic {
+				return ownedPublic, nil
+			}
+			repos, err := lister.ListOwnedRepos(ctx, ghclient.RepoVisibilityPublic)
+			if err != nil {
+				return nil, fmt.Errorf("list public owned repos: %w", err)
+			}
+			ownedPublic = repos
+			loadedOwnedPublic = true
+			return ownedPublic, nil
+		}
+		if loadedOwnedAll {
+			return ownedAll, nil
+		}
+		repos, err := lister.ListOwnedRepos(ctx, ghclient.RepoVisibilityAll)
+		if err != nil {
+			return nil, fmt.Errorf("list owned repos: %w", err)
+		}
+		ownedAll = repos
+		loadedOwnedAll = true
+		return ownedAll, nil
+	}
+
+	loadStarred := func() ([]string, error) {
+		if loadedStarred {
+			return starred, nil
+		}
+		repos, err := lister.ListStarredRepos(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list starred repos: %w", err)
+		}
+		starred = repos
+		loadedStarred = true
+		return starred, nil
+	}
+
+	resolved := append([]string(nil), staticRepos...)
+	for _, source := range sources {
+		switch source {
+		case config.RepoSourceAllOwned:
+			repos, err := loadOwned(ghclient.RepoVisibilityAll)
+			if err != nil {
+				return nil, err
+			}
+			resolved = append(resolved, repos...)
+		case config.RepoSourceAllPublicOwned:
+			repos, err := loadOwned(ghclient.RepoVisibilityPublic)
+			if err != nil {
+				return nil, err
+			}
+			resolved = append(resolved, repos...)
+		case config.RepoSourceAllPublicOwnedAndStarred:
+			owned, err := loadOwned(ghclient.RepoVisibilityPublic)
+			if err != nil {
+				return nil, err
+			}
+			starredRepos, err := loadStarred()
+			if err != nil {
+				return nil, err
+			}
+			resolved = append(resolved, intersectRepoIDs(owned, starredRepos)...)
+		default:
+			return nil, fmt.Errorf("unsupported repo source %q", source)
+		}
+	}
+
+	return mergeRepoIDs(nil, resolved), nil
+}
+
+func newConfiguredRepoResolver(sources []config.RepoSource, lister repoLister, interval time.Duration, now func() time.Time) daemon.ResolveReposFunc {
+	if now == nil {
+		now = time.Now
+	}
+	if interval <= 0 {
+		interval = repoDiscoveryInterval
+	}
+	sources = append([]config.RepoSource(nil), sources...)
+
+	var mu sync.Mutex
+	var cachedDynamic []string
+	var cachedAt time.Time
+	var attemptedAt time.Time
+	return func(ctx context.Context, staticRepos []string) ([]string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		current := now()
+		if !attemptedAt.IsZero() && current.Sub(attemptedAt) < interval {
+			return mergeRepoIDs(staticRepos, cachedDynamic), nil
+		}
+		attemptedAt = current
+
+		dynamic, err := resolveConfiguredRepos(ctx, nil, sources, lister)
+		if err != nil {
+			if cachedAt.IsZero() {
+				return nil, err
+			}
+			return mergeRepoIDs(staticRepos, cachedDynamic), nil
+		}
+
+		cachedDynamic = append([]string(nil), dynamic...)
+		cachedAt = current
+		return mergeRepoIDs(staticRepos, cachedDynamic), nil
+	}
+}
+
 func writeInitSummary(w io.Writer, configPath string, cfg *config.GlobalConfig) error {
 	repoWord := "repos"
 	if len(cfg.Repos) == 1 {
 		repoWord = "repo"
 	}
-	if _, err := fmt.Fprintf(w, "initialized %s (%d %s)\n", configPath, len(cfg.Repos), repoWord); err != nil {
+	sourceWord := "dynamic repo sources"
+	if len(cfg.RepoSources) == 1 {
+		sourceWord = "dynamic repo source"
+	}
+	if len(cfg.RepoSources) > 0 {
+		if _, err := fmt.Fprintf(w, "initialized %s (%d %s, %d %s)\n", configPath, len(cfg.Repos), repoWord, len(cfg.RepoSources), sourceWord); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintf(w, "initialized %s (%d %s)\n", configPath, len(cfg.Repos), repoWord); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  agent: %s\n  poll: %s\n  stale: %s\n", cfg.Agent, cfg.PollInterval, formatStaleThreshold(cfg.StaleThreshold)); err != nil {
@@ -2726,7 +2895,12 @@ func writeInitSummary(w io.Writer, configPath string, cfg *config.GlobalConfig) 
 			return err
 		}
 	}
-	if len(cfg.Repos) == 0 {
+	for _, source := range cfg.RepoSources {
+		if _, err := fmt.Fprintf(w, "  - %s\n", source); err != nil {
+			return err
+		}
+	}
+	if len(cfg.Repos) == 0 && len(cfg.RepoSources) == 0 {
 		if cfg.Contrib.Enabled {
 			_, err := fmt.Fprintln(w, "\nNo maintainer repos configured. Contributor tracking is enabled.\nAdd a maintainer repo with:\n  ezoss init --repo owner/name")
 			return err
@@ -2831,11 +3005,15 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 		repos:          append([]string(nil), cfg.Repos...),
 		contribEnabled: cfg.Contrib.Enabled,
 	}
-
-	configured := make(map[string]struct{}, len(cfg.Repos))
-	for _, repoID := range cfg.Repos {
-		configured[repoID] = struct{}{}
+	if daemonStatus.State == daemon.StateRunning {
+		sync, err := fetchDaemonSyncStatus(p.IPCPath())
+		if err != nil {
+			data.syncErr = err
+		} else {
+			data.sync = sync
+		}
 	}
+
 	if _, err := os.Stat(p.DBPath()); err == nil {
 		database, err := openDBWithRetry(p.DBPath())
 		if err != nil {
@@ -2846,6 +3024,16 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 		data.pending, err = database.CountActiveRecommendations()
 		if err != nil {
 			return statusData{}, fmt.Errorf("read pending recommendations: %w", err)
+		}
+
+		data.repos, err = configuredRepoList(database, data.repos, cfg.RepoSources, data.sync)
+		if err != nil {
+			return statusData{}, err
+		}
+		effectiveRepos := data.effectiveRepos()
+		configured := make(map[string]struct{}, len(effectiveRepos))
+		for _, repoID := range effectiveRepos {
+			configured[repoID] = struct{}{}
 		}
 
 		recommendations, err := database.ListActiveRecommendations()
@@ -2881,16 +3069,70 @@ func collectStatusData(cmd *cobra.Command) (statusData, error) {
 		return statusData{}, fmt.Errorf("stat db: %w", err)
 	}
 
-	if daemonStatus.State == daemon.StateRunning {
-		sync, err := fetchDaemonSyncStatus(p.IPCPath())
-		if err != nil {
-			data.syncErr = err
-		} else {
-			data.sync = sync
+	return data, nil
+}
+
+func configuredRepoSetForPaths(p *paths.Paths, database *db.DB, staticRepos []string, repoSources []config.RepoSource) (map[string]struct{}, error) {
+	var syncStatus *ipc.SyncStatusResult
+	if daemonStatus, err := readDaemonStatus(p.PIDPath()); err == nil && daemonStatus.State == daemon.StateRunning {
+		if sync, err := fetchDaemonSyncStatus(p.IPCPath()); err == nil {
+			syncStatus = sync
 		}
 	}
+	return configuredRepoSet(database, staticRepos, repoSources, syncStatus)
+}
 
-	return data, nil
+func configuredRepoSet(database *db.DB, staticRepos []string, repoSources []config.RepoSource, syncStatus *ipc.SyncStatusResult) (map[string]struct{}, error) {
+	repos, err := configuredRepoList(database, staticRepos, repoSources, syncStatus)
+	if err != nil {
+		return nil, err
+	}
+	configured := make(map[string]struct{}, len(repos))
+	for _, repoID := range repos {
+		configured[repoID] = struct{}{}
+	}
+	return configured, nil
+}
+
+func configuredRepoList(database *db.DB, staticRepos []string, repoSources []config.RepoSource, syncStatus *ipc.SyncStatusResult) ([]string, error) {
+	repos := make([]string, 0, len(staticRepos))
+	repos = append(repos, staticRepos...)
+	if syncStatus != nil {
+		for _, repo := range syncStatus.Repos {
+			if repo.Repo != "" {
+				repos = append(repos, repo.Repo)
+			}
+		}
+		return mergeRepoIDs(nil, repos), nil
+	}
+	if len(repoSources) > 0 {
+		persisted, err := database.ListReposBySource(db.RepoSourceConfig)
+		if err != nil {
+			return nil, fmt.Errorf("list configured repos: %w", err)
+		}
+		for _, repo := range persisted {
+			repos = append(repos, repo.ID)
+		}
+	}
+	return mergeRepoIDs(nil, repos), nil
+}
+
+func (d statusData) effectiveRepos() []string {
+	if d.sync == nil || len(d.sync.Repos) == 0 {
+		return d.repos
+	}
+	repos := make([]string, 0, len(d.repos)+len(d.sync.Repos))
+	repos = append(repos, d.repos...)
+	for _, repo := range d.sync.Repos {
+		if repo.Repo != "" {
+			repos = append(repos, repo.Repo)
+		}
+	}
+	repos = mergeRepoIDs(nil, repos)
+	if len(repos) == 0 {
+		return d.repos
+	}
+	return repos
 }
 
 // fetchDaemonSyncStatus dials the daemon's IPC socket and calls
@@ -2939,7 +3181,7 @@ func renderShortStatus(d statusData) string {
 			parts = append(parts, fmt.Sprintf("unconfigured=%d", d.unconfigured))
 		}
 	}
-	parts = append(parts, fmt.Sprintf("repos=%d", len(d.repos)))
+	parts = append(parts, fmt.Sprintf("repos=%d", len(d.effectiveRepos())))
 	if d.contribRepos > 0 {
 		parts = append(parts, fmt.Sprintf("contrib_repos=%d", d.contribRepos))
 	}
@@ -2967,7 +3209,8 @@ func renderRichStatus(d statusData, now time.Time) string {
 	// Each row is self-contained so the user doesn't need to do
 	// arithmetic across rows to figure out where things live.
 	const labelWidth = 13
-	maintainerRepos := len(d.repos)
+	effectiveRepos := d.effectiveRepos()
+	maintainerRepos := len(effectiveRepos)
 	fmt.Fprintf(&b, "%-*s %d %s  •  %d pending %s\n",
 		labelWidth, "maintainer:", maintainerRepos, repoNounFor(maintainerRepos),
 		d.configuredPending, recommendationNounFor(d.configuredPending))
@@ -3024,7 +3267,7 @@ func renderSyncSection(d statusData, now time.Time) string {
 		// First cycle in flight pre-phase: legacy fallback for daemons
 		// that haven't been upgraded.
 		header += fmt.Sprintf("first cycle in flight (%d / %d)", sync.CurrentIndex, sync.Total)
-	case len(sync.Repos) > 0 || len(d.repos) > 0:
+	case len(sync.Repos) > 0 || len(d.effectiveRepos()) > 0:
 		header += "starting up"
 	case d.contribEnabled:
 		header += "idle (contributor mode enabled; no maintainer repos configured)"
@@ -3038,18 +3281,19 @@ func renderSyncSection(d statusData, now time.Time) string {
 		repoMap[r.Repo] = r
 	}
 
-	if len(d.repos) == 0 {
+	repos := d.effectiveRepos()
+	if len(repos) == 0 {
 		return strings.TrimRight(b.String(), "\n")
 	}
 
 	maxName := 0
-	for _, repo := range d.repos {
+	for _, repo := range repos {
 		if len(repo) > maxName {
 			maxName = len(repo)
 		}
 	}
 
-	for _, repo := range d.repos {
+	for _, repo := range repos {
 		state, ok := repoMap[repo]
 		marker, status := repoStatusLine(state, ok, now)
 		fmt.Fprintf(&b, "  %s %-*s  %s\n", marker, maxName, repo, status)
@@ -3167,9 +3411,9 @@ func renderPendingRecommendations(out io.Writer, rerunInTerminal bool) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	configured := make(map[string]struct{}, len(cfg.Repos))
-	for _, r := range cfg.Repos {
-		configured[r] = struct{}{}
+	configured, err := configuredRepoSetForPaths(p, database, cfg.Repos, cfg.RepoSources)
+	if err != nil {
+		return err
 	}
 
 	type pendingRecommendationRow struct {

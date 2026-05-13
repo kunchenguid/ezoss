@@ -329,10 +329,10 @@ func withInitTestEnv(t *testing.T) string {
 	return tempRoot
 }
 
-func TestInitCommandAllOwnedFlagListsAndStoresRepos(t *testing.T) {
+func TestInitCommandAllOwnedFlagStoresDynamicSource(t *testing.T) {
 	tempRoot := withInitTestEnv(t)
 
-	stub := &stubRepoLister{repos: []string{"kunchenguid/ezoss", "kunchenguid/no-mistakes"}}
+	stub := &stubRepoLister{err: errors.New("init should persist the dynamic source without fetching repos")}
 	originalLister := newRepoLister
 	t.Cleanup(func() { newRepoLister = originalLister })
 	newRepoLister = func() repoLister { return stub }
@@ -343,24 +343,48 @@ func TestInitCommandAllOwnedFlagListsAndStoresRepos(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if len(stub.calls) != 1 || stub.calls[0] != ghclient.RepoVisibilityAll {
-		t.Fatalf("ListOwnedRepos calls = %v, want one all-visibility call", stub.calls)
+	if len(stub.calls) != 0 {
+		t.Fatalf("ListOwnedRepos calls = %v, want no eager fetch", stub.calls)
 	}
 
 	cfg, err := config.LoadGlobal(filepath.Join(tempRoot, "config.yaml"))
 	if err != nil {
 		t.Fatalf("LoadGlobal error = %v", err)
 	}
-	want := []string{"kunchenguid/ezoss", "kunchenguid/no-mistakes"}
-	if !reflect.DeepEqual(cfg.Repos, want) {
-		t.Fatalf("Repos = %v, want %v", cfg.Repos, want)
+	if len(cfg.Repos) != 0 {
+		t.Fatalf("Repos = %v, want empty static repo list", cfg.Repos)
+	}
+	want := []config.RepoSource{config.RepoSourceAllOwned}
+	if !reflect.DeepEqual(cfg.RepoSources, want) {
+		t.Fatalf("RepoSources = %v, want %v", cfg.RepoSources, want)
 	}
 }
 
-func TestInitCommandAllPublicOwnedFlagPassesPublicVisibility(t *testing.T) {
+func TestInitCommandDynamicSourceSummaryDoesNotClaimNoMaintainerRepos(t *testing.T) {
 	withInitTestEnv(t)
 
-	stub := &stubRepoLister{repos: []string{"kunchenguid/ezoss"}}
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"init", "--all-owned"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	text := buf.String()
+	if !strings.Contains(text, "1 dynamic repo source") {
+		t.Fatalf("init summary missing dynamic source count:\n%s", text)
+	}
+	if strings.Contains(text, "No maintainer repos configured") {
+		t.Fatalf("init summary should not claim no maintainer repos when a dynamic source is configured:\n%s", text)
+	}
+}
+
+func TestInitCommandAllPublicOwnedFlagStoresDynamicSourceWithoutFetching(t *testing.T) {
+	withInitTestEnv(t)
+
+	stub := &stubRepoLister{err: errors.New("init should persist the dynamic source without fetching repos")}
 	originalLister := newRepoLister
 	t.Cleanup(func() { newRepoLister = originalLister })
 	newRepoLister = func() repoLister { return stub }
@@ -371,8 +395,8 @@ func TestInitCommandAllPublicOwnedFlagPassesPublicVisibility(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if len(stub.calls) != 1 || stub.calls[0] != ghclient.RepoVisibilityPublic {
-		t.Fatalf("ListOwnedRepos calls = %v, want one public-visibility call", stub.calls)
+	if len(stub.calls) != 0 {
+		t.Fatalf("ListOwnedRepos calls = %v, want no eager fetch", stub.calls)
 	}
 }
 
@@ -390,13 +414,10 @@ func TestInitCommandRejectsBothAllFlagsTogether(t *testing.T) {
 	}
 }
 
-func TestInitCommandAllPublicOwnedAndStarredFlagIntersectsTheTwoLists(t *testing.T) {
+func TestInitCommandAllPublicOwnedAndStarredFlagStoresDynamicSource(t *testing.T) {
 	tempRoot := withInitTestEnv(t)
 
-	stub := &stubRepoLister{
-		repos:        []string{"kunchenguid/ezoss", "kunchenguid/no-mistakes", "kunchenguid/internal"},
-		starredRepos: []string{"acme/widgets", "kunchenguid/ezoss", "kunchenguid/no-mistakes"},
-	}
+	stub := &stubRepoLister{err: errors.New("init should persist the dynamic source without fetching repos")}
 	originalLister := newRepoLister
 	t.Cleanup(func() { newRepoLister = originalLister })
 	newRepoLister = func() repoLister { return stub }
@@ -407,37 +428,55 @@ func TestInitCommandAllPublicOwnedAndStarredFlagIntersectsTheTwoLists(t *testing
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if len(stub.calls) != 1 || stub.calls[0] != ghclient.RepoVisibilityPublic {
-		t.Fatalf("ListOwnedRepos calls = %v, want one public-visibility call", stub.calls)
+	if len(stub.calls) != 0 {
+		t.Fatalf("ListOwnedRepos calls = %v, want no eager fetch", stub.calls)
 	}
-	if stub.starredCalls != 1 {
-		t.Fatalf("ListStarredRepos calls = %d, want 1", stub.starredCalls)
+	if stub.starredCalls != 0 {
+		t.Fatalf("ListStarredRepos calls = %d, want 0", stub.starredCalls)
 	}
 
 	cfg, err := config.LoadGlobal(filepath.Join(tempRoot, "config.yaml"))
 	if err != nil {
 		t.Fatalf("LoadGlobal error = %v", err)
 	}
-	want := []string{"kunchenguid/ezoss", "kunchenguid/no-mistakes"}
-	if !reflect.DeepEqual(cfg.Repos, want) {
-		t.Fatalf("Repos = %v, want %v (intersection of owned ∩ starred, owned ordering)", cfg.Repos, want)
+	if len(cfg.Repos) != 0 {
+		t.Fatalf("Repos = %v, want empty static repo list", cfg.Repos)
+	}
+	want := []config.RepoSource{config.RepoSourceAllPublicOwnedAndStarred}
+	if !reflect.DeepEqual(cfg.RepoSources, want) {
+		t.Fatalf("RepoSources = %v, want %v", cfg.RepoSources, want)
 	}
 }
 
-func TestInitCommandAllPublicOwnedAndStarredSurfacesStarredError(t *testing.T) {
-	withInitTestEnv(t)
+func TestResolveConfiguredReposIncludesDynamicPublicOwnedAndStarredRepos(t *testing.T) {
+	stub := &stubRepoLister{
+		repos:        []string{"kunchenguid/ezoss", "kunchenguid/no-mistakes", "kunchenguid/private"},
+		starredRepos: []string{"other/repo", "kunchenguid/no-mistakes", "kunchenguid/ezoss"},
+	}
 
+	got, err := resolveConfiguredRepos(context.Background(), []string{"manual/repo"}, []config.RepoSource{config.RepoSourceAllPublicOwnedAndStarred}, stub)
+	if err != nil {
+		t.Fatalf("resolveConfiguredRepos() error = %v", err)
+	}
+	want := []string{"manual/repo", "kunchenguid/ezoss", "kunchenguid/no-mistakes"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("repos = %v, want %v", got, want)
+	}
+	if len(stub.calls) != 1 || stub.calls[0] != ghclient.RepoVisibilityPublic {
+		t.Fatalf("ListOwnedRepos calls = %v, want one public call", stub.calls)
+	}
+	if stub.starredCalls != 1 {
+		t.Fatalf("ListStarredRepos calls = %d, want 1", stub.starredCalls)
+	}
+}
+
+func TestResolveConfiguredReposSurfacesStarredErrors(t *testing.T) {
 	stub := &stubRepoLister{
 		repos:      []string{"kunchenguid/ezoss"},
 		starredErr: errors.New("starred fetch broke"),
 	}
-	originalLister := newRepoLister
-	t.Cleanup(func() { newRepoLister = originalLister })
-	newRepoLister = func() repoLister { return stub }
 
-	cmd := NewRootCmd()
-	cmd.SetArgs([]string{"init", "--all-public-owned-and-starred"})
-	err := cmd.Execute()
+	_, err := resolveConfiguredRepos(context.Background(), nil, []config.RepoSource{config.RepoSourceAllPublicOwnedAndStarred}, stub)
 	if err == nil {
 		t.Fatal("expected error from starred lister to propagate")
 	}
@@ -446,22 +485,85 @@ func TestInitCommandAllPublicOwnedAndStarredSurfacesStarredError(t *testing.T) {
 	}
 }
 
-func TestInitCommandAllOwnedSurfacesListerErrors(t *testing.T) {
-	withInitTestEnv(t)
+func TestConfiguredRepoResolverCachesDynamicSourcesForOneHour(t *testing.T) {
+	stub := &stubRepoLister{repos: []string{"kunchenguid/ezoss"}}
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	resolver := newConfiguredRepoResolver([]config.RepoSource{config.RepoSourceAllPublicOwned}, stub, repoDiscoveryInterval, func() time.Time {
+		return now
+	})
 
-	stub := &stubRepoLister{err: errors.New("not authenticated")}
-	originalLister := newRepoLister
-	t.Cleanup(func() { newRepoLister = originalLister })
-	newRepoLister = func() repoLister { return stub }
-
-	cmd := NewRootCmd()
-	cmd.SetArgs([]string{"init", "--all-owned"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected error from lister to propagate")
+	first, err := resolver(context.Background(), []string{"manual/repo"})
+	if err != nil {
+		t.Fatalf("first resolver call error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "list owned repos") {
-		t.Fatalf("error = %v, want list owned repos prefix", err)
+	if want := []string{"manual/repo", "kunchenguid/ezoss"}; !reflect.DeepEqual(first, want) {
+		t.Fatalf("first repos = %v, want %v", first, want)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("ListOwnedRepos calls after first call = %d, want 1", len(stub.calls))
+	}
+
+	stub.repos = []string{"kunchenguid/ezoss", "kunchenguid/new"}
+	now = now.Add(repoDiscoveryInterval - time.Minute)
+	second, err := resolver(context.Background(), []string{"manual/repo"})
+	if err != nil {
+		t.Fatalf("second resolver call error = %v", err)
+	}
+	if !reflect.DeepEqual(second, first) {
+		t.Fatalf("second repos = %v, want cached %v", second, first)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("ListOwnedRepos calls before interval = %d, want still 1", len(stub.calls))
+	}
+
+	now = now.Add(2 * time.Minute)
+	third, err := resolver(context.Background(), []string{"manual/repo"})
+	if err != nil {
+		t.Fatalf("third resolver call error = %v", err)
+	}
+	wantThird := []string{"manual/repo", "kunchenguid/ezoss", "kunchenguid/new"}
+	if !reflect.DeepEqual(third, wantThird) {
+		t.Fatalf("third repos = %v, want refreshed %v", third, wantThird)
+	}
+	if len(stub.calls) != 2 {
+		t.Fatalf("ListOwnedRepos calls after interval = %d, want 2", len(stub.calls))
+	}
+}
+
+func TestConfiguredRepoResolverThrottlesFailedRefreshes(t *testing.T) {
+	stub := &stubRepoLister{err: errors.New("rate limited")}
+	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	resolver := newConfiguredRepoResolver([]config.RepoSource{config.RepoSourceAllPublicOwned}, stub, repoDiscoveryInterval, func() time.Time {
+		return now
+	})
+
+	_, err := resolver(context.Background(), []string{"manual/repo"})
+	if err == nil {
+		t.Fatal("first resolver call error = nil, want source error")
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("ListOwnedRepos calls after first failure = %d, want 1", len(stub.calls))
+	}
+
+	now = now.Add(repoDiscoveryInterval - time.Minute)
+	second, err := resolver(context.Background(), []string{"manual/repo"})
+	if err != nil {
+		t.Fatalf("second resolver call error = %v, want cached static repos", err)
+	}
+	if want := []string{"manual/repo"}; !reflect.DeepEqual(second, want) {
+		t.Fatalf("second repos = %v, want %v", second, want)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("ListOwnedRepos calls before interval = %d, want still 1", len(stub.calls))
+	}
+
+	now = now.Add(2 * time.Minute)
+	_, err = resolver(context.Background(), []string{"manual/repo"})
+	if err == nil {
+		t.Fatal("third resolver call error = nil, want retry error after interval")
+	}
+	if len(stub.calls) != 2 {
+		t.Fatalf("ListOwnedRepos calls after interval = %d, want 2", len(stub.calls))
 	}
 }
 

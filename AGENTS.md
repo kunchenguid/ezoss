@@ -135,6 +135,8 @@ Agent values: `auto`, `claude`, `codex`, `rovodev`, `opencode`.
 Merge methods: `merge`, `squash`, `rebase`.
 Fix PR creation modes under `fixes.pr_create`: `auto`, `no-mistakes`, `gh`, `disabled`.
 Contributor push modes under `fixes.contrib_push`: `auto`, `no-mistakes`, `disabled`.
+Maintainer repos come from explicit `repos` plus dynamic `repo_sources` values: `all_owned`, `all_public_owned`, `all_public_owned_and_starred`.
+Dynamic repo sources are resolved into the effective maintainer repo set and refreshed at most once per hour, so new matching repos are picked up without rerunning `ezoss init`.
 Contributor mode defaults to enabled and is configured by `contrib.enabled` plus `contrib.ignore_repos`.
 `activity_probe_interval` defaults to `1h`, accepts the standard duration parser, can be set to `0` to disable, and controls deep activity probe timeline API usage.
 Self-authored maintainer PR suppression uses its own timeline checks on first sighting or changed `updated_at`, independent of `activity_probe_interval`.

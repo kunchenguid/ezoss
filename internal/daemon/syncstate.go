@@ -70,8 +70,18 @@ func (s *SyncState) BeginCycle(repos []string) {
 	s.agentsTotal = 0
 	s.agentsDone = 0
 	s.currentItem = ""
+	oldRepos := s.repos
+	oldIndex := s.repoIndex
+	s.repos = make([]repoSyncRecord, 0, len(repos))
+	s.repoIndex = make(map[string]int, len(repos))
 	for _, repoID := range repos {
-		s.ensureRepoLocked(repoID)
+		record := repoSyncRecord{repo: repoID}
+		if oldIdx, ok := oldIndex[repoID]; ok {
+			record = oldRepos[oldIdx]
+			record.syncing = false
+		}
+		s.repoIndex[repoID] = len(s.repos)
+		s.repos = append(s.repos, record)
 	}
 }
 

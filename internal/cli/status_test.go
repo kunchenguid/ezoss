@@ -298,6 +298,55 @@ func TestStatusCommandPrintsConfiguredAndUnconfiguredPendingRecommendationCounts
 	}
 }
 
+func TestStatusCommandTreatsConfigSourceReposAsConfigured(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{RepoSources: []config.RepoSource{config.RepoSourceAllPublicOwned}}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "dynamic/repo", Source: db.RepoSourceConfig, DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo(dynamic) error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "dynamic/repo#7", RepoID: "dynamic/repo", Kind: sharedtypes.ItemKindIssue, Number: 7, Title: "dynamic", State: sharedtypes.ItemStateOpen}); err != nil {
+		t.Fatalf("UpsertItem(dynamic) error = %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: "dynamic/repo#7", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+		t.Fatalf("InsertRecommendation(dynamic) error = %v", err)
+	}
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"status", "--short"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if got, want := buf.String(), "pending=1 repos=1 daemon=stopped\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestStatusCommandExplainsDatabaseLockErrors(t *testing.T) {
 	tempRoot := t.TempDir()
 	originalNewPaths := newPaths
@@ -335,6 +384,147 @@ func TestStatusCommandExplainsDatabaseLockErrors(t *testing.T) {
 	}
 	if strings.Contains(msg, "(261)") {
 		t.Fatalf("error = %q, should hide raw sqlite error code", msg)
+	}
+}
+
+func TestStatusDataEffectiveReposUsesCurrentSyncSnapshot(t *testing.T) {
+	data := statusData{
+		repos: []string{"acme/static"},
+		sync: &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{
+			{Repo: "acme/current"},
+		}},
+	}
+
+	got := data.effectiveRepos()
+	want := []string{"acme/static", "acme/current"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("effectiveRepos() = %v, want %v", got, want)
+	}
+}
+
+func TestCollectStatusDataUsesCurrentSyncSnapshotOverPersistedDynamicRepos(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalReadDaemonStatus := readDaemonStatus
+	originalDialDaemonIPC := dialDaemonIPC
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		readDaemonStatus = originalReadDaemonStatus
+		dialDaemonIPC = originalDialDaemonIPC
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	readDaemonStatus = func(string) (daemon.Status, error) {
+		return daemon.Status{State: daemon.StateRunning, PID: 123}, nil
+	}
+	dialDaemonIPC = func(string) (daemonIPCClient, error) {
+		return stubDaemonIPCClient{call: func(method string, _ interface{}, result interface{}) error {
+			if method != ipc.MethodSyncStatus {
+				t.Fatalf("Call() method = %q, want %q", method, ipc.MethodSyncStatus)
+			}
+			out := result.(*ipc.SyncStatusResult)
+			*out = ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{{Repo: "dynamic/current"}}}
+			return nil
+		}}, nil
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{RepoSources: []config.RepoSource{config.RepoSourceAllPublicOwned}}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	for _, repoID := range []string{"dynamic/current", "dynamic/stale"} {
+		if err := database.UpsertRepo(db.Repo{ID: repoID, Source: db.RepoSourceConfig, DefaultBranch: "main"}); err != nil {
+			t.Fatalf("UpsertRepo(%s) error = %v", repoID, err)
+		}
+		if err := database.UpsertItem(db.Item{ID: repoID + "#1", RepoID: repoID, Kind: sharedtypes.ItemKindIssue, Number: 1, Title: repoID, State: sharedtypes.ItemStateOpen}); err != nil {
+			t.Fatalf("UpsertItem(%s) error = %v", repoID, err)
+		}
+		if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: repoID + "#1", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+			t.Fatalf("InsertRecommendation(%s) error = %v", repoID, err)
+		}
+	}
+
+	data, err := collectStatusData(NewRootCmd())
+	if err != nil {
+		t.Fatalf("collectStatusData() error = %v", err)
+	}
+	if data.configuredPending != 1 || data.unconfigured != 1 {
+		t.Fatalf("configured/unconfigured = %d/%d, want 1/1", data.configuredPending, data.unconfigured)
+	}
+}
+
+func TestCollectStatusDataTreatsEmptyCurrentSyncSnapshotAsAuthoritative(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalReadDaemonStatus := readDaemonStatus
+	originalDialDaemonIPC := dialDaemonIPC
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		readDaemonStatus = originalReadDaemonStatus
+		dialDaemonIPC = originalDialDaemonIPC
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	readDaemonStatus = func(string) (daemon.Status, error) {
+		return daemon.Status{State: daemon.StateRunning, PID: 123}, nil
+	}
+	dialDaemonIPC = func(string) (daemonIPCClient, error) {
+		return stubDaemonIPCClient{call: func(method string, _ interface{}, result interface{}) error {
+			if method != ipc.MethodSyncStatus {
+				t.Fatalf("Call() method = %q, want %q", method, ipc.MethodSyncStatus)
+			}
+			out := result.(*ipc.SyncStatusResult)
+			*out = ipc.SyncStatusResult{}
+			return nil
+		}}, nil
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{
+		Repos:       []string{"static/current"},
+		RepoSources: []config.RepoSource{config.RepoSourceAllPublicOwned},
+	}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	for _, repoID := range []string{"static/current", "dynamic/stale"} {
+		if err := database.UpsertRepo(db.Repo{ID: repoID, Source: db.RepoSourceConfig, DefaultBranch: "main"}); err != nil {
+			t.Fatalf("UpsertRepo(%s) error = %v", repoID, err)
+		}
+		if err := database.UpsertItem(db.Item{ID: repoID + "#1", RepoID: repoID, Kind: sharedtypes.ItemKindIssue, Number: 1, Title: repoID, State: sharedtypes.ItemStateOpen}); err != nil {
+			t.Fatalf("UpsertItem(%s) error = %v", repoID, err)
+		}
+		if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: repoID + "#1", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+			t.Fatalf("InsertRecommendation(%s) error = %v", repoID, err)
+		}
+	}
+
+	data, err := collectStatusData(NewRootCmd())
+	if err != nil {
+		t.Fatalf("collectStatusData() error = %v", err)
+	}
+	if data.configuredPending != 1 || data.unconfigured != 1 {
+		t.Fatalf("configured/unconfigured = %d/%d, want 1/1", data.configuredPending, data.unconfigured)
+	}
+	if got, want := strings.Join(data.effectiveRepos(), ","), "static/current"; got != want {
+		t.Fatalf("effectiveRepos() = %q, want %q", got, want)
 	}
 }
 
@@ -741,6 +931,20 @@ func TestRenderShortStatusContribCountAndModeOff(t *testing.T) {
 	}
 }
 
+func TestRenderShortStatusUsesDaemonResolvedRepoCount(t *testing.T) {
+	got := renderShortStatus(statusData{
+		daemonState: daemon.StateRunning,
+		repos:       []string{"acme/static"},
+		sync: &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{
+			{Repo: "acme/static"},
+			{Repo: "acme/dynamic"},
+		}},
+	})
+	if !strings.Contains(got, "repos=2") {
+		t.Fatalf("short status should use daemon-resolved repo count, got %q", got)
+	}
+}
+
 func TestRenderRichStatusPerSourceRows(t *testing.T) {
 	enabled := renderRichStatus(statusData{
 		daemonState:       daemon.StateRunning,
@@ -856,6 +1060,26 @@ func TestRenderRichStatusPerRepoLines(t *testing.T) {
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("render should not include %q\n--- got ---\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestRenderRichStatusListsDaemonResolvedRepos(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	d := statusData{
+		daemonState: daemon.StateRunning,
+		daemonPID:   12345,
+		repos:       []string{"acme/static"},
+		sync: &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{
+			{Repo: "acme/static", LastSyncEnd: now.Add(-time.Minute)},
+			{Repo: "acme/dynamic", LastSyncEnd: now.Add(-time.Minute)},
+		}},
+	}
+
+	got := renderRichStatus(d, now)
+	for _, want := range []string{"2 repos", "acme/static", "acme/dynamic"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("render missing %q\n--- got ---\n%s", want, got)
 		}
 	}
 }

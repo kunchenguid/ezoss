@@ -15,6 +15,7 @@ import (
 	"github.com/kunchenguid/ezoss/internal/config"
 	"github.com/kunchenguid/ezoss/internal/daemon"
 	"github.com/kunchenguid/ezoss/internal/db"
+	"github.com/kunchenguid/ezoss/internal/ipc"
 	"github.com/kunchenguid/ezoss/internal/paths"
 	"github.com/kunchenguid/ezoss/internal/telemetry"
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
@@ -43,7 +44,7 @@ func TestListCommandPrintsNoPendingRecommendationsWithoutDB(t *testing.T) {
 		return paths.WithRoot(tempRoot), nil
 	}
 
-	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{}); err != nil {
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{RepoSources: []config.RepoSource{config.RepoSourceAllPublicOwned}}); err != nil {
 		t.Fatalf("SaveGlobal() error = %v", err)
 	}
 
@@ -157,7 +158,7 @@ func TestListCommandIncludesPullRequestURLForPRKind(t *testing.T) {
 		return paths.WithRoot(tempRoot), nil
 	}
 
-	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{}); err != nil {
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{RepoSources: []config.RepoSource{config.RepoSourceAllPublicOwned}}); err != nil {
 		t.Fatalf("SaveGlobal() error = %v", err)
 	}
 
@@ -520,6 +521,122 @@ func TestListCommandWarnsForRecommendationsFromUnconfiguredRepos(t *testing.T) {
 		if !strings.Contains(got, frag) {
 			t.Fatalf("output = %q, missing fragment %q", got, frag)
 		}
+	}
+}
+
+func TestListCommandTreatsConfigSourceReposAsConfigured(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{RepoSources: []config.RepoSource{config.RepoSourceAllPublicOwned}}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "dynamic/repo", Source: db.RepoSourceConfig, DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo(dynamic) error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "dynamic/repo#7", RepoID: "dynamic/repo", Kind: sharedtypes.ItemKindIssue, Number: 7, Title: "dynamic", State: sharedtypes.ItemStateOpen}); err != nil {
+		t.Fatalf("UpsertItem(dynamic) error = %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: "dynamic/repo#7", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+		t.Fatalf("InsertRecommendation(dynamic) error = %v", err)
+	}
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"list"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	got := buf.String()
+	if strings.Contains(got, "unconfigured") || strings.Contains(got, "not in your config") {
+		t.Fatalf("output = %q, should not warn for config-source repo", got)
+	}
+}
+
+func TestListCommandUsesCurrentSyncSnapshotOverPersistedDynamicRepos(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	originalReadDaemonStatus := readDaemonStatus
+	originalDialDaemonIPC := dialDaemonIPC
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+		readDaemonStatus = originalReadDaemonStatus
+		dialDaemonIPC = originalDialDaemonIPC
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+	readDaemonStatus = func(string) (daemon.Status, error) {
+		return daemon.Status{State: daemon.StateRunning, PID: 123}, nil
+	}
+	dialDaemonIPC = func(string) (daemonIPCClient, error) {
+		return stubDaemonIPCClient{call: func(method string, _ interface{}, result interface{}) error {
+			if method != ipc.MethodSyncStatus {
+				t.Fatalf("Call() method = %q, want %q", method, ipc.MethodSyncStatus)
+			}
+			out := result.(*ipc.SyncStatusResult)
+			*out = ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{{Repo: "dynamic/current"}}}
+			return nil
+		}}, nil
+	}
+
+	if err := config.SaveGlobal(filepath.Join(tempRoot, "config.yaml"), &config.GlobalConfig{RepoSources: []config.RepoSource{config.RepoSourceAllPublicOwned}}); err != nil {
+		t.Fatalf("SaveGlobal() error = %v", err)
+	}
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	for _, repoID := range []string{"dynamic/current", "dynamic/stale"} {
+		if err := database.UpsertRepo(db.Repo{ID: repoID, Source: db.RepoSourceConfig, DefaultBranch: "main"}); err != nil {
+			t.Fatalf("UpsertRepo(%s) error = %v", repoID, err)
+		}
+		if err := database.UpsertItem(db.Item{ID: repoID + "#1", RepoID: repoID, Kind: sharedtypes.ItemKindIssue, Number: 1, Title: repoID, State: sharedtypes.ItemStateOpen}); err != nil {
+			t.Fatalf("UpsertItem(%s) error = %v", repoID, err)
+		}
+		if _, err := database.InsertRecommendation(db.NewRecommendation{ItemID: repoID + "#1", Agent: sharedtypes.AgentClaude, Options: []db.NewRecommendationOption{{StateChange: sharedtypes.StateChangeNone, Confidence: sharedtypes.ConfidenceMedium}}}); err != nil {
+			t.Fatalf("InsertRecommendation(%s) error = %v", repoID, err)
+		}
+	}
+
+	buf := &bytes.Buffer{}
+	cmd := NewRootCmd()
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"list"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "dynamic/stale") || !strings.Contains(got, "not in your config") {
+		t.Fatalf("output = %q, want stale dynamic repo warning", got)
 	}
 }
 
