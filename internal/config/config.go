@@ -281,7 +281,8 @@ fixes:
 # Track issues you authored and PRs you opened in repos you don't maintain.
 # Each cycle the daemon runs gh search prs/issues --author=@me and
 # surfaces those items in the inbox alongside maintainer items.
-# Set enabled: false to opt out and only triage repos listed under repos:.
+# Set enabled: false to opt out and only triage maintainer repos from
+# repos: and repo_sources:.
 contrib:
   enabled: true
   ignore_repos: []

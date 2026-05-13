@@ -205,6 +205,9 @@ It prints `contrib_repos` when contributor recommendations span one or more repo
 | `fix <repo>#<number>`    | `--pr-create`       | Override maintainer fix PR creation: `auto`, `no-mistakes`, `gh`, or `disabled` |
 | `fix <repo>#<number>`    | `--prepare-only`    | Prepare the isolated worktree without running the coding agent         |
 | `init`                   | `--repo`            | Repository to monitor, repeatable                                      |
+| `init`                   | `--all-owned`       | Add a dynamic source for all repos owned by the authenticated user      |
+| `init`                   | `--all-public-owned` | Add a dynamic source for public repos owned by the authenticated user   |
+| `init`                   | `--all-public-owned-and-starred` | Add a dynamic source for public owned repos also starred by the authenticated user |
 | `init`                   | `--agent`           | Agent backend: `auto`, `claude`, `codex`, `rovodev`, `opencode`        |
 | `init`                   | `--merge-method`    | Default PR merge method: `merge`, `squash`, or `rebase`                |
 | `init`                   | `--poll-interval`   | Poll cadence as a duration like `5m`                                   |
