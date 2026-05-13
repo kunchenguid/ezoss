@@ -745,13 +745,15 @@ func (m *Model) fixCurrent() tea.Cmd {
 		m.pushLog(logEntry{state: logStateInfo, note: "fix unavailable"})
 		return nil
 	}
-	return m.startAction(entry, "fix", func() tea.Msg {
+	cmd := m.startAction(entry, "fix", func() tea.Msg {
 		return actionFinishedMsg{
 			verb:             "fix",
 			recommendationID: entry.RecommendationID,
 			err:              m.fix(entry),
 		}
 	})
+	m.advanceCursorPastPending()
+	return cmd
 }
 
 // guardConflict reports whether an action on entry should be refused
