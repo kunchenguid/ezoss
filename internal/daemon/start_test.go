@@ -327,6 +327,68 @@ func TestRunWithOptionsPollsImmediatelyAndOnEachTickUntilSignal(t *testing.T) {
 	}
 }
 
+func TestRunWithOptionsResolvesReposBeforeEveryPollCycle(t *testing.T) {
+	tempDir := t.TempDir()
+	pidPath := filepath.Join(tempDir, "daemon.pid")
+	sigCh := make(chan os.Signal, 1)
+	tickCh := make(chan time.Time, 2)
+	pollCalls := make(chan []string, 3)
+	errCh := make(chan error, 1)
+	resolveCalls := 0
+
+	go func() {
+		errCh <- RunWithOptions(pidPath, sigCh, RunOptions{
+			Repos:        []string{"manual/repo"},
+			PollInterval: time.Hour,
+			ResolveRepos: func(_ context.Context, repos []string) ([]string, error) {
+				resolveCalls++
+				resolved := append([]string(nil), repos...)
+				if resolveCalls == 1 {
+					return append(resolved, "dynamic/old"), nil
+				}
+				return append(resolved, "dynamic/new"), nil
+			},
+			PollOnce: func(_ context.Context, repos []string) error {
+				pollCalls <- append([]string(nil), repos...)
+				return nil
+			},
+			NewTicker: func(time.Duration) Ticker {
+				return stubTicker{ch: tickCh}
+			},
+		})
+	}()
+
+	wants := [][]string{
+		{"manual/repo", "dynamic/old"},
+		{"manual/repo", "dynamic/new"},
+	}
+	for i, want := range wants {
+		select {
+		case got := <-pollCalls:
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("poll repos %d = %#v, want %#v", i+1, got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected poll call")
+		}
+
+		if i == 0 {
+			tickCh <- time.Now()
+		}
+	}
+
+	sigCh <- syscall.SIGTERM
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("RunWithOptions() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunWithOptions() did not exit after signal")
+	}
+}
+
 func TestRunWithOptionsBacksOffAndKeepsRunningOnGenericPollError(t *testing.T) {
 	tempDir := t.TempDir()
 	pidPath := filepath.Join(tempDir, "daemon.pid")

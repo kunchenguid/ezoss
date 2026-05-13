@@ -236,6 +236,10 @@ Contributor fix jobs apply to authored PRs, not authored issues.
 When enabled, the daemon searches for open issues and PRs authored by you in repos you do not maintain.
 Use `contrib.ignore_repos` to suppress noisy upstream repos by exact `owner/name` match, or set `enabled: false` to only triage configured maintainer repos.
 
+`repos` stores explicit maintainer repos.
+`repo_sources` stores dynamic maintainer repo conditions that are refreshed at most once per hour, such as `all_owned`, `all_public_owned`, or `all_public_owned_and_starred`.
+The bulk init flags write `repo_sources`, so newly-created repos that later match the condition are included without rerunning `ezoss init`.
+
 `activity_probe_interval` controls how often the daemon scans each open triaged maintainer item's timeline for activity GitHub does not surface through `updated_at`.
 It defaults to `1h`, accepts the same duration syntax as other settings, and can be set to `0` to disable the probe.
 When the probe fires, it makes one timeline API call per open triaged maintainer item.
@@ -256,6 +260,8 @@ contrib:
   ignore_repos: []
 repos:
   - kunchenguid/ezoss
+repo_sources:
+  - all_public_owned_and_starred
 sync_labels:
   waiting_on: true
   stale: true

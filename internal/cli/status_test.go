@@ -741,6 +741,20 @@ func TestRenderShortStatusContribCountAndModeOff(t *testing.T) {
 	}
 }
 
+func TestRenderShortStatusUsesDaemonResolvedRepoCount(t *testing.T) {
+	got := renderShortStatus(statusData{
+		daemonState: daemon.StateRunning,
+		repos:       []string{"acme/static"},
+		sync: &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{
+			{Repo: "acme/static"},
+			{Repo: "acme/dynamic"},
+		}},
+	})
+	if !strings.Contains(got, "repos=2") {
+		t.Fatalf("short status should use daemon-resolved repo count, got %q", got)
+	}
+}
+
 func TestRenderRichStatusPerSourceRows(t *testing.T) {
 	enabled := renderRichStatus(statusData{
 		daemonState:       daemon.StateRunning,
@@ -856,6 +870,26 @@ func TestRenderRichStatusPerRepoLines(t *testing.T) {
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("render should not include %q\n--- got ---\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestRenderRichStatusListsDaemonResolvedRepos(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	d := statusData{
+		daemonState: daemon.StateRunning,
+		daemonPID:   12345,
+		repos:       []string{"acme/static"},
+		sync: &ipc.SyncStatusResult{Repos: []ipc.RepoSyncStatus{
+			{Repo: "acme/static", LastSyncEnd: now.Add(-time.Minute)},
+			{Repo: "acme/dynamic", LastSyncEnd: now.Add(-time.Minute)},
+		}},
+	}
+
+	got := renderRichStatus(d, now)
+	for _, want := range []string{"2 repos", "acme/static", "acme/dynamic"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("render missing %q\n--- got ---\n%s", want, got)
 		}
 	}
 }

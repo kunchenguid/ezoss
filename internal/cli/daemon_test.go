@@ -523,6 +523,10 @@ func (s stubDaemonTriageLister) ListOwnedRepos(_ context.Context, _ ghclient.Rep
 	return nil, nil
 }
 
+func (s stubDaemonTriageLister) ListStarredRepos(_ context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func mustDaemonJSON(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(value)

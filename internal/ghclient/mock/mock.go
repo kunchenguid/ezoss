@@ -100,6 +100,10 @@ func (c *Client) ListOwnedRepos(_ context.Context, _ ghclient.RepoVisibility) ([
 	return nil, nil
 }
 
+func (c *Client) ListStarredRepos(_ context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (c *Client) SearchAuthoredOpenIssues(_ context.Context) ([]ghclient.Item, error) {
 	now := time.Date(2026, time.April, 19, 12, 0, 0, 0, time.UTC)
 	return []ghclient.Item{

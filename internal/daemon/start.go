@@ -25,6 +25,8 @@ type Launcher func() error
 
 type PollFunc func(ctx context.Context, repos []string) error
 
+type ResolveReposFunc func(ctx context.Context, repos []string) ([]string, error)
+
 type RunOptions struct {
 	Repos                  []string
 	PollInterval           time.Duration
@@ -32,6 +34,7 @@ type RunOptions struct {
 	IgnoreOlderThan        time.Duration
 	IPCPath                string
 	PollOnce               PollFunc
+	ResolveRepos           ResolveReposFunc
 	NewTicker              func(time.Duration) Ticker
 	Sleep                  func(time.Duration)
 	RecommendationSnapshot func() ([]db.Recommendation, error)
@@ -296,7 +299,7 @@ func startIPCServer(socketPath string, snapshot func() ([]db.Recommendation, err
 }
 
 func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event), wake <-chan struct{}) error {
-	if opts.PollOnce == nil || len(opts.Repos) == 0 {
+	if opts.PollOnce == nil || (len(opts.Repos) == 0 && opts.ResolveRepos == nil) {
 		opts.log().Info("poll loop idle", "reason", reasonForIdle(opts))
 		<-sigCh
 		opts.log().Info("received signal", "action", "stop")
@@ -322,6 +325,10 @@ func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)
 	cycleNum := 0
 	runCycle := func(ticker Ticker) (cycleErr, fatalErr error) {
 		cycleNum++
+		repos, err := resolveRunRepos(context.Background(), opts)
+		if err != nil {
+			return fmt.Errorf("resolve repos: %w", err), nil
+		}
 		before, err := recommendationSnapshot(opts)
 		if err != nil {
 			return fmt.Errorf("snapshot recommendations: %w", err), nil
@@ -330,10 +337,10 @@ func runPollLoop(sigCh <-chan os.Signal, opts RunOptions, notify func(ipc.Event)
 		if err != nil {
 			return fmt.Errorf("snapshot fix jobs: %w", err), nil
 		}
-		opts.log().Info("cycle started", "cycle", cycleNum, "repos", len(opts.Repos))
+		opts.log().Info("cycle started", "cycle", cycleNum, "repos", len(repos))
 		cycleStart := time.Now()
-		opts.SyncState.BeginCycle(opts.Repos)
-		pollErr := opts.PollOnce(context.Background(), append([]string(nil), opts.Repos...))
+		opts.SyncState.BeginCycle(repos)
+		pollErr := opts.PollOnce(context.Background(), append([]string(nil), repos...))
 		opts.SyncState.EndCycle()
 		cycleDuration := time.Since(cycleStart)
 		opts.SyncState.RecordCycleDuration(cycleDuration, interval)
@@ -445,6 +452,14 @@ func reasonForIdle(opts RunOptions) string {
 		return "no poll function"
 	}
 	return "no repos configured"
+}
+
+func resolveRunRepos(ctx context.Context, opts RunOptions) ([]string, error) {
+	staticRepos := append([]string(nil), opts.Repos...)
+	if opts.ResolveRepos == nil {
+		return staticRepos, nil
+	}
+	return opts.ResolveRepos(ctx, staticRepos)
 }
 
 // drainOverrunTick drops a single tick from the ticker channel if one
