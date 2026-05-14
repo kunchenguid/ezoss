@@ -191,7 +191,17 @@ func refreshFixJobItem(ctx context.Context, database *db.DB, getter itemGetter, 
 	if err != nil {
 		return err
 	}
-	if err := database.UpsertRepo(db.Repo{ID: repoID}); err != nil {
+	repoRecord := db.Repo{ID: repoID}
+	cachedRepo, err := database.GetRepo(repoID)
+	if err != nil {
+		return err
+	}
+	if cachedRepo != nil {
+		repoRecord.Source = cachedRepo.Source
+	} else if cached != nil && cached.Role == sharedtypes.RoleContributor {
+		repoRecord.Source = db.RepoSourceContrib
+	}
+	if err := database.UpsertRepo(repoRecord); err != nil {
 		return err
 	}
 	itemRecord := db.Item{
@@ -212,6 +222,8 @@ func refreshFixJobItem(ctx context.Context, database *db.DB, getter itemGetter, 
 		itemRecord.GHTriaged = cached.GHTriaged
 		itemRecord.WaitingOn = cached.WaitingOn
 		itemRecord.StaleSince = cached.StaleSince
+		itemRecord.LastSeenUpdatedAt = cached.LastSeenUpdatedAt
+		itemRecord.LastSeenCommentID = cached.LastSeenCommentID
 		itemRecord.LastSelfActivityAt = cached.LastSelfActivityAt
 		itemRecord.HeadRepo = cached.HeadRepo
 		itemRecord.HeadRef = cached.HeadRef

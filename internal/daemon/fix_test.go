@@ -468,6 +468,71 @@ func TestPollOnceContinuesRefreshingSucceededFixJobsAfterGetItemFailure(t *testi
 	}
 }
 
+func TestPollOncePreservesContributorRepoSourceWhenRefreshingSucceededFixJob(t *testing.T) {
+	database := openDaemonTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor, Number: 42, Title: "panic", State: sharedtypes.ItemStateOpen, GHTriaged: true}); err != nil {
+		t.Fatalf("UpsertItem(source) error = %v", err)
+	}
+	job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindPR, Title: "panic", FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusSucceeded, Phase: db.FixJobPhasePROpened, PRURL: "https://github.com/acme/widgets/pull/99"}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+	github := &stubFixJobItemGetter{items: map[string]ghclient.Item{
+		"acme/widgets pr 42": {Repo: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 42, Title: "panic", Author: "alice", State: sharedtypes.ItemStateOpen, UpdatedAt: time.Unix(1713000000, 0)},
+		"acme/widgets pr 99": {Repo: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 99, Title: "fix panic", Author: "kun", State: sharedtypes.ItemStateOpen, UpdatedAt: time.Unix(1713000001, 0)},
+	}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: github, Fix: &stubFixRunner{}}, nil); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	repo, err := database.GetRepo("acme/widgets")
+	if err != nil {
+		t.Fatalf("GetRepo() error = %v", err)
+	}
+	if repo == nil || repo.Source != db.RepoSourceContrib {
+		t.Fatalf("repo = %#v, want contributor source preserved", repo)
+	}
+}
+
+func TestPollOncePreservesContributorSweepMetadataWhenRefreshingSucceededFixJob(t *testing.T) {
+	database := openDaemonTestDB(t)
+	lastSeen := time.Unix(1712990000, 0).UTC()
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", Source: db.RepoSourceContrib}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindPR, Role: sharedtypes.RoleContributor, Number: 42, Title: "panic", State: sharedtypes.ItemStateOpen, GHTriaged: true, LastSeenUpdatedAt: &lastSeen, LastSeenCommentID: 123}); err != nil {
+		t.Fatalf("UpsertItem(source) error = %v", err)
+	}
+	job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindPR, Title: "panic", FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusSucceeded, Phase: db.FixJobPhasePROpened, PRURL: "https://github.com/acme/widgets/pull/99"}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+	github := &stubFixJobItemGetter{items: map[string]ghclient.Item{
+		"acme/widgets pr 42": {Repo: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 42, Title: "panic", Author: "alice", State: sharedtypes.ItemStateOpen, UpdatedAt: time.Unix(1713000000, 0)},
+		"acme/widgets pr 99": {Repo: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 99, Title: "fix panic", Author: "kun", State: sharedtypes.ItemStateOpen, UpdatedAt: time.Unix(1713000001, 0)},
+	}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: github, Fix: &stubFixRunner{}}, nil); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	item, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if item == nil || item.LastSeenUpdatedAt == nil || !item.LastSeenUpdatedAt.Equal(lastSeen) || item.LastSeenCommentID != 123 {
+		t.Fatalf("item = %#v, want contributor sweep metadata preserved", item)
+	}
+}
+
 // cancellingDetectFixRunner simulates a supersede that lands while DetectPR
 // is mid-network-call: the job is marked cancelled before DetectPR returns.
 type cancellingDetectFixRunner struct {
