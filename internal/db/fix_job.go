@@ -44,7 +44,7 @@ func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 
 	rows, err := tx.Query(
 		`SELECT id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
-		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
+		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at, refreshed_at
 		 FROM fix_jobs
 		 WHERE item_id = ? AND status IN (?, ?)
 		 ORDER BY created_at ASC LIMIT 1`,
@@ -99,8 +99,8 @@ func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 	_, err = tx.Exec(
 		`INSERT INTO fix_jobs (
 		 id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
-		 branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, '', '', ?, NULL, ?, NULL)`,
+		 branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at, refreshed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, '', '', ?, NULL, ?, NULL, NULL)`,
 		job.ID, job.ItemID, job.RecommendationID, nullableString(job.OptionID), job.RepoID, job.ItemNumber, job.ItemKind,
 		job.Title, job.FixPrompt, nullableString(string(job.Agent)), job.PRCreate, job.Status, job.Phase, job.CreatedAt, job.UpdatedAt,
 	)
@@ -116,7 +116,7 @@ func (d *DB) CreateFixJob(input NewFixJob) (*FixJob, error) {
 func (d *DB) ActiveFixJobForItem(itemID string) (*FixJob, error) {
 	rows, err := d.sql.Query(
 		`SELECT id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
-		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
+		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at, refreshed_at
 		 FROM fix_jobs
 		 WHERE item_id = ? AND status IN (?, ?)
 		 ORDER BY created_at ASC LIMIT 1`,
@@ -132,7 +132,7 @@ func (d *DB) ActiveFixJobForItem(itemID string) (*FixJob, error) {
 func (d *DB) LatestFixJobForItem(itemID string) (*FixJob, error) {
 	rows, err := d.sql.Query(
 		`SELECT id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
-		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
+		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at, refreshed_at
 		 FROM fix_jobs WHERE item_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`, itemID,
 	)
 	if err != nil {
@@ -145,7 +145,7 @@ func (d *DB) LatestFixJobForItem(itemID string) (*FixJob, error) {
 func (d *DB) GetFixJob(id string) (*FixJob, error) {
 	rows, err := d.sql.Query(
 		`SELECT id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
-		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
+		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at, refreshed_at
 		 FROM fix_jobs WHERE id = ?`, id,
 	)
 	if err != nil {
@@ -199,7 +199,7 @@ func (d *DB) ListFixJobsByStatus(statuses ...FixJobStatus) ([]FixJob, error) {
 	}
 	rows, err := d.sql.Query(
 		`SELECT id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
-		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
+		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at, refreshed_at
 		 FROM fix_jobs WHERE status IN (`+strings.Join(placeholders, ",")+`) ORDER BY created_at ASC`, args...,
 	)
 	if err != nil {
@@ -220,10 +220,55 @@ func (d *DB) ListFixJobsByStatus(statuses ...FixJobStatus) ([]FixJob, error) {
 	return jobs, nil
 }
 
+func (d *DB) ListSucceededFixJobsDueForRefresh(cutoff time.Time, limit int) ([]FixJob, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := d.sql.Query(
+		`SELECT id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
+		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at, refreshed_at
+		 FROM fix_jobs
+		 WHERE status = ?
+		   AND phase = ?
+		   AND COALESCE(pr_url, '') <> ''
+		   AND (refreshed_at IS NULL OR refreshed_at <= ?)
+		 ORDER BY COALESCE(refreshed_at, 0) ASC, created_at ASC
+		 LIMIT ?`,
+		FixJobStatusSucceeded,
+		FixJobPhasePROpened,
+		cutoff.Unix(),
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list succeeded fix jobs due for refresh: %w", err)
+	}
+	defer rows.Close()
+	var jobs []FixJob
+	for rows.Next() {
+		job, err := scanFixJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, *job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list succeeded fix jobs due for refresh: %w", err)
+	}
+	return jobs, nil
+}
+
+func (d *DB) TouchFixJobRefresh(id string) error {
+	_, err := d.sql.Exec(`UPDATE fix_jobs SET refreshed_at = ? WHERE id = ?`, nowUnix(), id)
+	if err != nil {
+		return fmt.Errorf("touch fix job refresh: %w", err)
+	}
+	return nil
+}
+
 func (d *DB) ListFixJobs() ([]FixJob, error) {
 	rows, err := d.sql.Query(
 		`SELECT id, item_id, recommendation_id, option_id, repo_id, item_number, item_kind, title, fix_prompt, agent, pr_create,
-		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at
+		        branch, worktree_path, pr_url, status, phase, message, error, created_at, started_at, updated_at, completed_at, refreshed_at
 		 FROM fix_jobs ORDER BY created_at ASC`,
 	)
 	if err != nil {
@@ -429,8 +474,8 @@ type fixJobScanner interface {
 func scanFixJob(row fixJobScanner) (*FixJob, error) {
 	var job FixJob
 	var optionID, title, agentName, branch, worktreePath, prURL, phase, message, errText sql.NullString
-	var startedAt, completedAt sql.NullInt64
-	if err := row.Scan(&job.ID, &job.ItemID, &job.RecommendationID, &optionID, &job.RepoID, &job.ItemNumber, &job.ItemKind, &title, &job.FixPrompt, &agentName, &job.PRCreate, &branch, &worktreePath, &prURL, &job.Status, &phase, &message, &errText, &job.CreatedAt, &startedAt, &job.UpdatedAt, &completedAt); err != nil {
+	var startedAt, completedAt, refreshedAt sql.NullInt64
+	if err := row.Scan(&job.ID, &job.ItemID, &job.RecommendationID, &optionID, &job.RepoID, &job.ItemNumber, &job.ItemKind, &title, &job.FixPrompt, &agentName, &job.PRCreate, &branch, &worktreePath, &prURL, &job.Status, &phase, &message, &errText, &job.CreatedAt, &startedAt, &job.UpdatedAt, &completedAt, &refreshedAt); err != nil {
 		return nil, fmt.Errorf("scan fix job: %w", err)
 	}
 	if optionID.Valid {
@@ -462,5 +507,6 @@ func scanFixJob(row fixJobScanner) (*FixJob, error) {
 	}
 	job.StartedAt = unixToTimePtr(startedAt)
 	job.CompletedAt = unixToTimePtr(completedAt)
+	job.RefreshedAt = unixToTimePtr(refreshedAt)
 	return &job, nil
 }

@@ -11,6 +11,11 @@ import (
 	sharedtypes "github.com/kunchenguid/ezoss/internal/types"
 )
 
+const (
+	succeededFixJobRefreshInterval = time.Hour
+	succeededFixJobRefreshLimit    = 25
+)
+
 func runFixStage(ctx context.Context, poller Poller) (bool, error) {
 	if poller.DB == nil || poller.Fix == nil {
 		return false, nil
@@ -123,25 +128,31 @@ func refreshSucceededFixJobItems(ctx context.Context, poller Poller) error {
 	if !ok {
 		return nil
 	}
-	jobs, err := poller.DB.ListFixJobsByStatus(db.FixJobStatusSucceeded)
+	jobs, err := poller.DB.ListSucceededFixJobsDueForRefresh(time.Now().Add(-succeededFixJobRefreshInterval), succeededFixJobRefreshLimit)
 	if err != nil {
 		return err
 	}
 	for _, job := range jobs {
-		if job.Phase != db.FixJobPhasePROpened {
-			continue
-		}
 		prRepo, prNumber, ok := githubPRURLParts(job.PRURL)
 		if !ok {
+			if err := poller.DB.TouchFixJobRefresh(job.ID); err != nil {
+				return err
+			}
 			continue
 		}
 		if fixJobItemsLocallyClosed(poller.DB, job, prRepo, prNumber) {
+			if err := poller.DB.TouchFixJobRefresh(job.ID); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := refreshFixJobItem(ctx, poller.DB, getter, job.RepoID, job.ItemKind, job.ItemNumber, false); err != nil {
 			return err
 		}
 		if err := refreshFixJobItem(ctx, poller.DB, getter, prRepo, sharedtypes.ItemKindPR, prNumber, true); err != nil {
+			return err
+		}
+		if err := poller.DB.TouchFixJobRefresh(job.ID); err != nil {
 			return err
 		}
 	}

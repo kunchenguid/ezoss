@@ -331,7 +331,7 @@ func TestPollOnceRefreshesSucceededFixJobSourceAndPRState(t *testing.T) {
 	if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusSucceeded, Phase: db.FixJobPhasePROpened, PRURL: "https://github.com/acme/widgets/pull/99"}); err != nil {
 		t.Fatalf("UpdateFixJob() error = %v", err)
 	}
-	github := stubFixJobItemGetter{items: map[string]ghclient.Item{
+	github := &stubFixJobItemGetter{items: map[string]ghclient.Item{
 		"acme/widgets issue 42": {Repo: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "panic", Author: "alice", State: sharedtypes.ItemStateClosed, UpdatedAt: time.Unix(1713000000, 0)},
 		"acme/widgets pr 99":    {Repo: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 99, Title: "fix panic", Author: "kun", State: sharedtypes.ItemStateMerged, UpdatedAt: time.Unix(1713000001, 0)},
 	}}
@@ -370,7 +370,7 @@ func TestPollOnceMarksOpenFixPRLocallyTriagedWhenRefreshingSucceededFixJob(t *te
 	if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusSucceeded, Phase: db.FixJobPhasePROpened, PRURL: "https://github.com/acme/widgets/pull/99"}); err != nil {
 		t.Fatalf("UpdateFixJob() error = %v", err)
 	}
-	github := stubFixJobItemGetter{items: map[string]ghclient.Item{
+	github := &stubFixJobItemGetter{items: map[string]ghclient.Item{
 		"acme/widgets issue 42": {Repo: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "panic", Author: "alice", State: sharedtypes.ItemStateOpen, UpdatedAt: time.Unix(1713000000, 0)},
 		"acme/widgets pr 99":    {Repo: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 99, Title: "fix panic", Author: "kun", State: sharedtypes.ItemStateOpen, UpdatedAt: time.Unix(1713000001, 0)},
 	}}
@@ -384,6 +384,41 @@ func TestPollOnceMarksOpenFixPRLocallyTriagedWhenRefreshingSucceededFixJob(t *te
 	}
 	if pr == nil || !pr.GHTriaged {
 		t.Fatalf("fix PR item = %#v, want locally triaged", pr)
+	}
+}
+
+func TestPollOnceDoesNotRefreshSucceededFixJobEveryCycle(t *testing.T) {
+	database := openDaemonTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "panic", State: sharedtypes.ItemStateOpen, GHTriaged: true}); err != nil {
+		t.Fatalf("UpsertItem(source) error = %v", err)
+	}
+	job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#42", RecommendationID: "rec-1", RepoID: "acme/widgets", ItemNumber: 42, ItemKind: sharedtypes.ItemKindIssue, Title: "panic", FixPrompt: "Fix it.", PRCreate: "gh"})
+	if err != nil {
+		t.Fatalf("CreateFixJob() error = %v", err)
+	}
+	if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusSucceeded, Phase: db.FixJobPhasePROpened, PRURL: "https://github.com/acme/widgets/pull/99"}); err != nil {
+		t.Fatalf("UpdateFixJob() error = %v", err)
+	}
+	github := &stubFixJobItemGetter{items: map[string]ghclient.Item{
+		"acme/widgets issue 42": {Repo: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "panic", Author: "alice", State: sharedtypes.ItemStateOpen, UpdatedAt: time.Unix(1713000000, 0)},
+		"acme/widgets pr 99":    {Repo: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 99, Title: "fix panic", Author: "kun", State: sharedtypes.ItemStateOpen, UpdatedAt: time.Unix(1713000001, 0)},
+	}}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: github, Fix: &stubFixRunner{}}, nil); err != nil {
+		t.Fatalf("first PollOnce() error = %v", err)
+	}
+	firstCalls := github.calls
+	if firstCalls != 2 {
+		t.Fatalf("GetItem calls after first poll = %d, want 2", firstCalls)
+	}
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: github, Fix: &stubFixRunner{}}, nil); err != nil {
+		t.Fatalf("second PollOnce() error = %v", err)
+	}
+	if github.calls != firstCalls {
+		t.Fatalf("GetItem calls after second poll = %d, want %d", github.calls, firstCalls)
 	}
 }
 
@@ -472,6 +507,7 @@ func (emptyTriageLister) ListTriaged(context.Context, string, time.Time) ([]ghcl
 
 type stubFixJobItemGetter struct {
 	items map[string]ghclient.Item
+	calls int
 }
 
 func (s stubFixJobItemGetter) ListNeedingTriage(context.Context, string) ([]ghclient.Item, error) {
@@ -482,6 +518,7 @@ func (s stubFixJobItemGetter) ListTriaged(context.Context, string, time.Time) ([
 	return nil, nil
 }
 
-func (s stubFixJobItemGetter) GetItem(_ context.Context, repo string, kind sharedtypes.ItemKind, number int) (ghclient.Item, error) {
+func (s *stubFixJobItemGetter) GetItem(_ context.Context, repo string, kind sharedtypes.ItemKind, number int) (ghclient.Item, error) {
+	s.calls++
 	return s.items[repo+" "+string(kind)+" "+strconv.Itoa(number)], nil
 }

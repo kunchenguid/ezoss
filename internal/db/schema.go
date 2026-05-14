@@ -113,7 +113,8 @@ CREATE TABLE IF NOT EXISTS fix_jobs (
     created_at        INTEGER NOT NULL,
     started_at        INTEGER,
     updated_at        INTEGER NOT NULL,
-    completed_at      INTEGER
+    completed_at      INTEGER,
+    refreshed_at      INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_fix_jobs_item_active
