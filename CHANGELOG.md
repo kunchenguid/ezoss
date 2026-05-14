@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.4.0...ezoss-v0.5.0) (2026-05-14)
+
+
+### Features
+
+* **cli:** add dynamic repo sources ([#41](https://github.com/kunchenguid/ezoss/issues/41)) ([c237d93](https://github.com/kunchenguid/ezoss/commit/c237d93ac99e1f3f478bf29007e1eeb1fc4fb4b2))
+* **daemon:** suppress self-authored maintainer PR triage ([#39](https://github.com/kunchenguid/ezoss/issues/39)) ([23c2236](https://github.com/kunchenguid/ezoss/commit/23c22360d8334e21f50ac5d91da9f7086e9b0f96))
+
+
+### Bug Fixes
+
+* **cli:** keep approved fix jobs in the inbox ([#43](https://github.com/kunchenguid/ezoss/issues/43)) ([f23e417](https://github.com/kunchenguid/ezoss/commit/f23e417d6e22adc59682ea3fe24ea1c0d71d18af))
+* **daemon:** refresh completed fix job state ([#44](https://github.com/kunchenguid/ezoss/issues/44)) ([1ae9015](https://github.com/kunchenguid/ezoss/commit/1ae9015051f03ec4ab9d54976dfb46d7b4cc6e3e))
+* **tui:** advance after queueing fixes ([#42](https://github.com/kunchenguid/ezoss/issues/42)) ([041edea](https://github.com/kunchenguid/ezoss/commit/041edea3acadffb5ed5a5726971c4a02b191fc9f))
+
 ## [0.4.0](https://github.com/kunchenguid/ezoss/compare/ezoss-v0.3.0...ezoss-v0.4.0) (2026-05-09)
 
 
