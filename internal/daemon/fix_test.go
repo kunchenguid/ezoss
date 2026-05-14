@@ -422,6 +422,52 @@ func TestPollOnceDoesNotRefreshSucceededFixJobEveryCycle(t *testing.T) {
 	}
 }
 
+func TestPollOnceContinuesRefreshingSucceededFixJobsAfterGetItemFailure(t *testing.T) {
+	database := openDaemonTestDB(t)
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	for _, number := range []int{41, 42} {
+		if err := database.UpsertItem(db.Item{ID: "acme/widgets#" + strconv.Itoa(number), RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: number, Title: "panic", State: sharedtypes.ItemStateOpen, GHTriaged: true}); err != nil {
+			t.Fatalf("UpsertItem(%d) error = %v", number, err)
+		}
+		job, err := database.CreateFixJob(db.NewFixJob{ItemID: "acme/widgets#" + strconv.Itoa(number), RecommendationID: "rec-" + strconv.Itoa(number), RepoID: "acme/widgets", ItemNumber: number, ItemKind: sharedtypes.ItemKindIssue, Title: "panic", FixPrompt: "Fix it.", PRCreate: "gh"})
+		if err != nil {
+			t.Fatalf("CreateFixJob(%d) error = %v", number, err)
+		}
+		if err := database.UpdateFixJob(job.ID, db.FixJobUpdate{Status: db.FixJobStatusSucceeded, Phase: db.FixJobPhasePROpened, PRURL: "https://github.com/acme/widgets/pull/" + strconv.Itoa(number+50)}); err != nil {
+			t.Fatalf("UpdateFixJob(%d) error = %v", number, err)
+		}
+	}
+	github := &stubFixJobItemGetter{
+		items: map[string]ghclient.Item{
+			"acme/widgets issue 42": {Repo: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "panic", Author: "alice", State: sharedtypes.ItemStateClosed, UpdatedAt: time.Unix(1713000000, 0)},
+			"acme/widgets pr 92":    {Repo: "acme/widgets", Kind: sharedtypes.ItemKindPR, Number: 92, Title: "fix panic", Author: "kun", State: sharedtypes.ItemStateMerged, UpdatedAt: time.Unix(1713000001, 0)},
+		},
+		errs: map[string]error{
+			"acme/widgets issue 41": errors.New("not found"),
+		},
+	}
+
+	if err := PollOnce(context.Background(), Poller{DB: database, GitHub: github, Fix: &stubFixRunner{}}, nil); err != nil {
+		t.Fatalf("PollOnce() error = %v", err)
+	}
+	source, err := database.GetItem("acme/widgets#42")
+	if err != nil {
+		t.Fatalf("GetItem(source) error = %v", err)
+	}
+	if source == nil || source.State != sharedtypes.ItemStateClosed {
+		t.Fatalf("source item = %#v, want closed despite earlier refresh failure", source)
+	}
+	pr, err := database.GetItem("acme/widgets#92")
+	if err != nil {
+		t.Fatalf("GetItem(PR) error = %v", err)
+	}
+	if pr == nil || pr.State != sharedtypes.ItemStateMerged {
+		t.Fatalf("fix PR item = %#v, want merged despite earlier refresh failure", pr)
+	}
+}
+
 // cancellingDetectFixRunner simulates a supersede that lands while DetectPR
 // is mid-network-call: the job is marked cancelled before DetectPR returns.
 type cancellingDetectFixRunner struct {
@@ -507,6 +553,7 @@ func (emptyTriageLister) ListTriaged(context.Context, string, time.Time) ([]ghcl
 
 type stubFixJobItemGetter struct {
 	items map[string]ghclient.Item
+	errs  map[string]error
 	calls int
 }
 
@@ -520,5 +567,9 @@ func (s stubFixJobItemGetter) ListTriaged(context.Context, string, time.Time) ([
 
 func (s *stubFixJobItemGetter) GetItem(_ context.Context, repo string, kind sharedtypes.ItemKind, number int) (ghclient.Item, error) {
 	s.calls++
-	return s.items[repo+" "+string(kind)+" "+strconv.Itoa(number)], nil
+	key := repo + " " + string(kind) + " " + strconv.Itoa(number)
+	if s.errs != nil && s.errs[key] != nil {
+		return ghclient.Item{}, s.errs[key]
+	}
+	return s.items[key], nil
 }

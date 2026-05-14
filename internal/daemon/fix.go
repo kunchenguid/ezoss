@@ -147,10 +147,24 @@ func refreshSucceededFixJobItems(ctx context.Context, poller Poller) error {
 			continue
 		}
 		if err := refreshFixJobItem(ctx, poller.DB, getter, job.RepoID, job.ItemKind, job.ItemNumber, false); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			poller.log().Warn("refresh succeeded fix job source item failed", "job", job.ID, "err", err)
+			if err := poller.DB.TouchFixJobRefresh(job.ID); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := refreshFixJobItem(ctx, poller.DB, getter, prRepo, sharedtypes.ItemKindPR, prNumber, true); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			poller.log().Warn("refresh succeeded fix job PR item failed", "job", job.ID, "err", err)
+			if err := poller.DB.TouchFixJobRefresh(job.ID); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := poller.DB.TouchFixJobRefresh(job.ID); err != nil {
 			return err
