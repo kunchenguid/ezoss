@@ -1616,6 +1616,56 @@ func TestLoadInboxEntriesKeepsSucceededFixJobUntilPRCloses(t *testing.T) {
 	}
 }
 
+func TestLoadInboxEntriesSkipsActiveRecommendationForClosedItem(t *testing.T) {
+	tempRoot := t.TempDir()
+	originalNewPaths := newPaths
+	t.Cleanup(func() {
+		newPaths = originalNewPaths
+	})
+	newPaths = func() (*paths.Paths, error) {
+		return paths.WithRoot(tempRoot), nil
+	}
+
+	database, err := db.Open(filepath.Join(tempRoot, "ezoss.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	if err := database.UpsertRepo(db.Repo{ID: "acme/widgets", DefaultBranch: "main"}); err != nil {
+		t.Fatalf("UpsertRepo() error = %v", err)
+	}
+	if err := database.UpsertItem(db.Item{
+		ID: "acme/widgets#42", RepoID: "acme/widgets", Kind: sharedtypes.ItemKindIssue, Number: 42, Title: "panic in parser", Author: "alice", State: sharedtypes.ItemStateClosed, GHTriaged: true,
+	}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+	if _, err := database.InsertRecommendation(db.NewRecommendation{
+		ItemID: "acme/widgets#42",
+		Agent:  sharedtypes.AgentClaude,
+		Options: []db.NewRecommendationOption{{
+			Rationale:    "This was already handled.",
+			DraftComment: "Closing this out.",
+			StateChange:  sharedtypes.StateChangeClose,
+			Confidence:   sharedtypes.ConfidenceHigh,
+		}},
+	}); err != nil {
+		t.Fatalf("InsertRecommendation() error = %v", err)
+	}
+
+	entries, err := loadInboxEntries()
+	if err != nil {
+		t.Fatalf("loadInboxEntries() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("len(entries) = %d, want 0 for closed item", len(entries))
+	}
+}
+
 func TestCopyTextWithSystemClipboardRejectsEmptyPrompt(t *testing.T) {
 	err := copyTextWithSystemClipboard(context.Background(), "  \n\t")
 	if err == nil {

@@ -52,6 +52,7 @@ func Open(path string) (*DB, error) {
 		{"items.head_ref", "items", "head_ref", `ALTER TABLE items ADD COLUMN head_ref TEXT`},
 		{"items.head_clone_url", "items", "head_clone_url", `ALTER TABLE items ADD COLUMN head_clone_url TEXT`},
 		{"repos.source", "repos", "source", `ALTER TABLE repos ADD COLUMN source TEXT NOT NULL DEFAULT 'config'`},
+		{"fix_jobs.refreshed_at", "fix_jobs", "refreshed_at", `ALTER TABLE fix_jobs ADD COLUMN refreshed_at INTEGER`},
 	}
 	for _, m := range migrations {
 		ran, err := ensureColumnExists(sqlDB, m.table, m.column, m.ddl)

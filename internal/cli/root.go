@@ -1358,6 +1358,9 @@ func loadInboxEntries() ([]tui.Entry, error) {
 		if item == nil {
 			continue
 		}
+		if item.State != sharedtypes.ItemStateOpen {
+			continue
+		}
 		activeItemIDs[rec.ItemID] = struct{}{}
 		entry, err := buildInboxEntry(database, configuredRepos, rec, item, nil)
 		if err != nil {

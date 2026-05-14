@@ -66,7 +66,7 @@ All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` 
 3. **Stage A.3 (contributor sweep):** when `contrib.enabled` is true, call `gh search prs/issues --author=@me`, skip configured repos, owned-but-unconfigured repos, and `contrib.ignore_repos`, then store the results as role `contributor` with repo source `contrib`.
    Contributor repos and items that disappear from a complete sweep are pruned.
    Phase reported as `"sync"`.
-4. **Stage B (fixes):** reclaim stale running fix jobs, detect PRs for jobs waiting on `no-mistakes`, then claim at most one queued fix job.
+4. **Stage B (fixes):** reclaim stale running fix jobs, detect PRs for jobs waiting on `no-mistakes`, refresh succeeded fix jobs that are tracking open PRs, then claim at most one queued fix job.
    If fix work happened, the cycle stops before agent triage so fix runs do not contend with new triage runs.
 5. **Stage C (agents):** for each item lacking a current recommendation, build a role-specific prompt via `internal/triage.PromptForRole`, hand it plus `triage.Schema()` to the resolved `agent.Agent`, parse the structured JSON output via `triage.Parse`, and write a `recommendations` row plus one row per option in `recommendation_options`.
    Contributor repos touched by Stage A.3 are merged into the agent repo set for that cycle.
@@ -76,7 +76,7 @@ All on-disk state lives under the path returned by `internal/paths` (`~/.ezoss` 
 Daemon-backed fix work comes from `fix.start` in the TUI path.
 `CreateFixJob` cancels and replaces an existing queued or `waiting_for_pr` job for the same item, but returns `ErrFixJobInFlight` while the existing job is preparing a worktree, running the agent, committing, or pushing.
 Approving the same `fix_required` option whose fix job is already in flight is the exception: approval side effects continue and the TUI surfaces an info notice instead of failing the approval.
-The inbox supplements active recommendations with approved fix jobs for open source items, keeping queued, running, failed, and `succeeded`/`pr_opened` jobs visible until a locally known fix PR closes; active recommendation entries win to avoid duplicates.
+The inbox supplements active recommendations with approved fix jobs for open source items, keeping queued, running, failed, and `succeeded`/`pr_opened` jobs visible until the daemon refreshes the source item or locally known fix PR as closed; active recommendation entries win to avoid duplicates.
 PR detection must complete waiting jobs with `CompleteWaitingFixJobWithPR` so a detected URL cannot resurrect a job that was superseded while detection was in flight.
 The direct `ezoss fix <owner/repo#number>` CLI path uses `cliFixRunner`, which prepares an isolated worktree under `~/.ezoss/fixes`, resolves repo/global agent config, runs the selected agent with the option's `fix_prompt`, and commits produced changes.
 The recovery `ezoss fix attach <owner/repo#number>` path is for `waiting_for_pr` jobs that are waiting on a `no-mistakes` pipeline; it runs `no-mistakes attach` from the stored worktree, and the TUI shows this command only for those no-mistakes waits.
@@ -107,7 +107,7 @@ Schema lives in `internal/db/schema.go`. Migrations are **additive only**, appli
 - `repos`, `items` (issues + PRs interleaved, distinguished by `kind`; repos carry source `config|contrib`, items carry role `maintainer|contributor`)
 - `recommendations` (one per agent run on an item, including optional rerun instructions) with legacy single-row fields kept for backfill
 - `recommendation_options` (the agent's proposed alternatives, ordered by `position`)
-- `fix_jobs` (daemon-backed coding-agent runs for selected fix prompts, including branch, worktree path, PR URL, status, phase, and errors)
+- `fix_jobs` (daemon-backed coding-agent runs for selected fix prompts, including branch, worktree path, PR URL, status, phase, refresh timestamp, and errors)
 - `approvals` (the user's selected option; `option_id` points at the chosen option)
 
 `items` also stores contributor sweep metadata: `last_seen_updated_at`, `last_seen_comment_id`, `last_self_activity_at`, and PR head fields `head_repo`, `head_ref`, `head_clone_url`.

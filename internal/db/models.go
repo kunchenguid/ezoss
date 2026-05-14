@@ -175,6 +175,7 @@ type FixJob struct {
 	StartedAt        *time.Time
 	UpdatedAt        int64
 	CompletedAt      *time.Time
+	RefreshedAt      *time.Time
 }
 
 type NewFixJob struct {
